@@ -1,0 +1,21 @@
+# Core
+python-dotenv==1.0.0
+requests==2.31.0
+httpx==0.27.0
+tenacity==8.2.3
+pydantic==2.5.0
+pdfplumber==0.10.3
+PyMuPDF==1.23.0
+pillow==10.1.0
+supabase==2.0.0
+
+# Authentication (used later)
+bcrypt==4.1.0
+
+# Testing
+pytest==7.4.0
+
+# CLI (argparse is built-in)
+
+# For background worker (optional)
+schedule==1.2.0
