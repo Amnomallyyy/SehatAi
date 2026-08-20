@@ -92,47 +92,52 @@ def process_folder(folder_path: str, patient_id: str, password: str) -> List[Dic
     
     return results
 
-
 def show_history(patient_id: str, password: str) -> None:
-    """Show patient history and exit."""
+    from auth import authenticate_patient
     print(f"\n📋 Patient History: {patient_id}")
     print("-" * 50)
-    
-    # Authenticate first (using pipeline's auth)
-    from auth import authenticate_patient
-    if not authenticate_patient(patient_id, password):
-        print("❌ Authentication failed. Invalid patient ID or password.")
+    try:
+        if not authenticate_patient(patient_id, password):
+            print("❌ Authentication failed.")
+            return
+    except Exception as e:
+        print(f"❌ Auth error: {e}")
         return
-    
+
     # Get timeline
-    timeline = get_patient_timeline(patient_id)
-    if not timeline:
-        print("📭 No documents found for this patient.")
+    try:
+        timeline = get_patient_timeline(patient_id)
+        if not timeline:
+            print("📭 No documents found.")
+            return
+        print(f"\n📄 Documents ({len(timeline)}):")
+        for doc in timeline:
+            doc_date = doc.get('document_date') or doc.get('uploaded_at', '').split('T')[0]
+            print(f"   📎 {doc_date} - {doc.get('category', 'unknown')} [Tests: {doc.get('extracted_count', 0)}, Meds: {doc.get('medicines_count', 0)}]")
+    except Exception as e:
+        print(f"❌ Error loading timeline: {e}")
         return
-    
-    print(f"\n📄 Documents ({len(timeline)}):")
-    for doc in timeline:
-        doc_date = doc.get('document_date') or doc.get('uploaded_at', '').split('T')[0]
-        print(f"   📎 {doc_date} - {doc.get('category', 'unknown')} "
-              f"(ID: {doc['document_id'][:8]}...) "
-              f"[Tests: {doc.get('extracted_count', 0)}, "
-              f"Medicines: {doc.get('medicines_count', 0)}]")
-    
-    # Show active medicines
-    meds = get_active_medicines(patient_id)
-    if meds:
-        print(f"\n💊 Active Medicines ({len(meds)}):")
-        for med in meds:
-            print(f"   💊 {med.get('name')} - {med.get('dosage', 'No dosage')} "
-                  f"(Started: {med.get('start_date')})")
-    
-    # Show snapshot
-    snapshot = get_patient_snapshot(patient_id)
-    if snapshot.get('snapshot'):
-        print(f"\n📊 Latest Values ({len(snapshot['snapshot'])} tests):")
-        for test_name, data in snapshot['snapshot'].items():
-            print(f"   📊 {test_name}: {data.get('value')} {data.get('unit', '')}")
-    
+
+    # Active medicines
+    try:
+        meds = get_active_medicines(patient_id)
+        if meds:
+            print(f"\n💊 Active Medicines ({len(meds)}):")
+            for med in meds:
+                print(f"   💊 {med.get('name')} - {med.get('dosage', 'No dosage')} (Started: {med.get('start_date')})")
+    except Exception as e:
+        print(f"❌ Error loading medicines: {e}")
+
+    # Snapshot
+    try:
+        snapshot = get_patient_snapshot(patient_id)
+        if snapshot.get('snapshot'):
+            print(f"\n📊 Latest Values ({len(snapshot['snapshot'])} tests):")
+            for test_name, data in snapshot['snapshot'].items():
+                print(f"   📊 {test_name}: {data.get('value')} {data.get('unit', '')}")
+    except Exception as e:
+        print(f"❌ Error loading snapshot: {e}")
+
     print("\n" + "=" * 50)
 
 
