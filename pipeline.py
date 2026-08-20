@@ -8,8 +8,8 @@ Flow:
 3. Check for duplicate (patient_id, file_hash)
 4. Upload original file to Supabase Storage
 5. Extract text (pdfplumber → OCR.space → Gemini Batch)
-6. Classify as medical (Groq)
-7. Structure JSON (Groq)
+6. Classify as medical (NVIDIA)
+7. Structure JSON (NVIDIA)
 8. Generate embeddings (Jina)
 9. Atomic storage (Supabase RPC)
 """
@@ -28,7 +28,7 @@ from auth import authenticate_patient
 from clients import (
     OCRspaceClient,
     GeminiClient,
-    GroqClient,
+    NVIDIAClient,
     JinaClient,
     SupabaseClient,
     should_use_ocrspace,
@@ -119,22 +119,22 @@ def process_document(
     Returns:
         Dict with status, document_id, and optional error message.
     """
-    print("\n" + "="*60)  # TODO: Remove
-    print(f"[INFO] Processing document: {file_path}")  # TODO: Remove
-    print(f"[INFO] Patient ID: {patient_id}")  # TODO: Remove
-    print("="*60 + "\n")  # TODO: Remove
+    print("\n" + "="*60)
+    print(f"[INFO] Processing document: {file_path}")
+    print(f"[INFO] Patient ID: {patient_id}")
+    print("="*60 + "\n")
 
     # ------------------------------------------------------------
     # STEP 0: Authentication (MUST be first!)
     # ------------------------------------------------------------
-    print("[OK] Step 0: Authenticating patient...")  # TODO: Remove
+    print("[OK] Step 0: Authenticating patient...")
     if not authenticate_patient(patient_id, password):
         return {
             "status": "auth_failed",
             "document_id": None,
             "error": "Invalid patient ID or password"
         }
-    print("[OK] Authentication successful")  # TODO: Remove
+    print("[OK] Authentication successful")
 
     try:
         # ------------------------------------------------------------
@@ -143,23 +143,23 @@ def process_document(
         supabase = SupabaseClient(supabase_url, supabase_key)
         ocr_client = OCRspaceClient()
         gemini_client = GeminiClient()
-        groq_client = GroqClient()
+        nvidia_client = NVIDIAClient()  # Replaced Groq with NVIDIA
         jina_client = JinaClient()
 
         # ------------------------------------------------------------
         # STEP 1: Read file and compute hash
         # ------------------------------------------------------------
-        print("[OK] Step 1: Reading file and computing hash...")  # TODO: Remove
+        print("[OK] Step 1: Reading file and computing hash...")
         file_bytes = read_file_bytes(file_path)
         file_hash = compute_file_hash(file_bytes)
         file_type = detect_file_type(file_path)
-        print(f"[OK] File hash: {file_hash[:16]}...")  # TODO: Remove
-        print(f"[OK] File type: {file_type}")  # TODO: Remove
+        print(f"[OK] File hash: {file_hash[:16]}...")
+        print(f"[OK] File type: {file_type}")
 
         # ------------------------------------------------------------
         # STEP 2: Check for duplicate (patient_id, file_hash)
         # ------------------------------------------------------------
-        print("[OK] Step 2: Checking for duplicates...")  # TODO: Remove
+        print("[OK] Step 2: Checking for duplicates...")
         try:
             result = supabase.client.table('documents') \
                 .select('id, file_url, status') \
@@ -168,7 +168,7 @@ def process_document(
                 .execute()
             if result.data and len(result.data) > 0:
                 doc = result.data[0]
-                print(f"[OK] Document already exists: {doc['id']}")  # TODO: Remove
+                print(f"[OK] Document already exists: {doc['id']}")
                 return {
                     "status": "duplicate",
                     "document_id": doc['id'],
@@ -182,15 +182,15 @@ def process_document(
         # ------------------------------------------------------------
         # STEP 3: Upload original file to Supabase Storage
         # ------------------------------------------------------------
-        print("[OK] Step 3: Uploading file to Supabase Storage...")  # TODO: Remove
+        print("[OK] Step 3: Uploading file to Supabase Storage...")
         storage_path = f"{patient_id}/{file_hash}.{file_type.lower()}"
         file_url = supabase.upload_file(file_bytes, storage_path)
-        print(f"[OK] File uploaded: {file_url}")  # TODO: Remove
+        print(f"[OK] File uploaded: {file_url}")
 
         # ------------------------------------------------------------
         # STEP 4: Extract text (cascade: pdfplumber → OCR.space → Gemini)
         # ------------------------------------------------------------
-        print("[OK] Step 4: Extracting text...")  # TODO: Remove
+        print("[OK] Step 4: Extracting text...")
         raw_text = ""
         ocr_engine = ""
         ocr_confidence = 0.0
@@ -202,7 +202,7 @@ def process_document(
                 raw_text = text
                 ocr_engine = engine
                 ocr_confidence = conf
-                print(f"[OK] Text extracted via {engine}")  # TODO: Remove
+                print(f"[OK] Text extracted via {engine}")
 
         # 4b: Try OCR.space for images under 1MB (or if pdfplumber failed)
         if not raw_text and should_use_ocrspace(file_bytes, file_type):
@@ -212,23 +212,22 @@ def process_document(
                     raw_text = text
                     ocr_engine = engine
                     ocr_confidence = conf
-                    print(f"[OK] Text extracted via {engine}")  # TODO: Remove
+                    print(f"[OK] Text extracted via {engine}")
             except Exception as e:
                 logger.warning(f"OCR.space failed: {e}")
-                print(f"[WARN] OCR.space failed: {e}")  # TODO: Remove
+                print(f"[WARN] OCR.space failed: {e}")
 
         # 4c: Fallback to Gemini Batch (for large files or if OCR.space failed)
         if not raw_text:
             try:
-                print("[OK] Submitting to Gemini Batch API...")  # TODO: Remove
+                print("[OK] Submitting to Gemini Batch API...")
                 batch_id = gemini_client.submit_batch([{
                     'image_bytes': file_bytes,
                     'file_type': file_type
                 }])
-                # For now, we'll mark as queued. The worker will process it later.
                 # Store in processing_queue for background processing.
                 queue_data = {
-                    'document_id': None,  # Will be filled when processed
+                    'document_id': None,
                     'patient_id': patient_id,
                     'file_path': file_path,
                     'file_type': file_type,
@@ -268,11 +267,11 @@ def process_document(
             logger.info(f"Raw OCR text: {raw_text[:500]}...")
 
         # ------------------------------------------------------------
-        # STEP 5: Medical Classification (Groq)
+        # STEP 5: Medical Classification (NVIDIA)
         # ------------------------------------------------------------
-        print("[OK] Step 5: Classifying as medical document...")  # TODO: Remove
+        print("[OK] Step 5: Classifying as medical document...")
         try:
-            classification = groq_client.classify_medical(raw_text[:3000])
+            classification = nvidia_client.classify_medical(raw_text[:3000])
             if not classification.get('is_medical', False):
                 # Not a medical document – reject
                 return {
@@ -280,7 +279,7 @@ def process_document(
                     "document_id": None,
                     "error": f"Not a medical document: {classification.get('reason', 'Unknown reason')}"
                 }
-            print(f"[OK] Classified as medical: {classification.get('reason', '')}")  # TODO: Remove
+            print(f"[OK] Classified as medical: {classification.get('reason', '')}")
         except Exception as e:
             logger.error(f"Classification failed: {e}")
             return {
@@ -292,7 +291,7 @@ def process_document(
         # ------------------------------------------------------------
         # STEP 6: Check patient consent
         # ------------------------------------------------------------
-        print("[OK] Step 6: Checking patient consent...")  # TODO: Remove
+        print("[OK] Step 6: Checking patient consent...")
         consented = supabase.client.table('patients') \
             .select('consented_at') \
             .eq('id', patient_id) \
@@ -305,14 +304,14 @@ def process_document(
             }
 
         # ------------------------------------------------------------
-        # STEP 7: Structure JSON (Groq)
+        # STEP 7: Structure JSON (NVIDIA)
         # ------------------------------------------------------------
-        print("[OK] Step 7: Structuring document with Groq...")  # TODO: Remove
+        print("[OK] Step 7: Structuring document with NVIDIA...")
         try:
-            structured_data = groq_client.structure_document(raw_text[:10000])
+            structured_data = nvidia_client.structure_document(raw_text[:10000])
             # Validate with Pydantic
             doc = StructuredDocument(**structured_data)
-            print("[OK] JSON structured and validated")  # TODO: Remove
+            print("[OK] JSON structured and validated")
         except Exception as e:
             logger.error(f"Structuring failed: {e}")
             return {
@@ -324,7 +323,7 @@ def process_document(
         # ------------------------------------------------------------
         # STEP 8: Generate Embeddings (Jina)
         # ------------------------------------------------------------
-        print("[OK] Step 8: Generating embeddings...")  # TODO: Remove
+        print("[OK] Step 8: Generating embeddings...")
         try:
             # Build embedding source text
             source_text = f"{doc.category} "
@@ -336,7 +335,7 @@ def process_document(
                 source_text += doc.doctor_notes
 
             embedding = jina_client.embed(source_text[:8000])
-            print(f"[OK] Embedding generated (length: {len(embedding)})")  # TODO: Remove
+            print(f"[OK] Embedding generated (length: {len(embedding)})")
         except Exception as e:
             logger.warning(f"Embedding failed: {e}")
             embedding = None
@@ -344,7 +343,7 @@ def process_document(
         # ------------------------------------------------------------
         # STEP 9: Atomic Storage (Supabase RPC)
         # ------------------------------------------------------------
-        print("[OK] Step 9: Storing document and data atomically...")  # TODO: Remove
+        print("[OK] Step 9: Storing document and data atomically...")
         try:
             # Build payload for atomic_upsert_document RPC
             payload = structured_document_to_payload(
@@ -363,7 +362,7 @@ def process_document(
             result = supabase.client.rpc('atomic_upsert_document', {'payload': payload}).execute()
             document_id = result.data if isinstance(result.data, str) else result.data.get('id')
 
-            print(f"[OK] Document stored: {document_id}")  # TODO: Remove
+            print(f"[OK] Document stored: {document_id}")
 
             return {
                 "status": "stored",
@@ -395,45 +394,53 @@ def process_document(
 # Standalone Test Block
 # ============================================================
 if __name__ == "__main__":
-    print("\n=== Testing pipeline.py ===\n")  # TODO: Remove
+    print("\n=== Testing pipeline.py ===\n")
 
     # Test: Basic function imports
-    print("[OK] Testing imports...")  # TODO: Remove
+    print("[OK] Testing imports...")
     try:
         from schemas import StructuredDocument, ExtractedValue
         from auth import authenticate_patient
-        from clients import OCRspaceClient, GeminiClient, GroqClient, JinaClient, SupabaseClient
-        print("[OK] All imports successful")  # TODO: Remove
+        from clients import OCRspaceClient, GeminiClient, NVIDIAClient, JinaClient, SupabaseClient
+        print("[OK] All imports successful")
     except Exception as e:
-        print(f"[ERROR] Import failed: {e}")  # TODO: Remove
+        print(f"[ERROR] Import failed: {e}")
         import sys
         sys.exit(1)
 
     # Test: Check environment variables
-    print("\n[OK] Checking environment...")  # TODO: Remove
-    env_vars = ["OCRSPACE_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "JINA_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+    print("\n[OK] Checking environment...")
+    env_vars = ["OCRSPACE_API_KEY", "GEMINI_API_KEY", "NVIDIA_API_KEY", "JINA_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
     missing = [v for v in env_vars if not os.getenv(v)]
     if missing:
-        print(f"[WARN] Missing env vars: {missing}")  # TODO: Remove
+        print(f"[WARN] Missing env vars: {missing}")
     else:
-        print("[OK] All env vars are set")  # TODO: Remove
+        print("[OK] All env vars are set")
 
     # Test: pipeline function signature
-    print("\n[OK] Testing process_document signature...")  # TODO: Remove
+    print("\n[OK] Testing process_document signature...")
     import inspect
     sig = inspect.signature(process_document)
     params = list(sig.parameters.keys())
-    print(f"  - Parameters: {params}")  # TODO: Remove
+    print(f"  - Parameters: {params}")
     expected = ['file_path', 'patient_id', 'password']
     if all(p in params for p in expected):
-        print("[OK] process_document has correct signature")  # TODO: Remove
+        print("[OK] process_document has correct signature")
     else:
-        print("[ERROR] process_document missing expected parameters")  # TODO: Remove
+        print("[ERROR] process_document missing expected parameters")
 
-    # Test: Mock run (won't actually process – just shows it's ready)
-    print("\n[OK] Pipeline module ready")  # TODO: Remove
-    print("  - To process a real document:")  # TODO: Remove
-    print("    result = process_document('report.jpg', 'patient-uuid', 'password')")  # TODO: Remove
-    print("    print(result)")  # TODO: Remove
+    # Test: NVIDIAClient availability
+    print("\n[OK] Testing NVIDIAClient...")
+    try:
+        client = NVIDIAClient()
+        print(f"[OK] NVIDIAClient instantiated: {repr(client)}")
+    except Exception as e:
+        print(f"[ERROR] NVIDIAClient failed: {e}")
 
-    print("\n=== All tests passed ===")  # TODO: Remove
+    print("\n[OK] Pipeline module ready")
+    print("  - To process a real document:")
+    print("    result = process_document('report.jpg', 'patient-uuid', 'password')")
+    print("    print(result)")
+
+    print("\n=== All tests passed ===")
+    

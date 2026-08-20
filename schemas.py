@@ -2,7 +2,7 @@
 """
 schemas.py – Pydantic models for the medical document extraction pipeline.
 
-These models define the structure of the JSON that Groq returns, and provide
+These models define the structure of the JSON that NVIDIA returns, and provide
 validation to ensure data quality before it reaches the database.
 """
 
@@ -46,19 +46,17 @@ class ExtractedValue(BaseModel):
         - If operator is 'lt' or 'gt', value_numeric may be None (e.g., "<0.01").
         """
         # The spec allows value_numeric to be null without counting as failure
-        # We simply validate that if value_numeric is present, it's a valid float (already enforced by type)
         return self
 
 
 # ============================================================
-# 2. StructuredDocument – Full JSON from Groq
+# 2. StructuredDocument – Full JSON from NVIDIA
 # ============================================================
 class StructuredDocument(BaseModel):
     """
-    The complete structured output from Groq's LLM extraction.
+    The complete structured output from NVIDIA's LLM extraction.
 
     Fields:
-        is_medical: Always True if we got this far (but retained for completeness)
         category: Document type (blood_test, prescription, etc.)
         document_date: Clinical date from the document (YYYY-MM-DD), or None
         extracted_values: List of lab test results (may be empty)
@@ -66,8 +64,8 @@ class StructuredDocument(BaseModel):
         doctor_notes: Handwritten notes transcribed by OCR
 
     Note: Partial documents are valid – only fields that exist are populated.
+    is_medical is NOT required here because it's already validated in Step 5.
     """
-    is_medical: bool = Field(..., description="Always True for this stage")
     category: Literal[
         'blood_test',
         'prescription',
@@ -140,12 +138,11 @@ def structured_document_to_payload(
 # 4. Standalone Test Block
 # ============================================================
 if __name__ == "__main__":
-    print("\n=== Testing schemas.py ===\n")  # TODO: Remove this debug print after testing
+    print("\n=== Testing schemas.py ===\n")
 
     # Test 1: Valid document
-    print("[OK] Creating valid document...")  # TODO: Remove this debug print after testing
+    print("[OK] Creating valid document...")
     valid_data = {
-        "is_medical": True,
         "category": "blood_test",
         "document_date": "2025-03-03",
         "extracted_values": [
@@ -172,26 +169,25 @@ if __name__ == "__main__":
         "doctor_notes": "Patient reported mild fatigue."
     }
     doc = StructuredDocument(**valid_data)
-    print("[OK] Document parsed and validated successfully")  # TODO: Remove this debug print after testing
-    print(f"  - Category: {doc.category}")  # TODO: Remove this debug print after testing
-    print(f"  - Date: {doc.document_date}")  # TODO: Remove this debug print after testing
-    print(f"  - Values: {len(doc.extracted_values)}")  # TODO: Remove this debug print after testing
+    print("[OK] Document parsed and validated successfully")
+    print(f"  - Category: {doc.category}")
+    print(f"  - Date: {doc.document_date}")
+    print(f"  - Values: {len(doc.extracted_values)}")
 
     # Test 2: Invalid category (should raise ValidationError)
-    print("\n[OK] Testing invalid category...")  # TODO: Remove this debug print after testing
+    print("\n[OK] Testing invalid category...")
     invalid_data = valid_data.copy()
     invalid_data["category"] = "invalid_category"
     try:
         doc = StructuredDocument(**invalid_data)
-        print("[ERROR] Validation should have failed!")  # TODO: Remove this debug print after testing
+        print("[ERROR] Validation should have failed!")
     except Exception as e:
-        print("[OK] ValidationError raised as expected")  # TODO: Remove this debug print after testing
-        print(f"  - Error: {type(e).__name__}")  # TODO: Remove this debug print after testing
+        print("[OK] ValidationError raised as expected")
+        print(f"  - Error: {type(e).__name__}")
 
     # Test 3: Partial document (prescription only – no extracted_values)
-    print("\n[OK] Testing partial document (prescription only)...")  # TODO: Remove this debug print after testing
+    print("\n[OK] Testing partial document (prescription only)...")
     partial_data = {
-        "is_medical": True,
         "category": "prescription",
         "document_date": "2025-03-10",
         "extracted_values": [],
@@ -199,12 +195,12 @@ if __name__ == "__main__":
         "doctor_notes": None
     }
     doc = StructuredDocument(**partial_data)
-    print("[OK] Partial document parsed successfully")  # TODO: Remove this debug print after testing
-    print(f"  - Category: {doc.category}")  # TODO: Remove this debug print after testing
-    print(f"  - Values: {len(doc.extracted_values)} (empty is OK for prescription)")  # TODO: Remove this debug print after testing
+    print("[OK] Partial document parsed successfully")
+    print(f"  - Category: {doc.category}")
+    print(f"  - Values: {len(doc.extracted_values)} (empty is OK for prescription)")
 
     # Test 4: Convert to payload
-    print("\n[OK] Testing payload conversion...")  # TODO: Remove this debug print after testing
+    print("\n[OK] Testing payload conversion...")
     payload = structured_document_to_payload(
         doc=doc,
         patient_id="12345678-1234-1234-1234-123456789012",
@@ -213,10 +209,10 @@ if __name__ == "__main__":
         raw_ocr="Full raw OCR text here...",
         ocr_engine="pdfplumber",
         ocr_confidence=0.95,
-        embedding=[0.1, 0.2, 0.3],  # truncated for test
+        embedding=[0.1, 0.2, 0.3],
         embedding_content="Prescription for antibiotics."
     )
-    print("[OK] Payload created successfully")  # TODO: Remove this debug print after testing
-    print(f"  - Keys: {list(payload.keys())}")  # TODO: Remove this debug print after testing
+    print("[OK] Payload created successfully")
+    print(f"  - Keys: {list(payload.keys())}")
 
-    print("\n=== All tests passed! ===")  # TODO: Remove this debug print after testing
+    print("\n=== All tests passed! ===")

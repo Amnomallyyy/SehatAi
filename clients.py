@@ -6,6 +6,7 @@ UPDATED:
 - OCR.space: 1MB limit enforced with aggressive compression
 - Gemini: Uses Batch API (asynchronous) for files >1MB or when OCR.space fails
 - All clients include retry logic and environment variable configuration
+- Supabase upload: Auto-detects MIME type for PNG, JPG, JPEG, PDF
 """
 
 import os
@@ -14,6 +15,7 @@ import io
 import json
 import re
 import time
+import mimetypes
 from typing import Optional, Tuple, Dict, Any, List
 from dotenv import load_dotenv
 import requests
@@ -248,25 +250,30 @@ class GeminiClient:
 
 
 # ============================================================
-# 3. Groq Client (classification + structuring)
+# 3. NIvidia Client (classification + structuring)
 # ============================================================
-class GroqClient:
+# ============================================================
+# 3. NVIDIA Client (replaces Groq for classification + structuring)
+# ============================================================
+class NVIDIAClient:
     """
-    Client for Groq API (llama-3.3-70b-versatile) – text only, no vision.
+    Client for NVIDIA API (Nemotron-3-Super-120B – free tier).
+    OpenAI-compatible endpoint with 40 RPM free tier.
     """
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self.api_key = api_key or os.getenv("NVIDIA_API_KEY")
         if not self.api_key:
-            raise ValueError("GROQ_API_KEY not set in environment")
-        self.base_url = "https://api.groq.com/openai/v1"
-        self.model = "llama-3.3-70b-versatile"
+            raise ValueError("NVIDIA_API_KEY not set in environment")
+        self.base_url = "https://integrate.api.nvidia.com/v1"
+        self.model = "nvidia/nemotron-3-super-120b-a12b"  # 120B reasoning model
         self.temperature = 0.0
+        self.max_tokens = 16384
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        print("[OK] GroqClient initialized")
+        print("[OK] NVIDIAClient initialized (using nemotron-3-super-120b)")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -280,9 +287,9 @@ class GroqClient:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "response_format": {"type": "json_object"}
+            "max_tokens": self.max_tokens,
         }
-        response = requests.post(url, json=payload, headers=self.headers, timeout=30)
+        response = requests.post(url, json=payload, headers=self.headers, timeout=60)
         response.raise_for_status()
         result = response.json()
         return result['choices'][0]['message']['content']
@@ -292,7 +299,7 @@ class GroqClient:
         Classify if the text is a medical document.
         Returns: {"is_medical": bool, "reason": str}
         """
-        print("[INFO] Sending classification request to Groq...")
+        print("[INFO] Sending classification request to NVIDIA...")
         prompt = (
             "You are a medical document classifier. Given the following text, determine if it is a medical document "
             "(e.g., lab report, prescription, imaging report, discharge summary, consultation note). "
@@ -309,7 +316,7 @@ class GroqClient:
             if json_match:
                 result = json.loads(json_match.group())
             else:
-                raise RuntimeError("Groq response not valid JSON")
+                raise RuntimeError("NVIDIA response not valid JSON")
         print("[OK] Classification result received")
         return result
 
@@ -318,7 +325,7 @@ class GroqClient:
         Structure the raw OCR text into the JSON schema.
         Returns: dict matching StructuredDocument model.
         """
-        print("[INFO] Sending structuring request to Groq...")
+        print("[INFO] Sending structuring request to NVIDIA...")
         system_prompt = (
             "You are a medical data extraction assistant. Extract the following information from the text:\n"
             "- category: one of ['blood_test','prescription','imaging_report','discharge_summary','consultation_note','unknown']\n"
@@ -343,14 +350,12 @@ class GroqClient:
             if json_match:
                 result = json.loads(json_match.group())
             else:
-                raise RuntimeError("Groq response not valid JSON")
+                raise RuntimeError("NVIDIA response not valid JSON")
         print("[OK] Structure result received")
         return result
 
     def __repr__(self):
-        return f"GroqClient(api_key='{self.api_key[:4]}...')"
-
-
+        return f"NVIDIAClient(api_key='{self.api_key[:8]}...')"
 # ============================================================
 # 4. Jina Client (embeddings)
 # ============================================================
@@ -404,7 +409,7 @@ class JinaClient:
 
 
 # ============================================================
-# 5. Supabase Client
+# 5. Supabase Client (FIXED upload_file)
 # ============================================================
 class SupabaseClient:
     """
@@ -417,7 +422,7 @@ class SupabaseClient:
         if not self.url or not self.key:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set")
         self.client: Client = create_client(self.url, self.key)
-        self.storage_bucket = "documents"
+        self.storage_bucket = "medical-documents"
         print("[OK] SupabaseClient initialized")
 
     def ping(self) -> bool:
@@ -425,18 +430,32 @@ class SupabaseClient:
         Check connectivity by querying a simple RPC.
         """
         try:
-            result=self.client.table('patients').select('id',count='exact').limit(1).execute()
+            result = self.client.table('patients').select('id', count='exact').limit(1).execute()
             print("[OK] Supabase ping successful")
             return True
         except Exception as e:
             print(f"[WARN] Supabase ping failed: {e}")
             return False
 
-    def upload_file(self, file_bytes: bytes, file_path: str, content_type: str = "application/octet-stream") -> str:
+    def upload_file(self, file_bytes: bytes, file_path: str, content_type: str = None) -> str:
         """
         Upload a file to Supabase Storage and return the public URL.
+        Auto-detects MIME type from file extension.
         """
         print(f"[INFO] Uploading file to bucket '{self.storage_bucket}'...")
+        
+        # Auto-detect MIME type from file extension
+        if content_type is None:
+            content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        
+        # Explicit overrides for common types
+        if file_path.lower().endswith('.png'):
+            content_type = "image/png"
+        elif file_path.lower().endswith(('.jpg', '.jpeg')):
+            content_type = "image/jpeg"
+        elif file_path.lower().endswith('.pdf'):
+            content_type = "application/pdf"
+        
         try:
             self.client.storage.from_(self.storage_bucket).upload(
                 file_path, file_bytes, {"content-type": content_type}
@@ -479,19 +498,20 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[ERROR] GeminiClient failed: {e}")
 
-    # Test 4: GroqClient
-    try:
-        client = GroqClient()
-        print(f"[OK] GroqClient instantiated: {repr(client)}")
-    except Exception as e:
-        print(f"[ERROR] GroqClient failed: {e}")
 
+    # Test 4: NVIDIAClient
+    try:
+        client = NVIDIAClient()
+        print(f"[OK] NVIDIAClient instantiated: {repr(client)}")
+    except Exception as e:
+        print(f"[ERROR] NVIDIAClient failed: {e}")
     # Test 5: JinaClient
     try:
         client = JinaClient()
         print(f"[OK] JinaClient instantiated: {repr(client)}")
     except Exception as e:
         print(f"[ERROR] JinaClient failed: {e}")
+    
 
     # Test 6: SupabaseClient
     try:
