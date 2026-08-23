@@ -1,0 +1,3677 @@
+{
+  "source_url": "https://dawaai.pk/generic/paracetamol",
+  "generic_salt": "paracetamol",
+  "description": "This medicine is used to treat acute and chronic (short and long term) painful muscular conditions, tension, headache, dysmenorrhea (painful menstruation), and non-articular rheumatism (a group of conditions characterized by muscular aches which do not arise from joints).",
+  "contraindications": "This medication is contraindicated in patients with severe heart impairment, alcoholism (alcohol dependency), weight lower than 50 kg, renal (kidney) or hepatic (liver) impairment, malnutrition, dehydration, and anemia(lower than normal amount of red blood cells in the blood). Contact your healthcare provider for further information.",
+  "side_effects": "This medicine has no known side effects. However if you do experience any unusual side effects please make sure to consult your doctor. An allergic reaction to this medicine is uncommon. If you do experience a rash, itching, swelling, dizziness or trouble breathing, seek medical attention immediately.",
+  "expert_advice": [
+    "Tablets may be crushed or swallowed whole.",
+    "Please immediately contact your doctor in case of any serious adverse effects.",
+    "Avoid consumption of alcohol during use of this medicine.",
+    "Drink plenty of water to prevent dehydration."
+  ],
+  "faqs": [
+    {
+      "question": "How does this medicine work?",
+      "answer": "This medicine works by blocking (neurotransmitters) chemical messengers in the brain that inform us that we have pain. It also reduces fever by affecting the neurotransmitters in the area of the brain that manages or regulates body temperature."
+    },
+    {
+      "question": "Can I take this medicine for a long time?",
+      "answer": "It is not recommended to take this medicine for more than 3 days unless advised by your doctor otherwise."
+    },
+    {
+      "question": "What happens if you take this medicine for a long time?",
+      "answer": "Studies have shown that long term use of medicine is associated with a risk of adverse events such as heart attacks, bleeding inside the digestive system and hinders kidney function."
+    },
+    {
+      "question": "What are the signs of overdose of this medicine?",
+      "answer": "Having difficulty breathing and passing out are some signs of an overdose of this medicine."
+    },
+    {
+      "question": "What to do if you miss a dose of this medicine?",
+      "answer": "Please take your dosage as per the prescription. If you miss a dose, take it as soon as you remember. If the time for the next dose is close, take medicine normally. Do not double the dose."
+    }
+  ],
+  "products": [
+    {
+      "brand_name": "Panadol 30 ml Drops",
+      "manufacturer": "GSK Consumer Healthcare",
+      "pack_size": "80mg 30 ml",
+      "price_pkr": "Rs.87.47",
+      "product_url": "https://dawaai.pk/medicine/panadol-drips-287.html"
+    },
+    {
+      "brand_name": "Calpol 6 Plus 250mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "90ml",
+      "price_pkr": "Rs.108.18",
+      "product_url": "https://dawaai.pk/medicine/calpol-6-plus-375.html"
+    },
+    {
+      "brand_name": "Calpol Syrup 120mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "90ml",
+      "price_pkr": "Rs.63.21",
+      "product_url": "https://dawaai.pk/medicine/calpol-syrup-377.html"
+    },
+    {
+      "brand_name": "Panadol Liquid 160mg",
+      "manufacturer": "GSK Consumer Healthcare",
+      "pack_size": "120ml",
+      "price_pkr": "Rs.144",
+      "product_url": "https://dawaai.pk/medicine/panadol-liquid-577.html"
+    },
+    {
+      "brand_name": "Calpol Paediatric",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "100ml",
+      "price_pkr": "Rs.99.96",
+      "product_url": "https://dawaai.pk/medicine/calpol-paediatric-suspension-742.html"
+    },
+    {
+      "brand_name": "Disprol Pediatric Suspension",
+      "manufacturer": "Reckitt",
+      "pack_size": "",
+      "price_pkr": "Rs.41.45",
+      "product_url": "https://dawaai.pk/medicine/disprol-syrup-1019.html"
+    },
+    {
+      "brand_name": "Febrol 120mg",
+      "manufacturer": "Barrett",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.53.65",
+      "product_url": "https://dawaai.pk/medicine/febrol-paracetamol-120-mg5ml-60-ml-syrup-6309.html"
+    },
+    {
+      "brand_name": "Acepol 120mg",
+      "manufacturer": "Hassan Pharma",
+      "pack_size": "60mL",
+      "price_pkr": "Rs.12",
+      "product_url": "https://dawaai.pk/medicine/acepol-24173.html"
+    },
+    {
+      "brand_name": "Acetofin 500mg",
+      "manufacturer": "Epla",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.5",
+      "product_url": "https://dawaai.pk/medicine/acetofin-24174.html"
+    },
+    {
+      "brand_name": "Advil 500mg",
+      "manufacturer": "Aries",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/advil-24175.html"
+    },
+    {
+      "brand_name": "Amadol 300mg | 2ml",
+      "manufacturer": "Harmann",
+      "pack_size": "10 Ampx2ml",
+      "price_pkr": "Rs.12",
+      "product_url": "https://dawaai.pk/medicine/amadol-24176.html"
+    },
+    {
+      "brand_name": "Amole 120mg",
+      "manufacturer": "Libra",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/amole-1-24178.html"
+    },
+    {
+      "brand_name": "Amole 250mg",
+      "manufacturer": "Libra",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/amole-forte-24179.html"
+    },
+    {
+      "brand_name": "Amole 500mg",
+      "manufacturer": "Libra",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/amole-2-24180.html"
+    },
+    {
+      "brand_name": "Anamol 120mg",
+      "manufacturer": "PDH",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.40",
+      "product_url": "https://dawaai.pk/medicine/anamol-24182.html"
+    },
+    {
+      "brand_name": "Anapyrin 500mg",
+      "manufacturer": "Specific",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.265.2",
+      "product_url": "https://dawaai.pk/medicine/anapyrin-24183.html"
+    },
+    {
+      "brand_name": "Anapyrin 500mg",
+      "manufacturer": "Specific",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.3.89",
+      "product_url": "https://dawaai.pk/medicine/anapyrin-1-24184.html"
+    },
+    {
+      "brand_name": "Asmacaine 300mg | 2ml",
+      "manufacturer": "E-Lite",
+      "pack_size": "100 Ampx2ml",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/asmacaine-1-24186.html"
+    },
+    {
+      "brand_name": "Bamol 500mg",
+      "manufacturer": "Batala Pharma",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.4",
+      "product_url": "https://dawaai.pk/medicine/bamol-24187.html"
+    },
+    {
+      "brand_name": "Bamol 500mg",
+      "manufacturer": "Batala Pharma",
+      "pack_size": "Jarx1000's",
+      "price_pkr": "Rs.300",
+      "product_url": "https://dawaai.pk/medicine/bamol-1-24188.html"
+    },
+    {
+      "brand_name": "Bencitamol 500mg",
+      "manufacturer": "Benson",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/bencitamol-24189.html"
+    },
+    {
+      "brand_name": "C.C Don 500mg",
+      "manufacturer": "Saydon",
+      "pack_size": "20 x 10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/cc-don-24190.html"
+    },
+    {
+      "brand_name": "Calpol 120mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/calpol-1-24191.html"
+    },
+    {
+      "brand_name": "Calpol 100ml Sus 120mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "100ml",
+      "price_pkr": "Rs.58.89",
+      "product_url": "https://dawaai.pk/medicine/calpol-3-24193.html"
+    },
+    {
+      "brand_name": "Calpol (B.P) 500mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.26.7",
+      "product_url": "https://dawaai.pk/medicine/calpol-4-24194.html"
+    },
+    {
+      "brand_name": "Calpol (T.P) 500mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "1x500 's",
+      "price_pkr": "Rs.1151",
+      "product_url": "https://dawaai.pk/medicine/calpol-5-24195.html"
+    },
+    {
+      "brand_name": "Calpol 6 Plus 250mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.67.09",
+      "product_url": "https://dawaai.pk/medicine/calpol-6-plus-2-24196.html"
+    },
+    {
+      "brand_name": "Campol 120mg",
+      "manufacturer": "Syntex",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/campol-24198.html"
+    },
+    {
+      "brand_name": "Chilpol 120mg",
+      "manufacturer": "Alliance",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.172",
+      "product_url": "https://dawaai.pk/medicine/chilpol-1-24202.html"
+    },
+    {
+      "brand_name": "Chilpol 120mg",
+      "manufacturer": "Alliance",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/chilpol-2-24203.html"
+    },
+    {
+      "brand_name": "Chilpol Forte 250mg",
+      "manufacturer": "Alliance",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/chilpol-forte-24204.html"
+    },
+    {
+      "brand_name": "Chilpol 500mg",
+      "manufacturer": "Alliance",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.665",
+      "product_url": "https://dawaai.pk/medicine/chilpol-3-24205.html"
+    },
+    {
+      "brand_name": "Chilpol 500mg",
+      "manufacturer": "Alliance",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/chilpol-4-24206.html"
+    },
+    {
+      "brand_name": "Colbex 500mg",
+      "manufacturer": "Pearl",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/colbex-1-24209.html"
+    },
+    {
+      "brand_name": "Convidol-6 250mg",
+      "manufacturer": "Convell",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.32",
+      "product_url": "https://dawaai.pk/medicine/convidol-6-24210.html"
+    },
+    {
+      "brand_name": "Deepol 500mg",
+      "manufacturer": "Delux",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.665",
+      "product_url": "https://dawaai.pk/medicine/deepol-24211.html"
+    },
+    {
+      "brand_name": "Deepol 500mg",
+      "manufacturer": "Delux",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/deepol-1-24212.html"
+    },
+    {
+      "brand_name": "Deepol 500mg",
+      "manufacturer": "Delux",
+      "pack_size": "1x500 's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/deepol-2-24213.html"
+    },
+    {
+      "brand_name": "Delmol 60mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.24.58",
+      "product_url": "https://dawaai.pk/medicine/delmol-24214.html"
+    },
+    {
+      "brand_name": "Delmol 120mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/delmol-1-24215.html"
+    },
+    {
+      "brand_name": "Delmol 250mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35.62",
+      "product_url": "https://dawaai.pk/medicine/delmol-2-24216.html"
+    },
+    {
+      "brand_name": "Delmol 500mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "1x20 's",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/delmol-3-24217.html"
+    },
+    {
+      "brand_name": "Delmol 500mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/delmol-4-24218.html"
+    },
+    {
+      "brand_name": "Detamol 300mg | 2ml",
+      "manufacturer": "TH",
+      "pack_size": "10 Ampx2ml",
+      "price_pkr": "Rs.19",
+      "product_url": "https://dawaai.pk/medicine/detamol-24219.html"
+    },
+    {
+      "brand_name": "Disprol 120mg",
+      "manufacturer": "Reckitt",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/disprol-24220.html"
+    },
+    {
+      "brand_name": "Disprol 120mg",
+      "manufacturer": "Reckitt",
+      "pack_size": "90ml",
+      "price_pkr": "Rs.38",
+      "product_url": "https://dawaai.pk/medicine/disprol-1-24221.html"
+    },
+    {
+      "brand_name": "Disprol 500mg",
+      "manufacturer": "Reckitt",
+      "pack_size": "200s",
+      "price_pkr": "Rs.14.2",
+      "product_url": "https://dawaai.pk/medicine/disprol-2-24222.html"
+    },
+    {
+      "brand_name": "E-Pol 6 Plus 250mg",
+      "manufacturer": "Eros",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/e-pol-6-plus-24223.html"
+    },
+    {
+      "brand_name": "Exidol 120mg",
+      "manufacturer": "Karachi Chemical",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.13.75",
+      "product_url": "https://dawaai.pk/medicine/exidol-24225.html"
+    },
+    {
+      "brand_name": "Exidol 500mg",
+      "manufacturer": "Karachi Chemical",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.4.88",
+      "product_url": "https://dawaai.pk/medicine/exidol-1-24226.html"
+    },
+    {
+      "brand_name": "Falgan 1 gm",
+      "manufacturer": "Bosch",
+      "pack_size": "1 Vial x 100ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/falgan-24227.html"
+    },
+    {
+      "brand_name": "Faramol 500mg",
+      "manufacturer": "Flow Pharma",
+      "pack_size": "Jarx1000's",
+      "price_pkr": "Rs.276.25",
+      "product_url": "https://dawaai.pk/medicine/faramol-1-24229.html"
+    },
+    {
+      "brand_name": "Febrinol 120mg",
+      "manufacturer": "Pharma Wise",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.24",
+      "product_url": "https://dawaai.pk/medicine/febrinol-1-24231.html"
+    },
+    {
+      "brand_name": "Febrinol 500mg",
+      "manufacturer": "Pharma Wise",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.600",
+      "product_url": "https://dawaai.pk/medicine/febrinol-2-24232.html"
+    },
+    {
+      "brand_name": "Febrinol 500mg",
+      "manufacturer": "Pharma Wise",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.6.5",
+      "product_url": "https://dawaai.pk/medicine/febrinol-3-24233.html"
+    },
+    {
+      "brand_name": "Febrol 500mg",
+      "manufacturer": "Barrett",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.32.04",
+      "product_url": "https://dawaai.pk/medicine/febrol-2-24236.html"
+    },
+    {
+      "brand_name": "Fenmol 60mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/fenmol-24238.html"
+    },
+    {
+      "brand_name": "Fenmol 80mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/fenmol-1-24239.html"
+    },
+    {
+      "brand_name": "Fenmol 120mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/fenmol-2-24240.html"
+    },
+    {
+      "brand_name": "Fevamol 500mg",
+      "manufacturer": "swiss pharma",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/fevamol-1-24243.html"
+    },
+    {
+      "brand_name": "Fevasaf 120mg",
+      "manufacturer": "Medisearch",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/fevasaf-24244.html"
+    },
+    {
+      "brand_name": "Fever-Nil 300mg | 2ml",
+      "manufacturer": "Hansel",
+      "pack_size": "5 Ampx2ml",
+      "price_pkr": "Rs.11",
+      "product_url": "https://dawaai.pk/medicine/fever-nil-24247.html"
+    },
+    {
+      "brand_name": "Fever Al 300mg | 2ml",
+      "manufacturer": "Surge",
+      "pack_size": "5 Ampx2ml",
+      "price_pkr": "Rs.55",
+      "product_url": "https://dawaai.pk/medicine/fever-al-24248.html"
+    },
+    {
+      "brand_name": "Fever Al 300mg | 2ml",
+      "manufacturer": "Surge",
+      "pack_size": "50 Ampx2ml",
+      "price_pkr": "Rs.11",
+      "product_url": "https://dawaai.pk/medicine/fever-al-1-24249.html"
+    },
+    {
+      "brand_name": "Fever Al 1gm",
+      "manufacturer": "Surge",
+      "pack_size": "1 Vial x 100ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/fever-al-2-24250.html"
+    },
+    {
+      "brand_name": "Fevercare Peads 60mg",
+      "manufacturer": "CareForHealth",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/fevercare-peads-24251.html"
+    },
+    {
+      "brand_name": "Fevercare 120mg",
+      "manufacturer": "CareForHealth",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/fevercare-24252.html"
+    },
+    {
+      "brand_name": "Feverol-DS 250mg",
+      "manufacturer": "Sharex",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/feverol-ds-24254.html"
+    },
+    {
+      "brand_name": "Fitamol 500mg",
+      "manufacturer": "Icon",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.665",
+      "product_url": "https://dawaai.pk/medicine/fitamol-1-24256.html"
+    },
+    {
+      "brand_name": "Fitamol 500mg",
+      "manufacturer": "Icon",
+      "pack_size": "10x20 's",
+      "price_pkr": "Rs.18",
+      "product_url": "https://dawaai.pk/medicine/fitamol-2-24257.html"
+    },
+    {
+      "brand_name": "Fitamol 500mg",
+      "manufacturer": "Icon",
+      "pack_size": "1x500 's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/fitamol-3-24258.html"
+    },
+    {
+      "brand_name": "Geomol 500mg",
+      "manufacturer": "Geofman",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.368.37",
+      "product_url": "https://dawaai.pk/medicine/geomol-1-24260.html"
+    },
+    {
+      "brand_name": "Hepmol 120mg",
+      "manufacturer": "Healthtek",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/hepmol-24262.html"
+    },
+    {
+      "brand_name": "Hepmol 500mg",
+      "manufacturer": "Healthtek",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/hepmol-2-24264.html"
+    },
+    {
+      "brand_name": "Irzapole 6 Plus 250mg",
+      "manufacturer": "Irza",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/irzapole-6-plus-24266.html"
+    },
+    {
+      "brand_name": "Jetamol 500mg",
+      "manufacturer": "Jinnah Pharma",
+      "pack_size": "10x20 's",
+      "price_pkr": "Rs.14",
+      "product_url": "https://dawaai.pk/medicine/jetamol-24268.html"
+    },
+    {
+      "brand_name": "Kasamol 120mg",
+      "manufacturer": "Xenon",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.21",
+      "product_url": "https://dawaai.pk/medicine/kasamol-1-24270.html"
+    },
+    {
+      "brand_name": "Kempol 120mg",
+      "manufacturer": "Al Kemy",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.22",
+      "product_url": "https://dawaai.pk/medicine/kempol-24271.html"
+    },
+    {
+      "brand_name": "Klebro Plus 250mg",
+      "manufacturer": "Rakahposhi",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/klebro-plus-24274.html"
+    },
+    {
+      "brand_name": "Kymol 120mg",
+      "manufacturer": "Wahab Sons",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.20",
+      "product_url": "https://dawaai.pk/medicine/kymol-24275.html"
+    },
+    {
+      "brand_name": "Kymol Forte 250mg",
+      "manufacturer": "Wahab Sons",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/kymol-forte-24276.html"
+    },
+    {
+      "brand_name": "L-Pol 120mg",
+      "manufacturer": "Lahore Pharma",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.13.73",
+      "product_url": "https://dawaai.pk/medicine/l-pol-2-24279.html"
+    },
+    {
+      "brand_name": "Lefin CF 120mg",
+      "manufacturer": "Leama Chemi",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/lefin-cf-24280.html"
+    },
+    {
+      "brand_name": "Lefin 120mg",
+      "manufacturer": "Leama Chemi",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.18",
+      "product_url": "https://dawaai.pk/medicine/lefin-24281.html"
+    },
+    {
+      "brand_name": "Liqmol 120mg",
+      "manufacturer": "Lowitt",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/liqmol-24283.html"
+    },
+    {
+      "brand_name": "Liqmol 250mg",
+      "manufacturer": "Lowitt",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/liqmol-1-24284.html"
+    },
+    {
+      "brand_name": "Liqmol 250mg",
+      "manufacturer": "Lowitt",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/liqmol-2-24285.html"
+    },
+    {
+      "brand_name": "Medimol 120mg",
+      "manufacturer": "Mediceena",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.44",
+      "product_url": "https://dawaai.pk/medicine/medimol-1-24290.html"
+    },
+    {
+      "brand_name": "Medimol 500mg",
+      "manufacturer": "Mediceena",
+      "pack_size": "100x10 's",
+      "price_pkr": "Rs.6.65",
+      "product_url": "https://dawaai.pk/medicine/medimol-3-24292.html"
+    },
+    {
+      "brand_name": "Megapol 500mg",
+      "manufacturer": "Mega",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.644",
+      "product_url": "https://dawaai.pk/medicine/megapol-24294.html"
+    },
+    {
+      "brand_name": "Megapol 500mg",
+      "manufacturer": "Mega",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.230",
+      "product_url": "https://dawaai.pk/medicine/megapol-1-24295.html"
+    },
+    {
+      "brand_name": "Megapol 500mg",
+      "manufacturer": "Mega",
+      "pack_size": "50x10's",
+      "price_pkr": "Rs.6.44",
+      "product_url": "https://dawaai.pk/medicine/megapol-3-24297.html"
+    },
+    {
+      "brand_name": "Megapol 500mg",
+      "manufacturer": "Mega",
+      "pack_size": "Jarx100's",
+      "price_pkr": "Rs.332",
+      "product_url": "https://dawaai.pk/medicine/megapol-4-24298.html"
+    },
+    {
+      "brand_name": "Munapol 120mg",
+      "manufacturer": "Munawar Pharma",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.18",
+      "product_url": "https://dawaai.pk/medicine/munapol-24300.html"
+    },
+    {
+      "brand_name": "Mylenol 120mg",
+      "manufacturer": "Dr.Raza",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/mylenol-24301.html"
+    },
+    {
+      "brand_name": "Mylenol 500mg",
+      "manufacturer": "Dr.Raza",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/mylenol-1-24302.html"
+    },
+    {
+      "brand_name": "Nendol 120mg",
+      "manufacturer": "Nenza",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/nendol-24303.html"
+    },
+    {
+      "brand_name": "Nendol 500mg",
+      "manufacturer": "Nenza",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/nendol-2-24305.html"
+    },
+    {
+      "brand_name": "Nendol 500mg",
+      "manufacturer": "Nenza",
+      "pack_size": "1x500 's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/nendol-3-24306.html"
+    },
+    {
+      "brand_name": "Nodal Plus 250mg",
+      "manufacturer": "Shaheen",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.30",
+      "product_url": "https://dawaai.pk/medicine/nodal-plus-24307.html"
+    },
+    {
+      "brand_name": "Nodal 500mg",
+      "manufacturer": "Shaheen",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.12.35",
+      "product_url": "https://dawaai.pk/medicine/nodal-24308.html"
+    },
+    {
+      "brand_name": "Normidol 500mg",
+      "manufacturer": "Shaheen",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.12.45",
+      "product_url": "https://dawaai.pk/medicine/normidol-1-24310.html"
+    },
+    {
+      "brand_name": "Paigone 120mg",
+      "manufacturer": "Fynk",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paigone-1-24312.html"
+    },
+    {
+      "brand_name": "Paigone 250mg",
+      "manufacturer": "Fynk",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/paigone-2-24313.html"
+    },
+    {
+      "brand_name": "Paigone 500mg",
+      "manufacturer": "Fynk",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.665",
+      "product_url": "https://dawaai.pk/medicine/paigone-3-24314.html"
+    },
+    {
+      "brand_name": "Painol 120mg",
+      "manufacturer": "KPL",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.33.6",
+      "product_url": "https://dawaai.pk/medicine/painol-24316.html"
+    },
+    {
+      "brand_name": "Painol 500mg",
+      "manufacturer": "KPL",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.2.97",
+      "product_url": "https://dawaai.pk/medicine/painol-3-24319.html"
+    },
+    {
+      "brand_name": "Pamol 60mg",
+      "manufacturer": "Jafson",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/pamol-24321.html"
+    },
+    {
+      "brand_name": "Pamol 120mg",
+      "manufacturer": "Jafson",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/pamol-1-24322.html"
+    },
+    {
+      "brand_name": "Pamol Forte 250mg",
+      "manufacturer": "Jafson",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.19",
+      "product_url": "https://dawaai.pk/medicine/pamol-forte-24323.html"
+    },
+    {
+      "brand_name": "Panadol 500 mg",
+      "manufacturer": "GSK Consumer Healthcare",
+      "pack_size": "20 x 10's",
+      "price_pkr": "Rs.32.04",
+      "product_url": "https://dawaai.pk/medicine/panadol-5-24329.html"
+    },
+    {
+      "brand_name": "Para 4 Kids 120mg",
+      "manufacturer": "Zafa",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.40.31",
+      "product_url": "https://dawaai.pk/medicine/para-4-kids-24336.html"
+    },
+    {
+      "brand_name": "Para 6+ 250mg",
+      "manufacturer": "Zafa",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.49.66",
+      "product_url": "https://dawaai.pk/medicine/para-6-24337.html"
+    },
+    {
+      "brand_name": "Parabro 120mg",
+      "manufacturer": "Albro",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/parabro-24338.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Albro",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.450",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-7-24339.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Albro",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.13.24",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-8-24340.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Gaba",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.3.3",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-9-24341.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Gaba",
+      "pack_size": "1x1000's",
+      "price_pkr": "Rs.78",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-10-24342.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Harmann",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.36.4",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-11-24343.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Harmann",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.15.6",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-12-24344.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Harmann",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.291.2",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-13-24345.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Harmann",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-14-24346.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Progressive",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.8.23",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-15-24347.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Progressive",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-16-24349.html"
+    },
+    {
+      "brand_name": "Paracetamol Junior 500mg",
+      "manufacturer": "Progressive",
+      "pack_size": "1 x 200 's",
+      "price_pkr": "Rs.65",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-junior-1-24350.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Amros",
+      "pack_size": "120ml",
+      "price_pkr": "Rs.8",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-17-24351.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Amros",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-18-24352.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Amros",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-19-24353.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Eros",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.33.81",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-20-24354.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Eros",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.20",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-21-24355.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Eros",
+      "pack_size": "1x 1000 's",
+      "price_pkr": "Rs.300",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-22-24356.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Eros",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.4.22",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-23-24357.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.45",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-24-24358.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-25-24359.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.300",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-26-24360.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-27-24361.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Irza",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.70",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-28-24362.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Irza",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-29-24363.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Irza",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.450",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-30-24364.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Irza",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-31-24365.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Jawa",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.39.9",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-32-24366.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Jawa",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.15.3",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-33-24367.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Jawa",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.321",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-34-24368.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Jawa",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.5",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-35-24369.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Nawab sons",
+      "pack_size": "400ml",
+      "price_pkr": "Rs.43",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-36-24370.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Nawab sons",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-37-24371.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Nawab sons",
+      "pack_size": "10x10 's",
+      "price_pkr": "Rs.6.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-38-24372.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.17",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-39-24373.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-40-24374.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Sharex",
+      "pack_size": "400ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-41-24375.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Sharex",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-42-24376.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Sharex",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-43-24377.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Sharex",
+      "pack_size": "Jarx500 's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-44-24378.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Unipharm",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-45-24379.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Unipharm",
+      "pack_size": "Jarx1000's",
+      "price_pkr": "Rs.250",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-46-24380.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Unipharm",
+      "pack_size": "120ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-47-24381.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Unipharm",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.40",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-48-24382.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Unipharm",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.14",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-49-24383.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "U nison",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.12",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-50-24384.html"
+    },
+    {
+      "brand_name": "Paracetamol 250mg",
+      "manufacturer": "U nison",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.16.47",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-51-24385.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Werick",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-52-24386.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Wilson's",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-54-24388.html"
+    },
+    {
+      "brand_name": "Paracetamol 250mg",
+      "manufacturer": "Wilson's",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-55-24389.html"
+    },
+    {
+      "brand_name": "Paracetamol 120mg",
+      "manufacturer": "Zeb",
+      "pack_size": "50ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-56-24391.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Convell",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-57-24392.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.5.43",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-58-24393.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Dosaco",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.260",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-59-24394.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Dosaco",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-60-24395.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Euro Pharma",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-61-24396.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Euro Pharma",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.4",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-62-24397.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Hizat",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.125",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-63-24398.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Ideal",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.125",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-64-24399.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Ideal",
+      "pack_size": "Jarx1000's",
+      "price_pkr": "Rs.500",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-65-24400.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Ideal",
+      "pack_size": "1 x 1000 's",
+      "price_pkr": "Rs.330",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-66-24401.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "LCPW",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.37.6",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-67-24402.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Lisko",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.480",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-68-24403.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Lisko",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-69-24404.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Lisko",
+      "pack_size": "1x500 's",
+      "price_pkr": "Rs.184.18",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-70-24405.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Miracle",
+      "pack_size": "1x500 's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-71-24406.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Pharmacare",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-72-24407.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Pharmacare",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.3",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-73-24408.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Pharmadic",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-74-24409.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Pliva",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.245.15",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-75-24410.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Regent",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.105.88",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-76-24411.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Tread Pharma",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-77-24412.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Wilshire",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-78-24413.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Xenon",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-79-24414.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Xenon",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.210",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-80-24415.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Zafa",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.684.02",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-81-24416.html"
+    },
+    {
+      "brand_name": "Paracetamol 500mg",
+      "manufacturer": "Zafa",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.185.15",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-82-24417.html"
+    },
+    {
+      "brand_name": "Paracetol 500mg",
+      "manufacturer": "Roryan Pharma",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.6.7",
+      "product_url": "https://dawaai.pk/medicine/paracetol-24418.html"
+    },
+    {
+      "brand_name": "Paradin 120mg",
+      "manufacturer": "Ardin",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.24",
+      "product_url": "https://dawaai.pk/medicine/paradin-24419.html"
+    },
+    {
+      "brand_name": "Paradin 120mg",
+      "manufacturer": "Ardin",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/paradin-1-24420.html"
+    },
+    {
+      "brand_name": "Paragray 120mg",
+      "manufacturer": "Grays",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/paragray-24421.html"
+    },
+    {
+      "brand_name": "Paraheim 500mg",
+      "manufacturer": "Pakheim",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.240",
+      "product_url": "https://dawaai.pk/medicine/paraheim-3-24422.html"
+    },
+    {
+      "brand_name": "Paraheim 500mg",
+      "manufacturer": "Pakheim",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.4.5",
+      "product_url": "https://dawaai.pk/medicine/paraheim-4-24423.html"
+    },
+    {
+      "brand_name": "Paralief 10mg|ml",
+      "manufacturer": "Nimrall",
+      "pack_size": "100 vial",
+      "price_pkr": "Rs.0.8",
+      "product_url": "https://dawaai.pk/medicine/paralief-24424.html"
+    },
+    {
+      "brand_name": "Paralief 250mg",
+      "manufacturer": "Nimrall",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/paralief-1-24425.html"
+    },
+    {
+      "brand_name": "Paralief 250mg",
+      "manufacturer": "Nimrall",
+      "pack_size": "90ml",
+      "price_pkr": "Rs.40",
+      "product_url": "https://dawaai.pk/medicine/paralief-2-24426.html"
+    },
+    {
+      "brand_name": "Paramac 120mg",
+      "manufacturer": "Macter",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.33",
+      "product_url": "https://dawaai.pk/medicine/paramac-24427.html"
+    },
+    {
+      "brand_name": "Paramac 120mg",
+      "manufacturer": "Macter",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28.8",
+      "product_url": "https://dawaai.pk/medicine/paramac-1-24428.html"
+    },
+    {
+      "brand_name": "Paramac 250mg",
+      "manufacturer": "Macter",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/paramac-2-24429.html"
+    },
+    {
+      "brand_name": "Paramed 120mg",
+      "manufacturer": "Medicraft",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.23",
+      "product_url": "https://dawaai.pk/medicine/paramed-24430.html"
+    },
+    {
+      "brand_name": "Paramol 80mg",
+      "manufacturer": "Paramount",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/paramol-24431.html"
+    },
+    {
+      "brand_name": "Parapol 120mg",
+      "manufacturer": "Lisko",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.210",
+      "product_url": "https://dawaai.pk/medicine/parapol-24432.html"
+    },
+    {
+      "brand_name": "Parapol 120mg",
+      "manufacturer": "Lisko",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/parapol-1-24433.html"
+    },
+    {
+      "brand_name": "Parapol DS 250mg",
+      "manufacturer": "Lisko",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/parapol-ds-24434.html"
+    },
+    {
+      "brand_name": "Parapol 500mg",
+      "manufacturer": "Lisko",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/parapol-2-24435.html"
+    },
+    {
+      "brand_name": "Parasol 250mg",
+      "manufacturer": "Z-jans",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.17",
+      "product_url": "https://dawaai.pk/medicine/parasol-24437.html"
+    },
+    {
+      "brand_name": "Paratol 120mg",
+      "manufacturer": "Highnoon",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.14.12",
+      "product_url": "https://dawaai.pk/medicine/paratol-24440.html"
+    },
+    {
+      "brand_name": "Parol 500mg",
+      "manufacturer": "Bloom Pharma",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.764.75",
+      "product_url": "https://dawaai.pk/medicine/parol-24442.html"
+    },
+    {
+      "brand_name": "Parol 500mg",
+      "manufacturer": "Bloom Pharma",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.161",
+      "product_url": "https://dawaai.pk/medicine/parol-1-24443.html"
+    },
+    {
+      "brand_name": "Pasic 500mg",
+      "manufacturer": "Jaens",
+      "pack_size": "10x10 's",
+      "price_pkr": "Rs.5",
+      "product_url": "https://dawaai.pk/medicine/pasic-24444.html"
+    },
+    {
+      "brand_name": "Pedric 120mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/pedric-1-24446.html"
+    },
+    {
+      "brand_name": "Pedric 6 plus 250mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/pedric-6-plus-24447.html"
+    },
+    {
+      "brand_name": "Pedric 6 plus 250mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/pedric-6-plus-1-24448.html"
+    },
+    {
+      "brand_name": "Pedrol 60mg",
+      "manufacturer": "Stanely",
+      "pack_size": "20ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/pedrol-1-24450.html"
+    },
+    {
+      "brand_name": "Pedrol 120mg",
+      "manufacturer": "Stanely",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.30.75",
+      "product_url": "https://dawaai.pk/medicine/pedrol-2-24451.html"
+    },
+    {
+      "brand_name": "Pedrol Forte 250mg",
+      "manufacturer": "Stanely",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/pedrol-forte-24452.html"
+    },
+    {
+      "brand_name": "Pedrol Forte 250mg",
+      "manufacturer": "Stanely",
+      "pack_size": "90ml",
+      "price_pkr": "Rs.50",
+      "product_url": "https://dawaai.pk/medicine/pedrol-forte-1-24453.html"
+    },
+    {
+      "brand_name": "Pedrol 500mg",
+      "manufacturer": "Stanely",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/pedrol-3-24454.html"
+    },
+    {
+      "brand_name": "Pelix 120mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.30",
+      "product_url": "https://dawaai.pk/medicine/pelix-24455.html"
+    },
+    {
+      "brand_name": "Pracan 300mg | 2ml",
+      "manufacturer": "Nexus",
+      "pack_size": "10 Ampx2ml",
+      "price_pkr": "Rs.10.5",
+      "product_url": "https://dawaai.pk/medicine/pracan-24458.html"
+    },
+    {
+      "brand_name": "Pracmol 120mg",
+      "manufacturer": "Glitz",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/pracmol-24459.html"
+    },
+    {
+      "brand_name": "Pracmol 500mg",
+      "manufacturer": "Glitz",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7.5",
+      "product_url": "https://dawaai.pk/medicine/pracmol-1-24460.html"
+    },
+    {
+      "brand_name": "Pracmol 500mg",
+      "manufacturer": "Glitz",
+      "pack_size": "10x50 's",
+      "price_pkr": "Rs.46",
+      "product_url": "https://dawaai.pk/medicine/pracmol-2-24461.html"
+    },
+    {
+      "brand_name": "Promol 120mg",
+      "manufacturer": "Progressive",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.17.5",
+      "product_url": "https://dawaai.pk/medicine/promol-24462.html"
+    },
+    {
+      "brand_name": "Provas IV 1gm",
+      "manufacturer": "Sami",
+      "pack_size": "1 Vialx100ml",
+      "price_pkr": "Rs.155.09",
+      "product_url": "https://dawaai.pk/medicine/provas-24464.html"
+    },
+    {
+      "brand_name": "Provas 300mg/2ml",
+      "manufacturer": "Sami",
+      "pack_size": "5 Ampx2ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/provas-1-24465.html"
+    },
+    {
+      "brand_name": "Pyrecaf 500mg",
+      "manufacturer": "Pulse",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/pyrecaf-24466.html"
+    },
+    {
+      "brand_name": "Pyrol 120mg",
+      "manufacturer": "Semos",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.45",
+      "product_url": "https://dawaai.pk/medicine/pyrol-24467.html"
+    },
+    {
+      "brand_name": "Pyrol 500mg",
+      "manufacturer": "Semos",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/pyrol-2-24469.html"
+    },
+    {
+      "brand_name": "Pyrol 500mg",
+      "manufacturer": "Semos",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.150",
+      "product_url": "https://dawaai.pk/medicine/pyrol-3-24470.html"
+    },
+    {
+      "brand_name": "Rascodol 120mg",
+      "manufacturer": "Rasco",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/rascodol-24471.html"
+    },
+    {
+      "brand_name": "Rascodol 250mg",
+      "manufacturer": "Rasco",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.18",
+      "product_url": "https://dawaai.pk/medicine/rascodol-1-24472.html"
+    },
+    {
+      "brand_name": "Rascodol 500mg",
+      "manufacturer": "Rasco",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/rascodol-2-24473.html"
+    },
+    {
+      "brand_name": "Reliefal 120mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "120ml",
+      "price_pkr": "Rs.55",
+      "product_url": "https://dawaai.pk/medicine/reliefal-24474.html"
+    },
+    {
+      "brand_name": "Reliefal 6 plus 250mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "120ml",
+      "price_pkr": "Rs.67",
+      "product_url": "https://dawaai.pk/medicine/reliefal-6-plus-24476.html"
+    },
+    {
+      "brand_name": "Reliefal 6 plus 250mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/reliefal-6-plus-1-24477.html"
+    },
+    {
+      "brand_name": "Reliefal 125mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "1x20 's",
+      "price_pkr": "Rs.57",
+      "product_url": "https://dawaai.pk/medicine/reliefal-2-24478.html"
+    },
+    {
+      "brand_name": "Reliefal 250mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "1x20 's",
+      "price_pkr": "Rs.419",
+      "product_url": "https://dawaai.pk/medicine/reliefal-3-24479.html"
+    },
+    {
+      "brand_name": "Rgesic 500mg",
+      "manufacturer": "Euro Pharma",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.5.22",
+      "product_url": "https://dawaai.pk/medicine/rgesic-1-24481.html"
+    },
+    {
+      "brand_name": "Saptamol 500mg",
+      "manufacturer": "Sapient",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/saptamol-24482.html"
+    },
+    {
+      "brand_name": "Saptamol 120mg",
+      "manufacturer": "Sapient",
+      "pack_size": "120ml",
+      "price_pkr": "Rs.15.88",
+      "product_url": "https://dawaai.pk/medicine/saptamol-1-24483.html"
+    },
+    {
+      "brand_name": "Samophen 500mg",
+      "manufacturer": "Adamjee Pharmaceuticals",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.93.6",
+      "product_url": "https://dawaai.pk/medicine/samophen-24486.html"
+    },
+    {
+      "brand_name": "Supamol 120mg",
+      "manufacturer": "Nova Med",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.28.75",
+      "product_url": "https://dawaai.pk/medicine/supamol-1-24488.html"
+    },
+    {
+      "brand_name": "Supamol DS 250mg",
+      "manufacturer": "Nova Med",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/supamol-ds-24489.html"
+    },
+    {
+      "brand_name": "Tanamol 120mg",
+      "manufacturer": "Epoch",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.172",
+      "product_url": "https://dawaai.pk/medicine/tanamol-24493.html"
+    },
+    {
+      "brand_name": "Tanamol 500mg",
+      "manufacturer": "Epoch",
+      "pack_size": "1x100 's",
+      "price_pkr": "Rs.70",
+      "product_url": "https://dawaai.pk/medicine/tanamol-2-24495.html"
+    },
+    {
+      "brand_name": "Tanamol 500mg",
+      "manufacturer": "Epoch",
+      "pack_size": "1x1000 's",
+      "price_pkr": "Rs.665",
+      "product_url": "https://dawaai.pk/medicine/tanamol-3-24496.html"
+    },
+    {
+      "brand_name": "Tempnil 500mg",
+      "manufacturer": "Neo Medix",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/tempnil-1-24499.html"
+    },
+    {
+      "brand_name": "Tempol 120mg",
+      "manufacturer": "Wood Wards",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.75",
+      "product_url": "https://dawaai.pk/medicine/tempol-2-24502.html"
+    },
+    {
+      "brand_name": "Tempol 250mg",
+      "manufacturer": "Wood Wards",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.7.41",
+      "product_url": "https://dawaai.pk/medicine/tempol-4-24504.html"
+    },
+    {
+      "brand_name": "Tempol 500mg",
+      "manufacturer": "Wood Wards",
+      "pack_size": "1x10 's",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/tempol-5-24505.html"
+    },
+    {
+      "brand_name": "Tempol 500mg",
+      "manufacturer": "Wood Wards",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.5",
+      "product_url": "https://dawaai.pk/medicine/tempol-6-24506.html"
+    },
+    {
+      "brand_name": "Tyladol Plus 250mg",
+      "manufacturer": "Bryon",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.36",
+      "product_url": "https://dawaai.pk/medicine/tyladol-plus-24508.html"
+    },
+    {
+      "brand_name": "Tyladol 500mg",
+      "manufacturer": "Bryon",
+      "pack_size": "20x10 's",
+      "price_pkr": "Rs.534",
+      "product_url": "https://dawaai.pk/medicine/tyladol-1-24510.html"
+    },
+    {
+      "brand_name": "Tylol 60mg",
+      "manufacturer": "Don Valley",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.14.73",
+      "product_url": "https://dawaai.pk/medicine/tylol-24511.html"
+    },
+    {
+      "brand_name": "Tylol 120mg",
+      "manufacturer": "Don Valley",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/tylol-1-24512.html"
+    },
+    {
+      "brand_name": "Tylol 6+ 250mg",
+      "manufacturer": "Don Valley",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.22.66",
+      "product_url": "https://dawaai.pk/medicine/tylol-6-24513.html"
+    },
+    {
+      "brand_name": "Tylol 500mg",
+      "manufacturer": "Don Valley",
+      "pack_size": "1x200 's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/tylol-2-24514.html"
+    },
+    {
+      "brand_name": "Xamol 500mg",
+      "manufacturer": "Macquins",
+      "pack_size": "10x20 's",
+      "price_pkr": "Rs.14.4",
+      "product_url": "https://dawaai.pk/medicine/xamol-4-24521.html"
+    },
+    {
+      "brand_name": "Xtramol 1gm",
+      "manufacturer": "EG Pharma",
+      "pack_size": "1 Vial x 100ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/xtramol-24522.html"
+    },
+    {
+      "brand_name": "Xtramol 300mg|2ml",
+      "manufacturer": "EG Pharma",
+      "pack_size": "5 Ampx2ml",
+      "price_pkr": "Rs.11",
+      "product_url": "https://dawaai.pk/medicine/xtramol-1-24523.html"
+    },
+    {
+      "brand_name": "Yanil 120mg",
+      "manufacturer": "Hizat",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/yanil-24524.html"
+    },
+    {
+      "brand_name": "Zancpal 120mg",
+      "manufacturer": "Zanctok",
+      "pack_size": "450ml",
+      "price_pkr": "Rs.40",
+      "product_url": "https://dawaai.pk/medicine/zancpal-1-24526.html"
+    },
+    {
+      "brand_name": "Panadol Forte Pine Apple",
+      "manufacturer": "GSK Consumer Healthcare",
+      "pack_size": "90ml",
+      "price_pkr": "Rs.86.77",
+      "product_url": "https://dawaai.pk/medicine/panadol-forte-pine-apple-38544.html"
+    },
+    {
+      "brand_name": "Panadol Infant Drops 80mg",
+      "manufacturer": "Panadol",
+      "pack_size": "30ml",
+      "price_pkr": "Rs.71.7",
+      "product_url": "https://dawaai.pk/medicine/panadol-infant-drops-38545.html"
+    },
+    {
+      "brand_name": "Bofalgan 1gm",
+      "manufacturer": "Bosch",
+      "pack_size": "1 Vial x 100ml",
+      "price_pkr": "Rs.149.64",
+      "product_url": "https://dawaai.pk/medicine/bofalgan-2-39488.html"
+    },
+    {
+      "brand_name": "Disprol 120mg",
+      "manufacturer": "Reckitt",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.49.65",
+      "product_url": "https://dawaai.pk/medicine/disprol-4-39528.html"
+    },
+    {
+      "brand_name": "Febrol DS 250mg",
+      "manufacturer": "Barrett",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.65.7",
+      "product_url": "https://dawaai.pk/medicine/febrol-4-39542.html"
+    },
+    {
+      "brand_name": "Mylenol 500 mg",
+      "manufacturer": "Dr.Raza",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/mylenol-3-39628.html"
+    },
+    {
+      "brand_name": "Pelix 500 mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "200's",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/pelix-5-39805.html"
+    },
+    {
+      "brand_name": "Reliefal 250 mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "120 ml",
+      "price_pkr": "Rs.97",
+      "product_url": "https://dawaai.pk/medicine/reliefal-4-39825.html"
+    },
+    {
+      "brand_name": "Reliefal 250 mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/reliefal-5-39826.html"
+    },
+    {
+      "brand_name": "Reliefal 250 mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "20's",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/reliefal-9-39830.html"
+    },
+    {
+      "brand_name": "Acetamol 120 mg",
+      "manufacturer": "Legacy",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/acetamol-2-40428.html"
+    },
+    {
+      "brand_name": "Amole 60mg",
+      "manufacturer": "Libra",
+      "pack_size": "15ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/amole-7-40433.html"
+    },
+    {
+      "brand_name": "Amparcet 500 mg",
+      "manufacturer": "Aims Pharma",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/amparcet-2-40437.html"
+    },
+    {
+      "brand_name": "Asmacaine 300 mg/2 ml",
+      "manufacturer": "E-Lite",
+      "pack_size": "10 ampx2 ml",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/asmacaine-4-40441.html"
+    },
+    {
+      "brand_name": "Axamol 500 mg",
+      "manufacturer": "Axis",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/axamol-1-40443.html"
+    },
+    {
+      "brand_name": "Baxterol 120mg",
+      "manufacturer": "Baxter",
+      "pack_size": "60ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/baxterol-1-40446.html"
+    },
+    {
+      "brand_name": "Benamol 300 mg/2 ml",
+      "manufacturer": "Global Pharma",
+      "pack_size": "10 ampx2 ml",
+      "price_pkr": "Rs.92",
+      "product_url": "https://dawaai.pk/medicine/benamol-2-40447.html"
+    },
+    {
+      "brand_name": "Benamol 300 mg/2 ml",
+      "manufacturer": "Global Pharma",
+      "pack_size": "1 amp x 2 ml",
+      "price_pkr": "Rs.77.65",
+      "product_url": "https://dawaai.pk/medicine/benamol-3-40448.html"
+    },
+    {
+      "brand_name": "Bofalgan 300mg/2ml",
+      "manufacturer": "Bosch",
+      "pack_size": "5 Amp x 2ml",
+      "price_pkr": "Rs.85",
+      "product_url": "https://dawaai.pk/medicine/bofalgan-5-40451.html"
+    },
+    {
+      "brand_name": "Carapol 300 mg/2 ml",
+      "manufacturer": "Caraway",
+      "pack_size": "1 ampx10 ml",
+      "price_pkr": "Rs.110",
+      "product_url": "https://dawaai.pk/medicine/carapol-1-40461.html"
+    },
+    {
+      "brand_name": "Celcius 120 mg",
+      "manufacturer": "MTI",
+      "pack_size": "100 ml",
+      "price_pkr": "Rs.46",
+      "product_url": "https://dawaai.pk/medicine/celcius-2-40462.html"
+    },
+    {
+      "brand_name": "Celcius 120 mg",
+      "manufacturer": "MTI",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.38",
+      "product_url": "https://dawaai.pk/medicine/celcius-3-40463.html"
+    },
+    {
+      "brand_name": "Ceta 1 gm",
+      "manufacturer": "Medisave",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/ceta-1-40464.html"
+    },
+    {
+      "brand_name": "Cetalix 120 mg",
+      "manufacturer": "Ideal",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.90",
+      "product_url": "https://dawaai.pk/medicine/cetalix-4-40465.html"
+    },
+    {
+      "brand_name": "Cetalix 120 mg",
+      "manufacturer": "Ideal",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/cetalix-5-40466.html"
+    },
+    {
+      "brand_name": "Cetapol 500 mg",
+      "manufacturer": "Lotus",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/cetapol-1-40467.html"
+    },
+    {
+      "brand_name": "Chikymol 120 mg",
+      "manufacturer": "Ameer Pharma",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.35.29",
+      "product_url": "https://dawaai.pk/medicine/chikymol-2-40468.html"
+    },
+    {
+      "brand_name": "Chikymol 120 mg",
+      "manufacturer": "Ameer Pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.20",
+      "product_url": "https://dawaai.pk/medicine/chikymol-3-40469.html"
+    },
+    {
+      "brand_name": "Chilpol 60 mg",
+      "manufacturer": "Alliance",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/chilpol-13-40470.html"
+    },
+    {
+      "brand_name": "Chilpol 250 mg",
+      "manufacturer": "Alliance",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/chilpol-14-40471.html"
+    },
+    {
+      "brand_name": "Chilpol 500 mg",
+      "manufacturer": "Alliance",
+      "pack_size": "500's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/chilpol-19-40476.html"
+    },
+    {
+      "brand_name": "Colbex 120 mg",
+      "manufacturer": "Pearl",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/colbex-4-40477.html"
+    },
+    {
+      "brand_name": "Convidol-6 250 mg",
+      "manufacturer": "Convell",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.32",
+      "product_url": "https://dawaai.pk/medicine/convidol-6-2-40479.html"
+    },
+    {
+      "brand_name": "Delmol 250 mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35.62",
+      "product_url": "https://dawaai.pk/medicine/delmol-11-40484.html"
+    },
+    {
+      "brand_name": "Delmol 500 mg",
+      "manufacturer": "Delta Pharma",
+      "pack_size": "200's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/delmol-14-40487.html"
+    },
+    {
+      "brand_name": "E-Pol 6 plus 250 mg",
+      "manufacturer": "Eros",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.20",
+      "product_url": "https://dawaai.pk/medicine/e-pol-6-plus-5-40493.html"
+    },
+    {
+      "brand_name": "Faramol 500 mg",
+      "manufacturer": "Flow Pharma",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.2.76",
+      "product_url": "https://dawaai.pk/medicine/faramol-4-40497.html"
+    },
+    {
+      "brand_name": "Febrinol 120 mg",
+      "manufacturer": "Pharma Wise",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.90",
+      "product_url": "https://dawaai.pk/medicine/febrinol-8-40499.html"
+    },
+    {
+      "brand_name": "Fedramol 120 mg",
+      "manufacturer": "Fedro",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.16.5",
+      "product_url": "https://dawaai.pk/medicine/fedramol-2-40506.html"
+    },
+    {
+      "brand_name": "Fenmol 250 mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/fenmol-11-40510.html"
+    },
+    {
+      "brand_name": "Fevadol 160 mg|5 ml",
+      "manufacturer": "Pharmatec",
+      "pack_size": "100 ml",
+      "price_pkr": "Rs.51",
+      "product_url": "https://dawaai.pk/medicine/fevadol-3-40511.html"
+    },
+    {
+      "brand_name": "Fevadol 160 mg|5ml",
+      "manufacturer": "Pharmatec",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/fevadol-4-40512.html"
+    },
+    {
+      "brand_name": "Fevadol 160 mg",
+      "manufacturer": "Pharmatec",
+      "pack_size": "200's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/fevadol-5-40513.html"
+    },
+    {
+      "brand_name": "Fevamol 120 mg",
+      "manufacturer": "swiss pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/fevamol-4-40514.html"
+    },
+    {
+      "brand_name": "Fevasaf 120 mg",
+      "manufacturer": "Medisearch",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.82",
+      "product_url": "https://dawaai.pk/medicine/fevasaf-4-40516.html"
+    },
+    {
+      "brand_name": "Fevenor 300 mg/2 ml",
+      "manufacturer": "Global Pharma",
+      "pack_size": "10 ampx2 ml",
+      "price_pkr": "Rs.11",
+      "product_url": "https://dawaai.pk/medicine/fevenor-2-40518.html"
+    },
+    {
+      "brand_name": "Feveral 1gm",
+      "manufacturer": "Surge",
+      "pack_size": "1 Vialx100ml",
+      "price_pkr": "Rs.81",
+      "product_url": "https://dawaai.pk/medicine/feveral-3-40520.html"
+    },
+    {
+      "brand_name": "Feveral 300mg/2ml",
+      "manufacturer": "Surge",
+      "pack_size": "5 Ampx2ml",
+      "price_pkr": "Rs.55",
+      "product_url": "https://dawaai.pk/medicine/feveral-4-40521.html"
+    },
+    {
+      "brand_name": "Fevernil 100 mg|ml",
+      "manufacturer": "Meditech",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.23",
+      "product_url": "https://dawaai.pk/medicine/fevernil-2-40525.html"
+    },
+    {
+      "brand_name": "Fevernil 120 mg",
+      "manufacturer": "Meditech",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.30",
+      "product_url": "https://dawaai.pk/medicine/fevernil-3-40526.html"
+    },
+    {
+      "brand_name": "Fevernil 6+ 250 mg",
+      "manufacturer": "Meditech",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/fevernil-6-1-40527.html"
+    },
+    {
+      "brand_name": "Feverol 120 ,mg",
+      "manufacturer": "Mediate",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/feverol-2-40528.html"
+    },
+    {
+      "brand_name": "Fevromol 250 mg",
+      "manufacturer": "Hicon Pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.11.76",
+      "product_url": "https://dawaai.pk/medicine/fevromol-1-40530.html"
+    },
+    {
+      "brand_name": "Fitamol 120 mg",
+      "manufacturer": "Icon",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/fitamol-8-40531.html"
+    },
+    {
+      "brand_name": "Fozitol 80 mg",
+      "manufacturer": "Fozan",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/fozitol-3-40535.html"
+    },
+    {
+      "brand_name": "Fozitol 250 mg",
+      "manufacturer": "Fozan",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/fozitol-4-40536.html"
+    },
+    {
+      "brand_name": "Fozitol 120 mg",
+      "manufacturer": "Fozan",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/fozitol-5-40537.html"
+    },
+    {
+      "brand_name": "Geomol 120 mg",
+      "manufacturer": "Geofman",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.19.6",
+      "product_url": "https://dawaai.pk/medicine/geomol-6-40538.html"
+    },
+    {
+      "brand_name": "Geomol 500 mg",
+      "manufacturer": "Geofman",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/geomol-8-40540.html"
+    },
+    {
+      "brand_name": "Hepmol 250 mg",
+      "manufacturer": "Healthtek",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/hepmol-7-40542.html"
+    },
+    {
+      "brand_name": "Ipramol 300 mg/2 ml",
+      "manufacturer": "Ipharm",
+      "pack_size": "1 ampx2 ml",
+      "price_pkr": "Rs.165",
+      "product_url": "https://dawaai.pk/medicine/ipramol-2-40544.html"
+    },
+    {
+      "brand_name": "Irzapole 6 plus 250 mg",
+      "manufacturer": "Irza",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/irzapole-6-plus-4-40545.html"
+    },
+    {
+      "brand_name": "Irzapole Pediatric 60 mg",
+      "manufacturer": "Irza",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/irzapole-pediatric-1-40547.html"
+    },
+    {
+      "brand_name": "Kanamol 300 mg/2 ml",
+      "manufacturer": "Isis",
+      "pack_size": "1 ampx2 ml",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/kanamol-5-40549.html"
+    },
+    {
+      "brand_name": "Kanamol 120 mg",
+      "manufacturer": "Isis",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.150",
+      "product_url": "https://dawaai.pk/medicine/kanamol-6-40550.html"
+    },
+    {
+      "brand_name": "Kanamol 120 mg",
+      "manufacturer": "Isis",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/kanamol-7-40551.html"
+    },
+    {
+      "brand_name": "Kanamol 500 mg",
+      "manufacturer": "Isis",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.249",
+      "product_url": "https://dawaai.pk/medicine/kanamol-8-40552.html"
+    },
+    {
+      "brand_name": "Kanamol 500 mg",
+      "manufacturer": "Isis",
+      "pack_size": "200's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/kanamol-9-40553.html"
+    },
+    {
+      "brand_name": "Karmol 1 gm",
+      "manufacturer": "Genix",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/karmol-1-40554.html"
+    },
+    {
+      "brand_name": "Kasamol 120 mg",
+      "manufacturer": "Xenon",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.42.29",
+      "product_url": "https://dawaai.pk/medicine/kasamol-4-40555.html"
+    },
+    {
+      "brand_name": "Kempol 120 mg",
+      "manufacturer": "Al Kemy",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.48",
+      "product_url": "https://dawaai.pk/medicine/kempol-4-40557.html"
+    },
+    {
+      "brand_name": "Klebro 250 mg",
+      "manufacturer": "Rakahposhi",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/klebro-3-40559.html"
+    },
+    {
+      "brand_name": "Klebro 120 mg",
+      "manufacturer": "Rakahposhi",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/klebro-4-40560.html"
+    },
+    {
+      "brand_name": "Kymol 250 mg",
+      "manufacturer": "Wahab Sons",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/kymol-3-40561.html"
+    },
+    {
+      "brand_name": "L-pol 120 mg",
+      "manufacturer": "Lahore Pharma",
+      "pack_size": "120 ml",
+      "price_pkr": "Rs.24.02",
+      "product_url": "https://dawaai.pk/medicine/l-pol-6-40563.html"
+    },
+    {
+      "brand_name": "L-pol 120 mg",
+      "manufacturer": "Lahore Pharma",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.91.52",
+      "product_url": "https://dawaai.pk/medicine/l-pol-7-40564.html"
+    },
+    {
+      "brand_name": "Larmol 250 mg",
+      "manufacturer": "Sayyed",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/larmol-2-40566.html"
+    },
+    {
+      "brand_name": "Larmol 250 mg",
+      "manufacturer": "Sayyed",
+      "pack_size": "90 ml",
+      "price_pkr": "Rs.53",
+      "product_url": "https://dawaai.pk/medicine/larmol-3-40567.html"
+    },
+    {
+      "brand_name": "Lefin 250 mg",
+      "manufacturer": "Leama Chemi",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.24",
+      "product_url": "https://dawaai.pk/medicine/lefin-5-40569.html"
+    },
+    {
+      "brand_name": "Liqmol 500 mg",
+      "manufacturer": "Lowitt",
+      "pack_size": "200's",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/liqmol-15-40574.html"
+    },
+    {
+      "brand_name": "Liqmol 500 mg",
+      "manufacturer": "Lowitt",
+      "pack_size": "500's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/liqmol-16-40575.html"
+    },
+    {
+      "brand_name": "Liqmol 500 mg",
+      "manufacturer": "Lowitt",
+      "pack_size": "Jarx1000's",
+      "price_pkr": "Rs.700",
+      "product_url": "https://dawaai.pk/medicine/liqmol-17-40576.html"
+    },
+    {
+      "brand_name": "Medimol 120 mg",
+      "manufacturer": "Mediceena",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.44",
+      "product_url": "https://dawaai.pk/medicine/medimol-10-40577.html"
+    },
+    {
+      "brand_name": "Medimol 120 mg",
+      "manufacturer": "Mediceena",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/medimol-11-40578.html"
+    },
+    {
+      "brand_name": "Medimol 250 mg",
+      "manufacturer": "Mediceena",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/medimol-12-40579.html"
+    },
+    {
+      "brand_name": "Medimol 500 mg",
+      "manufacturer": "Mediceena",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/medimol-14-40581.html"
+    },
+    {
+      "brand_name": "Nendol 250 mg",
+      "manufacturer": "Nenza",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/nendol-9-40592.html"
+    },
+    {
+      "brand_name": "Nendol 500 mg",
+      "manufacturer": "Nenza",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/nendol-10-40593.html"
+    },
+    {
+      "brand_name": "Nodal 250 mg",
+      "manufacturer": "Shaheen",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.30",
+      "product_url": "https://dawaai.pk/medicine/nodal-3-40595.html"
+    },
+    {
+      "brand_name": "Normidol 120 mg",
+      "manufacturer": "Shaheen",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/normidol-4-40597.html"
+    },
+    {
+      "brand_name": "Nymbex 120 mg",
+      "manufacturer": "Cibex",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/nymbex-2-40599.html"
+    },
+    {
+      "brand_name": "Nymbex 250 mg",
+      "manufacturer": "Cibex",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.79",
+      "product_url": "https://dawaai.pk/medicine/nymbex-3-40600.html"
+    },
+    {
+      "brand_name": "Paigone 300 mg/2 ml",
+      "manufacturer": "Fynk",
+      "pack_size": "5 ampx2 ml",
+      "price_pkr": "Rs.75.55",
+      "product_url": "https://dawaai.pk/medicine/paigone-10-40601.html"
+    },
+    {
+      "brand_name": "Paigone 500 mg",
+      "manufacturer": "Fynk",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paigone-14-40605.html"
+    },
+    {
+      "brand_name": "Painol 120 mg",
+      "manufacturer": "KPL",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.13.72",
+      "product_url": "https://dawaai.pk/medicine/painol-11-40607.html"
+    },
+    {
+      "brand_name": "Painol 500 mg",
+      "manufacturer": "KPL",
+      "pack_size": "100x10's",
+      "price_pkr": "Rs.2.97",
+      "product_url": "https://dawaai.pk/medicine/painol-12-40608.html"
+    },
+    {
+      "brand_name": "Pamol 250 mg",
+      "manufacturer": "Jafson",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.19",
+      "product_url": "https://dawaai.pk/medicine/pamol-8-40612.html"
+    },
+    {
+      "brand_name": "Pamol 500 mg",
+      "manufacturer": "Jafson",
+      "pack_size": "200's",
+      "price_pkr": "Rs.70",
+      "product_url": "https://dawaai.pk/medicine/pamol-10-40614.html"
+    },
+    {
+      "brand_name": "Panafin 500 mg",
+      "manufacturer": "Medipak",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/panafin-2-40620.html"
+    },
+    {
+      "brand_name": "Panam 1 gm",
+      "manufacturer": "English Pharma",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/panam-6-40621.html"
+    },
+    {
+      "brand_name": "Panam 300 mg/2 ml",
+      "manufacturer": "English Pharma",
+      "pack_size": "1 ampx2 ml",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/panam-7-40622.html"
+    },
+    {
+      "brand_name": "Panam 120 mg",
+      "manufacturer": "English Pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/panam-8-40623.html"
+    },
+    {
+      "brand_name": "Panaram 120 mg",
+      "manufacturer": "Efroze",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.49.63",
+      "product_url": "https://dawaai.pk/medicine/panaram-4-40624.html"
+    },
+    {
+      "brand_name": "Panaram 500 mg",
+      "manufacturer": "Efroze",
+      "pack_size": "200's",
+      "price_pkr": "Rs.470",
+      "product_url": "https://dawaai.pk/medicine/panaram-5-40625.html"
+    },
+    {
+      "brand_name": "Panol 80 mg",
+      "manufacturer": "Bio Pharma",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.19",
+      "product_url": "https://dawaai.pk/medicine/panol-6-40626.html"
+    },
+    {
+      "brand_name": "Panol 120 mg",
+      "manufacturer": "Bio Pharma",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.210",
+      "product_url": "https://dawaai.pk/medicine/panol-7-40627.html"
+    },
+    {
+      "brand_name": "Panol 120 mg",
+      "manufacturer": "Bio Pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/panol-8-40628.html"
+    },
+    {
+      "brand_name": "Panol 500 mg",
+      "manufacturer": "Bio Pharma",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.900",
+      "product_url": "https://dawaai.pk/medicine/panol-9-40629.html"
+    },
+    {
+      "brand_name": "Panol 500 mg",
+      "manufacturer": "Bio Pharma",
+      "pack_size": "20's",
+      "price_pkr": "Rs.18",
+      "product_url": "https://dawaai.pk/medicine/panol-10-40630.html"
+    },
+    {
+      "brand_name": "Panol 500 mg",
+      "manufacturer": "Bio Pharma",
+      "pack_size": "200's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/panol-11-40631.html"
+    },
+    {
+      "brand_name": "Para 120 mg",
+      "manufacturer": "Reko",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/para-2-40632.html"
+    },
+    {
+      "brand_name": "Para 250 mg",
+      "manufacturer": "Reko",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/para-3-40633.html"
+    },
+    {
+      "brand_name": "Paraceq 1 gm",
+      "manufacturer": "Shrooq",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/paraceq-1-40637.html"
+    },
+    {
+      "brand_name": "Paracet 1 gm",
+      "manufacturer": "Stand Pharm",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.149.41",
+      "product_url": "https://dawaai.pk/medicine/paracet-1-40638.html"
+    },
+    {
+      "brand_name": "Paracetamol Elixir 120 mg",
+      "manufacturer": "Gaba",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.3.3",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-elixir-4-40639.html"
+    },
+    {
+      "brand_name": "Paracetamol Elixir 120 mg",
+      "manufacturer": "Hermann",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.36.4",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-elixir-5-40640.html"
+    },
+    {
+      "brand_name": "Paracetamol Elixir 120 mg",
+      "manufacturer": "Hermann",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.15.6",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-elixir-6-40641.html"
+    },
+    {
+      "brand_name": "Paracetamol Elixir 120 mg",
+      "manufacturer": "Progressive",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.8.23",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-elixir-7-40642.html"
+    },
+    {
+      "brand_name": "Paracetamol Junior 500 mg",
+      "manufacturer": "Progressive",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-junior-4-40643.html"
+    },
+    {
+      "brand_name": "Paracetamol Junior 500 mg",
+      "manufacturer": "Progressive",
+      "pack_size": "200's",
+      "price_pkr": "Rs.65",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-junior-5-40644.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Amros",
+      "pack_size": "120 ml",
+      "price_pkr": "Rs.8",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-166-40645.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Amros",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-167-40646.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Amros",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.16",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-168-40647.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Eros",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.33.81",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-169-40648.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Eros",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.20",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-170-40649.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.45",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-171-40650.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-172-40651.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Irza",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.70",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-173-40652.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Irza",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-174-40653.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Jawa",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.39.9",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-175-40654.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Jawa",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.15.3",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-176-40655.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.17",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-179-40658.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Sharex",
+      "pack_size": "400 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-180-40659.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Sharex",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-181-40660.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Werick",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-186-40665.html"
+    },
+    {
+      "brand_name": "Paracetamol 250 mg",
+      "manufacturer": "Werick",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-187-40666.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Shifa",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-190-40669.html"
+    },
+    {
+      "brand_name": "Paracetamol 120 mg",
+      "manufacturer": "Zeb",
+      "pack_size": "50 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-191-40670.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Albro",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.450",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-192-40671.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Albro",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-193-40672.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Ardin",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.175",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-194-40673.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Ardin",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.4.25",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-195-40674.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Cionvell",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-196-40675.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Devis Pharma",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.5.43",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-197-40676.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Dosaco",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.260",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-198-40677.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Dosaco",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-199-40678.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Eros",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.300",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-200-40679.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Eros",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.4.22",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-201-40680.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.300",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-202-40681.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Ethical Laboratories",
+      "pack_size": "200's",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-203-40682.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Euro Pharma",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-204-40683.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Euro Pharma",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.4",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-205-40684.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Gaba",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.78",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-206-40685.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Geofman",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.162.35",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-207-40686.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Harmann",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.291.2",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-208-40687.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Harmann",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-209-40688.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Hizat",
+      "pack_size": "200's",
+      "price_pkr": "Rs.125",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-210-40689.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Ideal",
+      "pack_size": "200's",
+      "price_pkr": "Rs.125",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-211-40690.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Ideal",
+      "pack_size": "Jarx1000's",
+      "price_pkr": "Rs.500",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-212-40691.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Irza",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.450",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-213-40692.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Irza",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.9",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-214-40693.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Jawa",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.321",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-215-40694.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Jawa",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.5",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-216-40695.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "LCPW",
+      "pack_size": "200's",
+      "price_pkr": "Rs.37.6",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-217-40696.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Lisko",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.480",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-218-40697.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Lisko",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-219-40698.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Lisko",
+      "pack_size": "500's",
+      "price_pkr": "Rs.184.18",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-220-40699.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Miracle",
+      "pack_size": "500's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-221-40700.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Orta",
+      "pack_size": "10x20's",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-223-40702.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Paramount",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.276.43",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-224-40703.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Paramount",
+      "pack_size": "200's",
+      "price_pkr": "Rs.114.68",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-225-40704.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Paramount",
+      "pack_size": "500's",
+      "price_pkr": "Rs.152.71",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-226-40705.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Pharmacare",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-227-40706.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Pharmacare",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.3",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-228-40707.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Pharmadic",
+      "pack_size": "200's",
+      "price_pkr": "Rs.200",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-229-40708.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Pliva",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.245.15",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-230-40709.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Polyfine",
+      "pack_size": "200's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-231-40710.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Progressive",
+      "pack_size": "200's",
+      "price_pkr": "Rs.100",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-232-40711.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Regent",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.105.88",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-233-40712.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Sharex",
+      "pack_size": "200's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-234-40713.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Sharex",
+      "pack_size": "jarx500's",
+      "price_pkr": "Rs.350",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-235-40714.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Shifa",
+      "pack_size": "10x20's",
+      "price_pkr": "Rs.13.75",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-236-40715.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Tread Pharma",
+      "pack_size": "200's",
+      "price_pkr": "Rs.180",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-237-40716.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Unexo",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.665",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-238-40717.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Unexo",
+      "pack_size": "200's",
+      "price_pkr": "Rs.140",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-239-40718.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Wilson's",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.5.6",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-244-40723.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Xenon",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.210",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-245-40724.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Xenon",
+      "pack_size": "200's",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-246-40725.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Zafa",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.1005",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-247-40726.html"
+    },
+    {
+      "brand_name": "Paracetamol 500 mg",
+      "manufacturer": "Zafa",
+      "pack_size": "200's",
+      "price_pkr": "Rs.272",
+      "product_url": "https://dawaai.pk/medicine/paracetamol-248-40727.html"
+    },
+    {
+      "brand_name": "Pragray 120 mg",
+      "manufacturer": "Grays",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/pragray-1-40731.html"
+    },
+    {
+      "brand_name": "Paraheim 500 mg",
+      "manufacturer": "Pkheim",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.99.85",
+      "product_url": "https://dawaai.pk/medicine/paraheim-7-40732.html"
+    },
+    {
+      "brand_name": "Pralief 10 mg|ml",
+      "manufacturer": "Nimrall",
+      "pack_size": "100 vial",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/pralief-3-40734.html"
+    },
+    {
+      "brand_name": "Pralief 250 mg",
+      "manufacturer": "Nimrall",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/pralief-4-40735.html"
+    },
+    {
+      "brand_name": "Pralief 250 mg",
+      "manufacturer": "Nimrall",
+      "pack_size": "90 ml",
+      "price_pkr": "Rs.40",
+      "product_url": "https://dawaai.pk/medicine/pralief-5-40736.html"
+    },
+    {
+      "brand_name": "Pramed 120 mg",
+      "manufacturer": "Medicraft",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.23",
+      "product_url": "https://dawaai.pk/medicine/pramed-1-40740.html"
+    },
+    {
+      "brand_name": "Paramol 120 mg",
+      "manufacturer": "Dosaco",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.11.49",
+      "product_url": "https://dawaai.pk/medicine/paramol-2-40741.html"
+    },
+    {
+      "brand_name": "Parapol 250 mg",
+      "manufacturer": "Lisko",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/parapol-11-40744.html"
+    },
+    {
+      "brand_name": "Parapol 500 mg",
+      "manufacturer": "Lisko",
+      "pack_size": "jarx500's",
+      "price_pkr": "Rs.450",
+      "product_url": "https://dawaai.pk/medicine/parapol-13-40746.html"
+    },
+    {
+      "brand_name": "Parasol 250 mg",
+      "manufacturer": "Z-jans",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.17",
+      "product_url": "https://dawaai.pk/medicine/parasol-3-40747.html"
+    },
+    {
+      "brand_name": "Parasol 250 mg",
+      "manufacturer": "Z-jans",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.27",
+      "product_url": "https://dawaai.pk/medicine/parasol-4-40748.html"
+    },
+    {
+      "brand_name": "Parasup 150 mg",
+      "manufacturer": "Matrix",
+      "pack_size": "10's",
+      "price_pkr": "Rs.114",
+      "product_url": "https://dawaai.pk/medicine/parasup-2-40749.html"
+    },
+    {
+      "brand_name": "Paratol 500 mg",
+      "manufacturer": "Highnoon",
+      "pack_size": "200's",
+      "price_pkr": "Rs.110.69",
+      "product_url": "https://dawaai.pk/medicine/paratol-5-40751.html"
+    },
+    {
+      "brand_name": "Pedric 250 mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/pedric-6-40755.html"
+    },
+    {
+      "brand_name": "Pedric 250 mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/pedric-7-40756.html"
+    },
+    {
+      "brand_name": "Pedric 60 mg",
+      "manufacturer": "Davis Pharma",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.15.74",
+      "product_url": "https://dawaai.pk/medicine/pedric-8-40757.html"
+    },
+    {
+      "brand_name": "Pedrol 60 mg",
+      "manufacturer": "Stanely",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.20.6",
+      "product_url": "https://dawaai.pk/medicine/pedrol-10-40759.html"
+    },
+    {
+      "brand_name": "Pedrol 250 mg",
+      "manufacturer": "Stanely",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/pedrol-13-40762.html"
+    },
+    {
+      "brand_name": "Pedrol 250 mg",
+      "manufacturer": "Stanely",
+      "pack_size": "90 ml",
+      "price_pkr": "Rs.50",
+      "product_url": "https://dawaai.pk/medicine/pedrol-14-40763.html"
+    },
+    {
+      "brand_name": "Pelix 120 mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/pelix-7-40766.html"
+    },
+    {
+      "brand_name": "PM 500 mg",
+      "manufacturer": "Tagma",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.5",
+      "product_url": "https://dawaai.pk/medicine/pm-1-40768.html"
+    },
+    {
+      "brand_name": "Pracan 300 mg/2 ml",
+      "manufacturer": "Nexus",
+      "pack_size": "10 ampx2 ml",
+      "price_pkr": "Rs.105",
+      "product_url": "https://dawaai.pk/medicine/pracan-2-40769.html"
+    },
+    {
+      "brand_name": "Pracmol 500 mg",
+      "manufacturer": "Glitz",
+      "pack_size": "10x50's",
+      "price_pkr": "Rs.460",
+      "product_url": "https://dawaai.pk/medicine/pracmol-7-40771.html"
+    },
+    {
+      "brand_name": "Promol 120 mg",
+      "manufacturer": "Progressive",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.17.5",
+      "product_url": "https://dawaai.pk/medicine/promol-4-40773.html"
+    },
+    {
+      "brand_name": "Promol 500 mg",
+      "manufacturer": "Progressive",
+      "pack_size": "200's",
+      "price_pkr": "Rs.15",
+      "product_url": "https://dawaai.pk/medicine/promol-5-40774.html"
+    },
+    {
+      "brand_name": "Provas 300 mg/2 ml",
+      "manufacturer": "Sami",
+      "pack_size": "1 ampx2 ml",
+      "price_pkr": "Rs.18.62",
+      "product_url": "https://dawaai.pk/medicine/provas-5-40776.html"
+    },
+    {
+      "brand_name": "Prowise 10 mg|ml",
+      "manufacturer": "Wise Pharma",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/prowise-2-40777.html"
+    },
+    {
+      "brand_name": "Prowise 300 mg/2 ml",
+      "manufacturer": "Wise Pharma",
+      "pack_size": "1 ampx2 ml",
+      "price_pkr": "Rs.10",
+      "product_url": "https://dawaai.pk/medicine/prowise-3-40778.html"
+    },
+    {
+      "brand_name": "Pyrol 120 mg",
+      "manufacturer": "Semos",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/pyrol-9-40781.html"
+    },
+    {
+      "brand_name": "Reliefal 120 mg",
+      "manufacturer": "Nabi Qasim",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.42",
+      "product_url": "https://dawaai.pk/medicine/reliefal-13-40790.html"
+    },
+    {
+      "brand_name": "Rgesic 500 mg",
+      "manufacturer": "Euro Pharma",
+      "pack_size": "1000's",
+      "price_pkr": "Rs.460",
+      "product_url": "https://dawaai.pk/medicine/rgesic-4-40793.html"
+    },
+    {
+      "brand_name": "Saptamol 120 mg",
+      "manufacturer": "Sapient",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.38.75",
+      "product_url": "https://dawaai.pk/medicine/saptamol-9-40797.html"
+    },
+    {
+      "brand_name": "Saptamol 120 mg",
+      "manufacturer": "Sapient",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/saptamol-10-40798.html"
+    },
+    {
+      "brand_name": "Sunmol 500 mg",
+      "manufacturer": "Sunshine",
+      "pack_size": "10x20 's",
+      "price_pkr": "Rs.13",
+      "product_url": "https://dawaai.pk/medicine/sunmol-1-40800.html"
+    },
+    {
+      "brand_name": "Supamol 1 gm",
+      "manufacturer": "Nova Med",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/supamol-6-40801.html"
+    },
+    {
+      "brand_name": "Supamol 250 mg",
+      "manufacturer": "Nova Med",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.60",
+      "product_url": "https://dawaai.pk/medicine/supamol-8-40803.html"
+    },
+    {
+      "brand_name": "Supamol 250 mg",
+      "manufacturer": "Nova Med",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.32.2",
+      "product_url": "https://dawaai.pk/medicine/supamol-9-40804.html"
+    },
+    {
+      "brand_name": "Synopar 10 mg|ml",
+      "manufacturer": "Synchro",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/synopar-4-40805.html"
+    },
+    {
+      "brand_name": "Synopar 120 mg",
+      "manufacturer": "Synchro",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/synopar-5-40806.html"
+    },
+    {
+      "brand_name": "Tanamol 120 mg",
+      "manufacturer": "Epoch",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/tanamol-11-40808.html"
+    },
+    {
+      "brand_name": "Tanamol 500 mg",
+      "manufacturer": "Epoch",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/tanamol-14-40811.html"
+    },
+    {
+      "brand_name": "Tempnil 120 mg",
+      "manufacturer": "Neo Medix",
+      "pack_size": "90 ml",
+      "price_pkr": "Rs.37.5",
+      "product_url": "https://dawaai.pk/medicine/tempnil-4-40812.html"
+    },
+    {
+      "brand_name": "Tempol 100 mg|ml",
+      "manufacturer": "Wood Wards",
+      "pack_size": "20 ml",
+      "price_pkr": "Rs.25.01",
+      "product_url": "https://dawaai.pk/medicine/tempol-14-40814.html"
+    },
+    {
+      "brand_name": "Tempol 120 mg",
+      "manufacturer": "Wood Wards",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/tempol-17-40817.html"
+    },
+    {
+      "brand_name": "Tempol 250 mg",
+      "manufacturer": "Wood Wards",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/tempol-18-40818.html"
+    },
+    {
+      "brand_name": "Tempra 1 gm",
+      "manufacturer": "Linear Pharma",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/tempra-1-40821.html"
+    },
+    {
+      "brand_name": "Temrid 300 mg/2 ml",
+      "manufacturer": "Neutro",
+      "pack_size": "5 ampx1 ml",
+      "price_pkr": "Rs.55",
+      "product_url": "https://dawaai.pk/medicine/temrid-2-40822.html"
+    },
+    {
+      "brand_name": "Therapol 120 mg",
+      "manufacturer": "ACE",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28",
+      "product_url": "https://dawaai.pk/medicine/therapol-1-40823.html"
+    },
+    {
+      "brand_name": "Tyladol 250 mg",
+      "manufacturer": "Bryon",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.36",
+      "product_url": "https://dawaai.pk/medicine/tyladol-5-40824.html"
+    },
+    {
+      "brand_name": "Tyladol 120 mg",
+      "manufacturer": "Bryon",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.28.8",
+      "product_url": "https://dawaai.pk/medicine/tyladol-6-40825.html"
+    },
+    {
+      "brand_name": "Tylol 250 mg",
+      "manufacturer": "Don Valley",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.22.66",
+      "product_url": "https://dawaai.pk/medicine/tylol-8-40827.html"
+    },
+    {
+      "brand_name": "Tylol 60 mg",
+      "manufacturer": "Don Valley",
+      "pack_size": "15 ml",
+      "price_pkr": "Rs.14.73",
+      "product_url": "https://dawaai.pk/medicine/tylol-9-40828.html"
+    },
+    {
+      "brand_name": "Vamol 500 mg",
+      "manufacturer": "Valor",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.7",
+      "product_url": "https://dawaai.pk/medicine/vamol-2-40831.html"
+    },
+    {
+      "brand_name": "Wyladol 500 mg",
+      "manufacturer": "Usawa",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.5.5",
+      "product_url": "https://dawaai.pk/medicine/wyladol-2-40832.html"
+    },
+    {
+      "brand_name": "Xamol 120 mg",
+      "manufacturer": "Macquins",
+      "pack_size": "450 ml",
+      "price_pkr": "Rs.30",
+      "product_url": "https://dawaai.pk/medicine/xamol-10-40833.html"
+    },
+    {
+      "brand_name": "Xamol 120 mg",
+      "manufacturer": "Macquins",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.25",
+      "product_url": "https://dawaai.pk/medicine/xamol-11-40834.html"
+    },
+    {
+      "brand_name": "Xamol 250 mg",
+      "manufacturer": "Macquins",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.35",
+      "product_url": "https://dawaai.pk/medicine/xamol-12-40835.html"
+    },
+    {
+      "brand_name": "Xamol 500 mg",
+      "manufacturer": "Macquins",
+      "pack_size": "500's",
+      "price_pkr": "Rs.190",
+      "product_url": "https://dawaai.pk/medicine/xamol-14-40837.html"
+    },
+    {
+      "brand_name": "xtramol 1 gm",
+      "manufacturer": "EG Pharma",
+      "pack_size": "1 vial x 100 ml",
+      "price_pkr": "Rs.80",
+      "product_url": "https://dawaai.pk/medicine/xtramol-4-40838.html"
+    },
+    {
+      "brand_name": "xtramol 300 mg/2 ml",
+      "manufacturer": "EG Pharma",
+      "pack_size": "5 ampx1 ml",
+      "price_pkr": "Rs.55",
+      "product_url": "https://dawaai.pk/medicine/xtramol-5-40839.html"
+    },
+    {
+      "brand_name": "Zancpal 120 mg",
+      "manufacturer": "Zanctok",
+      "pack_size": "60 ml",
+      "price_pkr": "Rs.16.8",
+      "product_url": "https://dawaai.pk/medicine/zancpal-5-40842.html"
+    },
+    {
+      "brand_name": "Calpol (T.P) 500mg",
+      "manufacturer": "GlaxoSmithKline",
+      "pack_size": "20x10's",
+      "price_pkr": "Rs.8.2",
+      "product_url": "https://dawaai.pk/medicine/calpol-tp-45730.html"
+    },
+    {
+      "brand_name": "Panadol Extend",
+      "manufacturer": "GSK Consumer Healthcare",
+      "pack_size": "2 x 10's",
+      "price_pkr": "Rs.69.3",
+      "product_url": "https://dawaai.pk/medicine/panadol-extend-tablets-2-x-10s-pack-47691.html"
+    },
+    {
+      "brand_name": "Panaram 500 mg",
+      "manufacturer": "Efroze",
+      "pack_size": "20 x 10's",
+      "price_pkr": "Rs.23.5",
+      "product_url": "https://dawaai.pk/medicine/panaram-500-mg-tablets-20-x-10s-pack-50035.html"
+    }
+  ]
+}
