@@ -97,9 +97,12 @@ class EvidenceGatherer:
                 tasks.append(("clinicaltrials", query))
 
         records: list[EvidenceRecord] = []
-        # Modest worker count -- the per-client TokenBuckets do the real
-        # rate limiting, threads just overlap the network waits.
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        # Deliberately modest worker count. The real win is overlapping the
+        # THREE SOURCES (independent rate limits); running many queries
+        # against the SAME source concurrently just crowds that source's
+        # token bucket and risks 429s without going any faster, since the
+        # limiter serializes them anyway.
+        with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {
                 pool.submit(
                     self._fetch_one,

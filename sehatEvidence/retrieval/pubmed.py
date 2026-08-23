@@ -17,6 +17,7 @@ NCBI_API_KEY is optional but raises the rate limit from 3req/s to 10req/s.
 from __future__ import annotations
 
 import os
+import time
 import xml.etree.ElementTree as ET
 from datetime import date
 from typing import Optional
@@ -83,12 +84,39 @@ class PubMedClient:
             params["api_key"] = self.api_key
         return params
 
-    def _get(self, url: str, params: dict) -> requests.Response:
-        self._limiter.acquire()
+    def _get(self, url: str, params: dict, max_retries: int = 3) -> requests.Response:
+        """
+        Rate-limited GET with retry on 429.
+
+        Even with a conservative token bucket, concurrent queries plus
+        network jitter can occasionally trip NCBI's sliding-window counter.
+        A 429 is transient -- backing off and retrying recovers the query
+        instead of silently losing a whole source's worth of evidence.
+        """
         full_params = {**self._base_params(), **params}
-        resp = self.session.get(url, params=full_params, timeout=30)
-        resp.raise_for_status()
-        return resp
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            self._limiter.acquire()
+            try:
+                resp = self.session.get(url, params=full_params, timeout=30)
+                if resp.status_code == 429:
+                    # exponential backoff: 1s, 2s, 4s
+                    wait = 2 ** attempt
+                    time.sleep(wait)
+                    last_exc = requests.HTTPError(
+                        f"429 Too Many Requests (attempt {attempt + 1}/{max_retries})"
+                    )
+                    continue
+                resp.raise_for_status()
+                return resp
+            except requests.HTTPError as exc:
+                last_exc = exc
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
+
+        raise last_exc or requests.HTTPError("PubMed request failed after retries")
 
     # ------------------------------------------------------------------
     # Step 1: esearch
