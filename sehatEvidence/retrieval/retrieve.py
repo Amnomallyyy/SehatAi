@@ -75,6 +75,11 @@ class EvidenceGatherer:
         )
         merged = self._dedupe(raw_records)
         if self.check_retractions:
+            # Order matters: close the Europe-PMC PMID gap FIRST, so records
+            # caught by PubMed's native check (100% in our own testing) don't
+            # get redundantly re-checked against Crossref (25% in our own
+            # testing) afterward.
+            merged = self._close_europmc_retraction_gap(merged)
             merged = self._cross_reference_retractions(merged)
         return merged
 
@@ -207,7 +212,62 @@ class EvidenceGatherer:
         return f"title:{record.title.strip().lower()}"
 
     # ------------------------------------------------------------------
-    # Step 3: retraction cross-reference
+    # Step 3a: close the Europe-PMC-only retraction coverage gap
+    # ------------------------------------------------------------------
+
+    def _close_europmc_retraction_gap(
+        self, records: list[EvidenceRecord]
+    ) -> list[EvidenceRecord]:
+        """
+        Why this exists: our own seeded retraction test found PubMed's
+        native curation catches 4/4 known retractions vs Crossref's 1/4.
+        A record that came from Europe PMC (not matched to an equivalent
+        PubMed result during dedupe -- e.g. the PubMed query didn't surface
+        it, but Europe PMC's did) never gets PubMed's native check at all,
+        because it was parsed from Europe PMC's JSON, which doesn't carry
+        PublicationTypeList/CommentsCorrectionsList.
+
+        Fix: for any Europe PMC record whose native_id IS a resolvable PMID
+        (source=="MED" style records; preprints with PPR ids are skipped,
+        they have no PMID yet), batch-efetch it through PubMedClient and
+        copy over the native retraction verdict if positive.
+
+        This runs BEFORE the Crossref cross-reference step, so records
+        caught here don't get redundantly (and less reliably) re-checked.
+        """
+        candidates = [
+            r
+            for r in records
+            if r.source == SourceDB.EUROPE_PMC
+            and not r.is_retracted
+            and r.native_id.isdigit()  # PPR ids aren't numeric PMIDs
+        ]
+        if not candidates:
+            return records
+
+        pmids = [r.native_id for r in candidates]
+        try:
+            pubmed_versions = self.pubmed.efetch(pmids)
+        except Exception as exc:
+            # Same fail-open philosophy as the rest of retrieve.py: a
+            # failed cross-check should not crash the pipeline or silently
+            # mark anything as retracted -- it just means this record only
+            # gets the Crossref check that follows, same as before this fix.
+            print(f"[retrieve] Europe-PMC PMID retraction cross-check failed: {exc}")
+            return records
+
+        by_pmid = {pr.native_id: pr for pr in pubmed_versions}
+        for record in candidates:
+            match = by_pmid.get(record.native_id)
+            if match is not None and match.is_retracted:
+                record.is_retracted = True
+                record.retraction_notice_id = match.retraction_notice_id
+                record.retraction_source = "pubmed"
+
+        return records
+
+    # ------------------------------------------------------------------
+    # Step 3b: retraction cross-reference (Crossref)
     # ------------------------------------------------------------------
 
     def _cross_reference_retractions(
