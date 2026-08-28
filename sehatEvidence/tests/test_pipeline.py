@@ -517,6 +517,19 @@ def test_happy_path() -> None:
     ):
         assert expected_line in log, f"missing log line: {expected_line!r}"
 
+    # The report is what api/server.py hands straight to json.dumps() -- a
+    # dict looking fine in Python (e.g. a raw datetime.date slipping into a
+    # field) is not the same as it being JSON-serializable, and nothing
+    # above actually crosses that boundary. Regression coverage for
+    # exactly that gap: EvidenceRecord.publication_date is a real `date`
+    # (see make_record's default), and _build_evidence_items() once copied
+    # it straight into the evidence dict unconverted.
+    json.dumps(report)
+    assert isinstance(evidence[0]["publication_date"], str), (
+        "publication_date must be serialized to a string, not left as a "
+        f"{type(evidence[0]['publication_date']).__name__}"
+    )
+
     print("PASS 1: happy path -- 5 evidence items, funnel 3/1/2, flag merged")
 
 

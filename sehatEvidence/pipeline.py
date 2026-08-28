@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import json
 import pathlib
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from config import DISCLAIMER, FailoverLLMClient, Settings, get_settings
 from agents.appraiser import Appraiser, AppraisedRecord
@@ -86,6 +86,39 @@ ABSTAIN_LOW_RELEVANCE = "fewer than 2 high-relevance records"
 ABSTAIN_LLM_SYNTHESIS = "LLM unavailable during synthesis"
 ABSTAIN_SYNTH_INSUFFICIENT = "synthesizer judged evidence insufficient"
 ABSTAIN_LLM_DEAD = "LLM unavailable"
+
+
+def _agent_llm_calls(agent: object) -> Optional[int]:
+    """Real, cumulative LLM call count from ``agent``'s shared client.
+
+    Returns None when the wrapped client doesn't track calls (a test
+    double, typically) rather than guessing -- callers must treat None as
+    "unknown", never as zero.
+    """
+    llm = getattr(agent, "llm", None)
+    return getattr(llm, "calls", None) if llm is not None else None
+
+
+def _delta(before: Optional[int], after: Optional[int]) -> Optional[int]:
+    """``after - before`` when both are known, else None (never a fake 0)."""
+    if before is None or after is None:
+        return None
+    return after - before
+
+
+def _emit(on_event: Optional[Callable[[dict], None]], **event: Any) -> None:
+    """Fire ``on_event(event)`` if present.
+
+    A broken or disconnected callback (e.g. a client that closed its
+    streaming connection mid-run) must never break the pipeline itself --
+    same fail-open posture as the Strategist and Red Team stages.
+    """
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+        print(f"[pipeline] on_event callback failed ({exc}); ignoring")
 
 
 def _empty_funnel() -> dict:
@@ -146,7 +179,7 @@ def _build_evidence_items(appraised: list[AppraisedRecord]) -> list[dict]:
                 "url": r.url,
                 "title": r.title,
                 "journal": r.journal,
-                "publication_date": r.publication_date,
+                "publication_date": r.publication_date.isoformat() if r.publication_date else None,
                 "study_design": r.study_design.value if r.study_design else None,
                 "trial_status": r.trial_status,
                 "is_preprint": r.is_preprint,
@@ -200,7 +233,12 @@ class EvidencePipeline:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def run(self, question: str, use_mock: bool = False) -> dict:
+    def run(
+        self,
+        question: str,
+        use_mock: bool = False,
+        on_event: Optional[Callable[[dict], None]] = None,
+    ) -> dict:
         """Answer one clinical question; return the full report dict.
 
         Report shape (identical for answers and abstentions):
@@ -211,6 +249,17 @@ class EvidencePipeline:
         demo/mock_response.json -- the offline demo fallback, so a dead
         network or a dead LLM key can never break a live presentation.
 
+        on_event, when given, is called with one dict per real stage
+        boundary (``{"stage": ..., "status": "start"|"done", ...}``) as it
+        actually happens -- not simulated pacing. Each "done" event for an
+        LLM-backed stage carries ``llm_calls``: the real number of
+        successful calls that agent's shared client made during that
+        stage (None only when the wrapped client doesn't track calls, e.g.
+        a test double). This is how a caller -- the streaming HTTP
+        endpoint, a test -- can tell genuine model use from a heuristic
+        fallback without guessing. Mock mode never calls it: there is
+        nothing genuine to report.
+
         Never raises: a totally unavailable LLM is reported as an
         "LLM unavailable" abstention.
         """
@@ -219,20 +268,25 @@ class EvidencePipeline:
 
         print(f"[pipeline] starting: {question[:80]}")
         try:
-            return self._run_stages(question)
+            return self._run_stages(question, on_event)
         except LLMError as exc:
             # Last-resort net: every stage that CAN degrade already did,
             # so reaching here means no LLM key survived at all.
             print(f"[pipeline] LLM unavailable ({exc}); abstaining")
+            _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_LLM_DEAD)
             return self._abstain(question, ABSTAIN_LLM_DEAD, [])
 
     # ------------------------------------------------------------------
     # The staged run
     # ------------------------------------------------------------------
 
-    def _run_stages(self, question: str) -> dict:
+    def _run_stages(
+        self, question: str, on_event: Optional[Callable[[dict], None]] = None
+    ) -> dict:
         """Stages 1-6 of one run; see the module docstring for the lineage."""
         # --- Stage 1: query planning (fails open to the raw question) ----
+        _emit(on_event, stage="strategist", status="start")
+        before = _agent_llm_calls(self.strategist)
         try:
             queries = self.strategist.plan_queries(question)
         except LLMError as exc:
@@ -240,11 +294,25 @@ class EvidencePipeline:
             queries = [question]
         if not queries:
             queries = [question]
+        _emit(
+            on_event, stage="strategist", status="done",
+            queries=list(queries), llm_calls=_delta(before, _agent_llm_calls(self.strategist)),
+        )
 
         # --- Stage 2: retrieval -- this pool is FROZEN from here on -------
+        # ZERO AI in retrieval (see retrieval/retrieve.py's own docstring):
+        # llm_calls is reported as 0, not None, because that is a known
+        # fact about this stage, not an unmeasured one.
+        _emit(on_event, stage="retrieval", status="start")
         pool = self.gather_fn(queries)
         print(f"[pipeline] retrieved {len(pool)} records")
+        retracted = sum(1 for r in pool if getattr(r, "is_retracted", False))
+        _emit(
+            on_event, stage="retrieval", status="done",
+            pool_size=len(pool), retracted=retracted, llm_calls=0,
+        )
         if len(pool) < MIN_POOL_RECORDS:
+            _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_THIN_POOL)
             return self._abstain(question, ABSTAIN_THIN_POOL, [])
 
         # --- Stage 3: appraisal (ranks, caps, drops retracted records) ----
@@ -253,10 +321,18 @@ class EvidencePipeline:
         # Verifier's existence check and is deleted by the standing check
         # (an honest "source retracted") rather than by a bogus
         # "citation unresolvable".
+        _emit(on_event, stage="appraiser", status="start")
+        before = _agent_llm_calls(self.appraiser)
         appraised = self.appraiser.appraise(pool, question)
         print(f"[pipeline] appraised {len(appraised)} records")
 
         evidence_items = _build_evidence_items(appraised)
+        top_score = evidence_items[0]["relevance_score"] if evidence_items else None
+        _emit(
+            on_event, stage="appraiser", status="done",
+            appraised=len(appraised), top_score=top_score,
+            llm_calls=_delta(before, _agent_llm_calls(self.appraiser)),
+        )
 
         high_relevance = [
             item
@@ -264,25 +340,41 @@ class EvidencePipeline:
             if (item["relevance_score"] or 0) >= HIGH_RELEVANCE_SCORE
         ]
         if len(high_relevance) < MIN_HIGH_RELEVANCE_RECORDS:
+            _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_LOW_RELEVANCE)
             return self._abstain(question, ABSTAIN_LOW_RELEVANCE, evidence_items)
 
         # --- Stage 4: synthesis (citation-forced; fails closed) -----------
+        _emit(on_event, stage="synthesizer", status="start")
+        before = _agent_llm_calls(self.synthesizer)
         try:
             synthesis: SynthesisResult = self.synthesizer.synthesize(
                 question, evidence_items
             )
         except LLMError as exc:
             print(f"[pipeline] synthesis failed ({exc}); abstaining")
+            _emit(
+                on_event, stage="synthesizer", status="done", error=str(exc),
+                llm_calls=_delta(before, _agent_llm_calls(self.synthesizer)),
+            )
+            _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_LLM_SYNTHESIS)
             return self._abstain(question, ABSTAIN_LLM_SYNTHESIS, evidence_items)
         print(
             f"[pipeline] synthesizer produced {len(synthesis.sentences)} sentences"
         )
+        _emit(
+            on_event, stage="synthesizer", status="done",
+            sentences=len(synthesis.sentences), abstained=synthesis.abstained,
+            llm_calls=_delta(before, _agent_llm_calls(self.synthesizer)),
+        )
         if synthesis.abstained:
+            _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_SYNTH_INSUFFICIENT)
             return self._abstain(
                 question, ABSTAIN_SYNTH_INSUFFICIENT, evidence_items
             )
 
         # --- Stage 5: verification (the only stage that may delete) -------
+        _emit(on_event, stage="verifier", status="start")
+        before = _agent_llm_calls(self.verifier)
         report: VerificationReport = self.verifier.verify(
             question, synthesis, evidence_items, queries
         )
@@ -292,6 +384,10 @@ class EvidencePipeline:
             f"-> {funnel.get('claims_deleted', 0)} deleted "
             f"-> {funnel.get('claims_kept', 0)} kept"
         )
+        _emit(
+            on_event, stage="verifier", status="done", funnel=funnel,
+            llm_calls=_delta(before, _agent_llm_calls(self.verifier)),
+        )
 
         # --- Stage 6: red team (flag-only, fail-open) ---------------------
         claims = list(report.claims)
@@ -299,8 +395,20 @@ class EvidencePipeline:
             # An abstained answer is never shown, so there is nothing to
             # audit rhetorically -- skip the LLM call entirely.
             print(f"[pipeline] abstained: {report.abstain_reasons}")
+            _emit(
+                on_event, stage="complete", status="abstained",
+                reason=(report.abstain_reasons[0] if report.abstain_reasons else None),
+            )
         else:
+            _emit(on_event, stage="red_team", status="start")
+            before = _agent_llm_calls(self.red_team)
             self._apply_red_team(question, claims)
+            flagged = sum(1 for c in claims if c.status == "flagged")
+            _emit(
+                on_event, stage="red_team", status="done", flagged_claims=flagged,
+                llm_calls=_delta(before, _agent_llm_calls(self.red_team)),
+            )
+            _emit(on_event, stage="complete", status="answered")
 
         result = {
             "question": question,

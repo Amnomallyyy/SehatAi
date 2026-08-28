@@ -307,38 +307,106 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   /* --- progress / errors --------------------------------------------- */
 
   .working {
-    margin-top: 28px;
-    padding: 22px 24px 18px;
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    box-shadow: var(--shadow);
-  }
-  .working-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 14px;
-  }
-  .working-head b {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: .16em;
-    text-transform: uppercase;
+    gap: 10px;
+    margin-top: 18px;
+    font-family: var(--mono);
+    font-size: 12px;
     color: var(--ink-faint);
   }
-  .working-head span {
+  .working b {
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--ink-soft);
+  }
+  .dot-sep { color: var(--rule); }
+  .link-btn {
+    font: inherit;
+    font-family: var(--mono);
+    color: var(--accent-2);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+  }
+  .link-btn:hover { color: var(--accent); }
+
+  /* --- agent activity side panel --------------------------------------- */
+
+  .panel-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(3, 6, 12, .55);
+    backdrop-filter: blur(1px);
+    z-index: 40;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease;
+  }
+  .panel-backdrop.is-open { opacity: 1; pointer-events: auto; }
+
+  .agent-panel {
+    position: fixed;
+    top: 0; right: 0;
+    width: min(400px, 100vw);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    border-left: 1px solid var(--rule);
+    box-shadow: -16px 0 40px -16px rgba(0, 0, 0, .6);
+    z-index: 41;
+    transform: translateX(100%);
+    transition: transform .3s cubic-bezier(.2, .8, .3, 1);
+  }
+  .agent-panel.is-open { transform: translateX(0); }
+
+  .panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--rule);
+    flex: none;
+  }
+  .panel-head b {
+    display: block;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .panel-sub {
+    display: block;
+    margin-top: 3px;
     font-family: var(--mono);
     font-size: 11px;
     color: var(--ink-faint);
   }
-  .stage-track { display: flex; flex-direction: column; gap: 2px; }
+  .panel-close {
+    flex: none;
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--ink-faint);
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .panel-close:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+  .stage-track { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 14px 16px 4px; }
   .stage {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 9px 6px;
+    gap: 12px;
+    padding: 8px 4px;
     border-radius: 3px;
     opacity: .4;
     transition: opacity .25s ease;
@@ -373,7 +441,10 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   }
   .stage-body { flex: 1; min-width: 0; }
   .stage-label {
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
     font-weight: 600;
     color: var(--ink-soft);
   }
@@ -381,27 +452,109 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .stage.is-done .stage-label { color: var(--ink); }
   .stage-detail {
     margin-top: 1px;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--ink-faint);
     font-family: var(--mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.5;
   }
-  .working .bar {
+  .llm-pill {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 8px;
+    letter-spacing: .02em;
+    background: var(--accent-soft);
+    color: var(--accent-2);
+    border: 1px solid rgba(79, 141, 253, .35);
+  }
+  .llm-pill.zero {
+    background: var(--skip-bg);
+    color: var(--ink-faint);
+    border-color: var(--rule);
+  }
+  .bar {
+    flex: none;
     height: 3px;
-    margin-top: 18px;
+    margin: 10px 16px 16px;
     border-radius: 2px;
     background: var(--rule-soft);
     overflow: hidden;
   }
-  .working .bar i {
+  .bar i {
     display: block;
     height: 100%;
     width: 0%;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transition: width .5s cubic-bezier(.2, .7, .3, 1);
+    transition: width .4s cubic-bezier(.2, .7, .3, 1);
   }
+  .panel-log-head {
+    flex: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 16px;
+    border-top: 1px solid var(--rule);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .panel-log-head span:last-child {
+    font-family: var(--mono);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 600;
+    color: var(--accent-2);
+  }
+  .panel-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 16px 20px;
+  }
+  .log-line {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--rule-soft);
+    font-size: 11.5px;
+    animation: rise .3s cubic-bezier(.2, .7, .3, 1) both;
+  }
+  .log-line:last-child { border-bottom: none; }
+  .log-time {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    padding-top: 1px;
+  }
+  .log-body { min-width: 0; }
+  .log-stage {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--accent-2);
+  }
+  .log-msg { color: var(--ink-soft); line-height: 1.5; }
+
+  @media (max-width: 620px) {
+    .agent-panel {
+      top: auto; right: 0; left: 0; bottom: 0;
+      width: auto; height: 78vh;
+      border-left: none;
+      border-top: 1px solid var(--rule);
+      border-radius: 10px 10px 0 0;
+      transform: translateY(100%);
+    }
+    .agent-panel.is-open { transform: translateY(0); }
+  }
+
   .error-box {
     margin-top: 28px;
     padding: 16px 18px;
@@ -768,12 +921,10 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   <p class="seeds" id="seeds"></p>
 
   <div id="working" class="working" hidden>
-    <div class="working-head">
-      <b>Pipeline running</b>
-      <span id="working-elapsed">0.0s</span>
-    </div>
-    <div class="stage-track" id="stage-track"></div>
-    <div class="bar"><i id="working-bar"></i></div>
+    <b>Pipeline running</b>
+    <span id="working-elapsed">0.0s</span>
+    <span class="dot-sep">&middot;</span>
+    <button type="button" id="working-reopen" class="link-btn">view agent activity</button>
   </div>
 
   <div id="error" class="error-box" hidden></div>
@@ -787,6 +938,24 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 
 </div>
 
+<div id="panel-backdrop" class="panel-backdrop" hidden></div>
+<aside id="agent-panel" class="agent-panel" hidden aria-label="Live agent activity">
+  <div class="panel-head">
+    <div>
+      <b>Agent activity</b>
+      <span class="panel-sub" id="panel-elapsed">0.0s elapsed</span>
+    </div>
+    <button type="button" id="panel-close" class="panel-close" aria-label="Collapse panel">&times;</button>
+  </div>
+  <div class="stage-track" id="stage-track"></div>
+  <div class="bar"><i id="working-bar"></i></div>
+  <div class="panel-log-head">
+    <span>Live log</span>
+    <span id="panel-llm-total">0 real LLM calls so far</span>
+  </div>
+  <div class="panel-log" id="panel-log"></div>
+</aside>
+
 <script>
 (function () {
   "use strict";
@@ -795,9 +964,16 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   var input = document.getElementById("q");
   var button = document.getElementById("ask-btn");
   var working = document.getElementById("working");
+  var workingElapsed = document.getElementById("working-elapsed");
+  var workingReopen = document.getElementById("working-reopen");
+  var backdrop = document.getElementById("panel-backdrop");
+  var panel = document.getElementById("agent-panel");
+  var panelClose = document.getElementById("panel-close");
+  var panelElapsed = document.getElementById("panel-elapsed");
+  var panelLlmTotal = document.getElementById("panel-llm-total");
+  var panelLog = document.getElementById("panel-log");
   var stageTrack = document.getElementById("stage-track");
   var workingBar = document.getElementById("working-bar");
-  var workingElapsed = document.getElementById("working-elapsed");
   var errorBox = document.getElementById("error");
   var results = document.getElementById("results");
   var health = document.getElementById("health");
@@ -805,18 +981,22 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   var seeds = document.getElementById("seeds");
   var busy = false;
 
-  /* The six pipeline stages, in run order (see pipeline.py). Each agent
-     really does run in this sequence; what is simulated here is only the
-     PACING of the reveal (the API call is one blocking request, not a
-     progress stream), never the stage list or the final results. */
-  var STAGES = [
-    { label: "Strategist", detail: "Planning 3\\u20135 targeted search queries" },
-    { label: "Retrieval", detail: "Querying PubMed, Europe PMC, ClinicalTrials.gov \\u00b7 checking retractions" },
-    { label: "Appraiser", detail: "Scoring evidence by design, recency & relevance" },
-    { label: "Synthesizer", detail: "Drafting a fully-cited answer" },
-    { label: "Verifier", detail: "Checking existence, entailment & standing of every claim" },
-    { label: "Red Team", detail: "Adversarial audit for weak or risky claims" }
-  ];
+  /* The six pipeline stages, in run order (see pipeline.py). This list is
+     ONLY labels/icons/placeholder copy for first paint -- every status
+     change and every "detail" line below is driven by real events read
+     live off /api/ask/stream (see streamAsk()), never simulated timing.
+     "llm" stages carry a real per-stage LLM-call count once done; the
+     retrieval stage is deterministic by design (ZERO AI, see
+     retrieval/retrieve.py) and is never expected to report calls > 0. */
+  var STAGE_ORDER = ["strategist", "retrieval", "appraiser", "synthesizer", "verifier", "red_team"];
+  var STAGE_META = {
+    strategist: { label: "Strategist", placeholder: "Planning 3\\u20135 targeted search queries" },
+    retrieval: { label: "Retrieval", placeholder: "Querying PubMed, Europe PMC, ClinicalTrials.gov \\u00b7 checking retractions" },
+    appraiser: { label: "Appraiser", placeholder: "Scoring evidence by design, recency & relevance" },
+    synthesizer: { label: "Synthesizer", placeholder: "Drafting a fully-cited answer" },
+    verifier: { label: "Verifier", placeholder: "Checking existence, entailment & standing of every claim" },
+    red_team: { label: "Red Team", placeholder: "Adversarial audit for weak or risky claims" }
+  };
 
   var SEED_QUESTIONS = [
     "Does metformin reduce all-cause mortality in type 2 diabetes?",
@@ -1063,77 +1243,165 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     results.hidden = false;
   }
 
-  // --- live stage tracker --------------------------------------------------
+  // --- live agent panel ----------------------------------------------------
   //
-  // The API is one blocking POST /api/ask (30-120s live), not a progress
-  // stream, so there is no server signal per agent. What follows PACES a
-  // reveal of the real, fixed stage order from pipeline.py -- it never
-  // fabricates counts or outcomes; those only appear once the actual
-  // report renders. The final stage is deliberately never auto-completed:
-  // only the real response resolves it.
+  // Driven entirely by /api/ask/stream: one real NDJSON line per pipeline
+  // stage boundary, straight from EvidencePipeline's on_event callback
+  // (see pipeline.py). Nothing here is timed or guessed -- a stage's row
+  // only moves because the server said so, and its "N LLM calls" pill is
+  // the real delta read off the shared FailoverLLMClient's call counter
+  // (see config.py). retrieval always reports 0: that stage is
+  // deliberately zero-AI by design, not a fallback.
 
-  var STAGE_CUMULATIVE_MS = (function () {
-    var durations = [1100, 2200, 1500, 1700, 2600, 1300];
-    var sum = 0;
-    return durations.map(function (d) { sum += d; return sum; });
-  })();
+  var stageState = {};   // stageId -> { status, detail, llmCalls }
+  var llmTotal = 0;
+  var runStartTime = 0;
+  var elapsedTimer = null;
 
-  function renderStages(currentStage) {
-    stageTrack.innerHTML = STAGES.map(function (stage, i) {
-      var state = i < currentStage ? "done" : (i === currentStage ? "active" : "pending");
-      var num = (i + 1 < 10 ? "0" : "") + (i + 1);
-      var icon = state === "done" ? "\\u2713" : (state === "active" ? "<i></i>" : num);
-      return '<div class="stage is-' + state + '">' +
+  function joinTrunc(list, max) {
+    list = list || [];
+    var shown = list.slice(0, max).map(function (q) { return '"' + q + '"'; });
+    var extra = list.length - shown.length;
+    return shown.join("; ") + (extra > 0 ? " +" + extra + " more" : "");
+  }
+
+  /* Builds the human-readable line for one stage from the REAL fields the
+     matching pipeline.py _emit() call actually sends -- see the field
+     names documented there (queries, pool_size, top_score, funnel, ...). */
+  function formatDetail(stageId, event) {
+    if (event.status === "start") { return STAGE_META[stageId].placeholder; }
+    if (stageId === "strategist") {
+      var qn = (event.queries || []).length;
+      return qn + " quer" + (qn === 1 ? "y" : "ies") + " planned: " + joinTrunc(event.queries, 2);
+    }
+    if (stageId === "retrieval") {
+      var rn = num(event.pool_size);
+      return rn + " record" + (rn === 1 ? "" : "s") + " retrieved" +
+        (event.retracted ? " \\u00b7 " + event.retracted + " retracted excluded" : "");
+    }
+    if (stageId === "appraiser") {
+      var an = num(event.appraised);
+      return an + " record" + (an === 1 ? "" : "s") + " scored" +
+        (typeof event.top_score === "number" ? " \\u00b7 top score " + event.top_score : "");
+    }
+    if (stageId === "synthesizer") {
+      if (event.abstained) { return "Judged the evidence insufficient \\u2014 abstaining"; }
+      var sn = num(event.sentences);
+      return sn + " cited sentence" + (sn === 1 ? "" : "s") + " drafted";
+    }
+    if (stageId === "verifier") {
+      var f = event.funnel || {};
+      return num(f.claims_generated) + " generated \\u2192 " + num(f.claims_deleted) +
+        " deleted \\u2192 " + num(f.claims_kept) + " kept";
+    }
+    if (stageId === "red_team") {
+      var fc = num(event.flagged_claims);
+      return fc + " claim" + (fc === 1 ? "" : "s") + " flagged";
+    }
+    return "";
+  }
+
+  function renderStages() {
+    stageTrack.innerHTML = STAGE_ORDER.map(function (id, i) {
+      var meta = STAGE_META[id];
+      var st = stageState[id] || { status: "pending" };
+      var cls = st.status === "done" ? "done" : (st.status === "start" ? "active" : "pending");
+      var numLabel = (i + 1 < 10 ? "0" : "") + (i + 1);
+      var icon = cls === "done" ? "\\u2713" : (cls === "active" ? "<i></i>" : numLabel);
+      var detail = st.detail || meta.placeholder;
+      var pill = "";
+      if (cls === "done" && typeof st.llmCalls === "number") {
+        pill = ' <span class="llm-pill' + (st.llmCalls === 0 ? " zero" : "") + '">' +
+          st.llmCalls + " LLM call" + (st.llmCalls === 1 ? "" : "s") + "</span>";
+      }
+      return '<div class="stage is-' + cls + '">' +
         '<div class="stage-icon">' + icon + "</div>" +
         '<div class="stage-body">' +
-          '<div class="stage-label">' + esc(stage.label) + "</div>" +
-          '<div class="stage-detail">' + esc(stage.detail) + "</div>" +
+          '<div class="stage-label">' + esc(meta.label) + pill + "</div>" +
+          '<div class="stage-detail">' + esc(detail) + "</div>" +
         "</div></div>";
     }).join("");
+
+    var done = STAGE_ORDER.filter(function (id) {
+      return stageState[id] && stageState[id].status === "done";
+    }).length;
+    workingBar.style.width = Math.max(4, (done / STAGE_ORDER.length) * 100) + "%";
   }
 
-  function startStageTracker() {
-    var startTime = Date.now();
-    var currentStage = 0;
-    var finished = false;
-    renderStages(currentStage);
-    workingBar.style.width = "4%";
-    workingElapsed.textContent = "0.0s";
-
-    var timer = setInterval(function () {
-      if (finished) { return; }
-      var elapsed = Date.now() - startTime;
-      workingElapsed.textContent = (elapsed / 1000).toFixed(1) + "s";
-      var target = 0;
-      for (var i = 0; i < STAGE_CUMULATIVE_MS.length; i++) {
-        if (elapsed >= STAGE_CUMULATIVE_MS[i]) { target = i + 1; }
+  function appendLog(stageId, status, event) {
+    var meta = STAGE_META[stageId];
+    var label = meta ? meta.label : "Pipeline";
+    var msg;
+    if (stageId === "complete") {
+      msg = status === "answered" ? "Answer ready." : ("Abstained" + (event.reason ? ": " + event.reason : "."));
+    } else if (status === "start") {
+      msg = "started";
+    } else {
+      msg = formatDetail(stageId, event);
+      if (typeof event.llm_calls === "number") {
+        msg += event.llm_calls > 0
+          ? " (" + event.llm_calls + " real LLM call" + (event.llm_calls === 1 ? "" : "s") + ")"
+          : " (deterministic \\u2014 no LLM call)";
       }
-      target = Math.min(target, STAGES.length - 1); // never auto-finish the last stage
-      if (target !== currentStage) {
-        currentStage = target;
-        renderStages(currentStage);
-      }
-      workingBar.style.width = Math.min(96, 6 + (currentStage / STAGES.length) * 90) + "%";
-    }, 100);
-
-    return {
-      finish: function () {
-        finished = true;
-        clearInterval(timer);
-        renderStages(STAGES.length);
-        workingBar.style.width = "100%";
-        return new Promise(function (resolve) { setTimeout(resolve, 420); });
-      },
-      stop: function () {
-        finished = true;
-        clearInterval(timer);
-      }
-    };
+    }
+    var elapsed = ((Date.now() - runStartTime) / 1000).toFixed(1) + "s";
+    var row = document.createElement("div");
+    row.className = "log-line";
+    row.innerHTML = '<span class="log-time">+' + elapsed + "</span>" +
+      '<div class="log-body"><span class="log-stage">' + esc(label) + "</span> " +
+      '<span class="log-msg">' + esc(msg) + "</span></div>";
+    panelLog.appendChild(row);
+    panelLog.scrollTop = panelLog.scrollHeight;
   }
+
+  function handleStageEvent(event) {
+    var stageId = event.stage;
+    if (stageId === "complete") {
+      appendLog(stageId, event.status, event);
+      return;
+    }
+    if (!STAGE_META[stageId]) { return; } // forward-compatible: ignore unknown ids
+    var st = stageState[stageId] || {};
+    st.status = event.status;
+    if (event.status === "done") {
+      st.detail = formatDetail(stageId, event);
+      st.llmCalls = ("llm_calls" in event) ? event.llm_calls : null;
+      if (typeof st.llmCalls === "number") {
+        llmTotal += st.llmCalls;
+        panelLlmTotal.textContent = llmTotal + " real LLM call" + (llmTotal === 1 ? "" : "s") + " so far";
+      }
+    }
+    stageState[stageId] = st;
+    renderStages();
+    appendLog(stageId, event.status, event);
+  }
+
+  // --- panel open/close -----------------------------------------------------
+
+  function openPanel() {
+    backdrop.hidden = false;
+    panel.hidden = false;
+    void panel.offsetWidth; // force a reflow so the slide-in transition plays
+    backdrop.className = "panel-backdrop is-open";
+    panel.className = "agent-panel is-open";
+  }
+
+  function closePanel() {
+    backdrop.className = "panel-backdrop";
+    panel.className = "agent-panel";
+  }
+
+  backdrop.addEventListener("click", closePanel);
+  panelClose.addEventListener("click", closePanel);
+  workingReopen.addEventListener("click", openPanel);
 
   // --- request lifecycle -------------------------------------------------
 
-  var activeTracker = null;
+  function updateElapsed() {
+    var s = ((Date.now() - runStartTime) / 1000).toFixed(1) + "s";
+    workingElapsed.textContent = s;
+    panelElapsed.textContent = s + " elapsed";
+  }
 
   function setBusy(state) {
     busy = state;
@@ -1141,10 +1409,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     button.innerHTML = state ? '<span class="spinner"></span>Working' : "Ask";
     working.hidden = !state;
     if (state) {
-      activeTracker = startStageTracker();
-    } else if (activeTracker) {
-      activeTracker.stop();
-      activeTracker = null;
+      runStartTime = Date.now();
+      if (elapsedTimer) { clearInterval(elapsedTimer); }
+      elapsedTimer = setInterval(updateElapsed, 100);
+      updateElapsed();
+    } else if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
     }
   }
 
@@ -1153,35 +1424,70 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     errorBox.hidden = false;
   }
 
-  function ask(question) {
+  function streamAsk(question) {
     if (busy) { return; }
     errorBox.hidden = true;
     results.hidden = true;
     results.innerHTML = "";
+    stageState = {};
+    llmTotal = 0;
+    panelLlmTotal.textContent = "0 real LLM calls so far";
+    panelLog.innerHTML = "";
+    renderStages();
+    workingBar.style.width = "4%";
     setBusy(true);
-    var tracker = activeTracker;
+    openPanel();
 
-    fetch("/api/ask", {
+    fetch("/api/ask/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question: question })
     }).then(function (response) {
-      return response.json().then(function (data) {
-        return { ok: response.ok, status: response.status, data: data };
-      }).catch(function () {
-        throw new Error("Server returned a non-JSON response (HTTP " +
-                        response.status + ").");
-      });
-    }).then(function (result) {
-      if (!result.ok) {
-        throw new Error((result.data && result.data.error) ||
-                        ("Request failed with HTTP " + result.status + "."));
+      if (!response.ok) {
+        return response.json().catch(function () { return null; }).then(function (data) {
+          throw new Error((data && data.error) || ("Request failed with HTTP " + response.status + "."));
+        });
       }
-      return (tracker ? tracker.finish() : Promise.resolve()).then(function () {
-        render(result.data);
+      if (!response.body || !response.body.getReader) {
+        throw new Error("This browser does not support streamed responses.");
+      }
+
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      var finalReport = null;
+
+      function handleLine(line) {
+        line = line.trim();
+        if (!line) { return; }
+        var msg;
+        try { msg = JSON.parse(line); } catch (e) { return; }
+        if (msg.type === "stage") { handleStageEvent(msg); }
+        else if (msg.type === "result") { finalReport = msg.report; }
+        else if (msg.type === "error") { throw new Error(msg.error || "Pipeline error."); }
+      }
+
+      function pump() {
+        return reader.read().then(function (chunk) {
+          if (chunk.done) { return; }
+          buffer += decoder.decode(chunk.value, { stream: true });
+          var lines = buffer.split("\\n");
+          buffer = lines.pop();
+          lines.forEach(handleLine);
+          return pump();
+        });
+      }
+
+      return pump().then(function () {
+        if (!finalReport) { throw new Error("Stream ended without a result."); }
+        return finalReport;
+      });
+    }).then(function (report) {
+      return new Promise(function (resolve) { setTimeout(resolve, 350); }).then(function () {
+        render(report);
+        closePanel();
       });
     }).catch(function (err) {
-      if (tracker) { tracker.stop(); }
       showError(err && err.message ? err.message : "Request failed.");
     }).then(function () {
       setBusy(false);
@@ -1195,7 +1501,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
       showError("Enter a clinical question first.");
       return;
     }
-    ask(question);
+    streamAsk(question);
   });
 
   SEED_QUESTIONS.forEach(function (question, index) {
@@ -1288,6 +1594,23 @@ class EvidenceHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _write_chunk(self, data: bytes) -> None:
+        """Write one HTTP/1.1 chunked-transfer frame and flush immediately.
+
+        Used only by the streaming endpoint, where the total body length
+        isn't known up front (events arrive live), so plain Content-Length
+        framing (``_respond``) doesn't apply.
+        """
+        self.wfile.write(f"{len(data):x}\r\n".encode("ascii"))
+        self.wfile.write(data)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+
+    def _end_chunks(self) -> None:
+        """Terminate a chunked response (the zero-length final chunk)."""
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
     def _send_json(self, status: int, payload: dict) -> None:
         """Serialize ``payload`` as UTF-8 JSON."""
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1333,10 +1656,13 @@ class EvidenceHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path != "/api/ask":
-            self._send_error_json(404, f"no such endpoint: {path}")
+        if path == "/api/ask":
+            self._handle_ask()
             return
-        self._handle_ask()
+        if path == "/api/ask/stream":
+            self._handle_ask_stream()
+            return
+        self._send_error_json(404, f"no such endpoint: {path}")
 
     # --- endpoint implementations -------------------------------------------
 
@@ -1423,6 +1749,106 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             f"evidence={len(report.get('evidence') or [])}"
         )
 
+    def _handle_ask_stream(self) -> None:
+        """POST /api/ask/stream -- same question, but pushes one NDJSON
+        line per real pipeline stage as it actually completes, then a
+        final line with the full report.
+
+        Every progress line comes from EvidencePipeline's on_event
+        callback (see pipeline.py): real stage boundaries, real counts,
+        real LLM-call deltas from the shared FailoverLLMClient. Nothing
+        here is timed or simulated -- if a stage is slow, its line simply
+        arrives late. This is what makes the UI's live agent panel an
+        honest signal of whether the model is actually being called,
+        not a paced animation.
+
+        Framed as HTTP/1.1 chunked transfer (no Content-Length is
+        possible for a body whose length isn't known up front) so the
+        connection stays keep-alive-safe like every other response here.
+        """
+        try:
+            payload = self._read_json_body()
+        except ValueError as exc:
+            self._send_error_json(400, str(exc))
+            return
+
+        question = payload.get("question")
+        if not isinstance(question, str) or not question.strip():
+            self._send_error_json(400, "field 'question' is required and must be a non-empty string")
+            return
+        question = question.strip()
+
+        if self.pipeline is None:
+            self._send_error_json(503, "pipeline is not available on this server")
+            return
+
+        mode = " (mock)" if self.use_mock else ""
+        print(f"[server] ask{mode} (stream): {question[:120]}")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Cache-Control", "no-cache")
+        self._cors()
+        self.end_headers()
+
+        def send_line(payload: dict) -> None:
+            line = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+            self._write_chunk(line)
+
+        def on_event(event: dict) -> None:
+            # A client that has gone away must not break the pipeline run
+            # (it keeps computing the answer for its own logs either way);
+            # the broad except mirrors pipeline._emit's own fail-open rule.
+            try:
+                send_line({"type": "stage", **event})
+            except Exception as exc:
+                print(f"[server] stream write failed ({exc}); client likely gone")
+
+        try:
+            report = self.pipeline.run(
+                question, use_mock=self.use_mock, on_event=on_event
+            )
+        except Exception as exc:  # pipeline.run() should not raise -- be safe
+            print(f"[server] error: {exc}")
+            traceback.print_exc()
+            try:
+                send_line({"type": "error", "error": f"pipeline failed: {exc}"})
+                self._end_chunks()
+            except Exception:
+                pass
+            return
+
+        if not isinstance(report, dict):
+            print(f"[server] error: pipeline returned {type(report).__name__}, expected dict")
+            try:
+                send_line({"type": "error", "error": "pipeline returned a malformed report"})
+                self._end_chunks()
+            except Exception:
+                pass
+            return
+
+        try:
+            send_line({"type": "result", "report": report})
+        except (TypeError, ValueError) as exc:
+            print(f"[server] error: report is not JSON-serializable: {exc}")
+            try:
+                send_line({"type": "error", "error": "report is not JSON-serializable"})
+            except Exception:
+                pass
+        except Exception as exc:
+            print(f"[server] stream write failed ({exc}); client likely gone")
+        finally:
+            try:
+                self._end_chunks()
+            except Exception:
+                pass
+        print(
+            f"[server] answered (stream): abstained={report.get('abstained')} "
+            f"claims={len(report.get('claims') or [])} "
+            f"evidence={len(report.get('evidence') or [])}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Startup
@@ -1456,6 +1882,17 @@ def run_server(
 
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point: build the pipeline once, then serve."""
+    # Python fully buffers stdout when it isn't a terminal (e.g. redirected
+    # to a log file or piped), so the [server]/[pipeline]/agent lines that
+    # are this process's only visible proof of what each stage actually did
+    # would otherwise sit invisible in a buffer until exit. Force line
+    # buffering so every print() lands immediately, live-tail-able.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass  # stdout/stderr already unbuffered or not reconfigurable; fine
+
     parser = argparse.ArgumentParser(
         prog="api.server",
         description="Serve the EvidenceBoard UI and JSON API (stdlib only).",
