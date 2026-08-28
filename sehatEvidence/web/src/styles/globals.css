@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens, ported verbatim from the previous embedded-UI build
+ * (api/server.py's INDEX_TEMPLATE :root block) -- this is a reskin of an
+ * already-validated dark/blue-gradient palette into Tailwind v4's CSS-native
+ * @theme system, not a new palette. One exception: --ink-faint was measured
+ * at 4.38:1 contrast against --paper (just under the 4.5:1 WCAG AA minimum
+ * for body text) and is lightened here to #8792a8 (6.36:1) to clear it
+ * cleanly -- see the accessibility section of the implementation plan.
+ */
+
+:root {
+  --eb-ink: #eaeef7;
+  --eb-ink-soft: #a7b1c6;
+  --eb-ink-faint: #8792a8; /* was #6b7690 -- bumped for WCAG AA contrast */
+  --eb-paper: #060911;
+  --eb-card: #101726;
+  --eb-rule: #242e45;
+  --eb-rule-soft: #161d2e;
+  --eb-accent: #4f8dfd;
+  --eb-accent-2: #22d3ee;
+  --eb-accent-soft: rgba(79, 141, 253, 0.14);
+  --eb-pass: #34d399;
+  --eb-pass-bg: rgba(52, 211, 153, 0.12);
+  --eb-fail: #f87171;
+  --eb-fail-bg: rgba(248, 113, 113, 0.12);
+  --eb-flag: #fbbf24;
+  --eb-flag-bg: rgba(251, 191, 36, 0.12);
+  --eb-info: #38bdf8;
+  --eb-info-bg: rgba(56, 189, 248, 0.12);
+  --eb-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 16px 40px -16px rgba(0, 0, 0, 0.65);
+}
+
+/* Light theme: same token names, inverted lightness, identical semantic
+   hues for accent/pass/fail/flag/info so meaning stays consistent across
+   themes -- only the neutral scale and tint alpha change. */
+:root[data-theme="light"] {
+  --eb-ink: #0d1526;
+  --eb-ink-soft: #3d4a63;
+  --eb-ink-faint: #64708a;
+  --eb-paper: #f7f9fc;
+  --eb-card: #ffffff;
+  --eb-rule: #dde3ef;
+  --eb-rule-soft: #eef1f7;
+  --eb-accent-soft: rgba(79, 141, 253, 0.1);
+  --eb-pass-bg: rgba(52, 211, 153, 0.14);
+  --eb-fail-bg: rgba(248, 113, 113, 0.14);
+  --eb-flag-bg: rgba(251, 191, 36, 0.16);
+  --eb-info-bg: rgba(56, 189, 248, 0.14);
+  --eb-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 16px 40px -16px rgba(15, 23, 42, 0.18);
+}
+
+@theme {
+  --color-ink: var(--eb-ink);
+  --color-ink-soft: var(--eb-ink-soft);
+  --color-ink-faint: var(--eb-ink-faint);
+  --color-paper: var(--eb-paper);
+  --color-card: var(--eb-card);
+  --color-rule: var(--eb-rule);
+  --color-rule-soft: var(--eb-rule-soft);
+  --color-accent: var(--eb-accent);
+  --color-accent-2: var(--eb-accent-2);
+  --color-accent-soft: var(--eb-accent-soft);
+  --color-pass: var(--eb-pass);
+  --color-pass-bg: var(--eb-pass-bg);
+  --color-fail: var(--eb-fail);
+  --color-fail-bg: var(--eb-fail-bg);
+  --color-flag: var(--eb-flag);
+  --color-flag-bg: var(--eb-flag-bg);
+  --color-info: var(--eb-info);
+  --color-info-bg: var(--eb-info-bg);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --ease-panel: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  color-scheme: dark;
+}
+:root[data-theme="light"] html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--eb-ink);
+  background-color: var(--eb-paper);
+  background-image:
+    radial-gradient(720px 420px at 18% -8%, rgba(79, 141, 253, 0.16), transparent 60%),
+    radial-gradient(640px 380px at 92% 0%, rgba(34, 211, 238, 0.1), transparent 55%),
+    linear-gradient(var(--eb-rule-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--eb-rule-soft) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 34px, 34px 100%;
+  background-position: 0 0, 0 0, -1px -1px, -1px -1px;
+  background-repeat: no-repeat, no-repeat, repeat, repeat;
+  min-height: 100vh;
+}
+
+/* One shared focus-visible treatment, applied via the `focus-ring` utility
+   class rather than per-component ad hoc styling (accessibility plan). */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--eb-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
