@@ -33,6 +33,13 @@ from retrieval.europepmc import EuropePMCClient
 from retrieval.pubmed import PubMedClient
 from retrieval.retraction_check import RetractionChecker
 
+# This module is a standalone entry point (see docstring above) and may be
+# imported without config.py ever running, so the clients here would miss
+# NCBI_API_KEY / NCBI_EMAIL from .env otherwise -- load it explicitly.
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 class EvidenceGatherer:
     def __init__(
