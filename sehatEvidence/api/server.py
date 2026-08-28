@@ -1,17 +1,24 @@
 """
-api/server.py -- EvidenceBoard HTTP surface (Phase 3b).
+api/server.py -- EvidenceBoard HTTP surface.
 
-A dependency-free server: Python's stdlib ``ThreadingHTTPServer`` plus the
-project's own modules. No flask, no fastapi, no uvicorn -- and no CDN, no
-npm, no webfonts on the UI side either. The whole product (API + single
-page app) ships in this one file so a demo machine with no network still
-serves a working interface.
+A dependency-free Python backend: stdlib ``ThreadingHTTPServer`` plus the
+project's own modules (no flask/fastapi/uvicorn). The frontend (see
+../web/) is a separate Vite/React app with its own build step -- this
+module is a pure JSON API in dev, and additionally serves that app's
+built static files (``../web/dist``) in production so ``python -m
+api.server`` alone is still enough to run the whole product after one
+``npm run build``.
 
 Endpoints
 ---------
-GET  /            embedded single-page UI (inline CSS + JS, system fonts)
-POST /api/ask     {"question": "..."} -> the pipeline's full report dict
-GET  /api/health  liveness + which models/keys this process is configured with
+GET    /                       built frontend (web/dist/index.html), if built
+GET    /api/health              liveness + which models/keys this process is configured with
+POST   /api/ask                 {"question", "force_refresh"?} -> the pipeline's full report dict
+POST   /api/ask/stream          same, but NDJSON progress events then the report
+GET    /api/history              list past runs (summaries only)
+GET    /api/history/{id}         one past run's full report
+DELETE /api/history/{id}         delete one past run
+DELETE /api/history              wipe all history (body: {"confirm": true})
 
 Design notes
 ------------
@@ -22,14 +29,23 @@ process-wide on purpose -- a key that dies stays retired for everyone).
 successful outcome, so ``/api/ask`` returns 200 with ``abstained=true``
 rather than an error status; 500 is reserved for genuine server faults.
 
-``--mock`` makes every /api/ask replay demo/mock_response.json instead of
-calling the network -- the offline demo path.
+History/cache (core/store.py): both ask endpoints check for a prior run
+of the same (normalized) question before calling the pipeline, and
+record every run afterward. A cache hit on the streaming endpoint sends
+exactly one ``{"type":"cache_hit",...}`` line, never faked stage events
+-- see _handle_ask_stream. ``force_refresh: true`` bypasses the cache.
+
+``--mock`` makes every ask replay demo/mock_response.json instead of
+calling the network -- the offline demo path. Mock runs are recorded
+with source="mock", never conflated with "live" in history.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
+import sqlite3
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,1516 +56,38 @@ from typing import Optional
 # `python api/server.py` (any working directory) to import the project.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import DISCLAIMER, Settings, get_settings  # noqa: E402
+from config import Settings, get_settings  # noqa: E402
+from core import store  # noqa: E402
 from pipeline import EvidencePipeline, build_default_pipeline  # noqa: E402
 
-__all__ = ["EvidenceHandler", "build_index_html", "main", "run_server"]
+__all__ = ["EvidenceHandler", "main", "run_server"]
 
 #: Refuse absurd request bodies outright (a clinical question is a sentence).
 MAX_BODY_BYTES = 64 * 1024
 
-
-# ---------------------------------------------------------------------------
-# The embedded single-page UI
-# ---------------------------------------------------------------------------
-#
-# One template string, two placeholders ({{DISCLAIMER}}, {{POOL_CAP}}),
-# substituted by build_index_html() so config.DISCLAIMER and
-# Settings.pool_cap stay the single source of truth for what the page
-# claims. Everything else -- layout, palette, motion -- is inline: this
-# page must render identically on an air-gapped laptop.
-
-INDEX_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EvidenceBoard &middot; verification-first clinical evidence</title>
-<style>
-  :root {
-    --ink: #eaeef7;
-    --ink-soft: #a7b1c6;
-    --ink-faint: #6b7690;
-    --paper: #060911;
-    --card: #101726;
-    --rule: #242e45;
-    --rule-soft: #161d2e;
-    --accent: #4f8dfd;
-    --accent-2: #22d3ee;
-    --accent-soft: rgba(79, 141, 253, .14);
-    --pass: #34d399;
-    --pass-bg: rgba(52, 211, 153, .12);
-    --fail: #f87171;
-    --fail-bg: rgba(248, 113, 113, .12);
-    --flag: #fbbf24;
-    --flag-bg: rgba(251, 191, 36, .12);
-    --skip-bg: #161d2e;
-    --info: #38bdf8;
-    --info-bg: rgba(56, 189, 248, .12);
-    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 16px 40px -16px rgba(0, 0, 0, .65);
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  }
-
-  * { box-sizing: border-box; }
-
-  html { -webkit-text-size-adjust: 100%; }
-
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 15px;
-    line-height: 1.6;
-    color: var(--ink);
-    background-color: var(--paper);
-    /* Faint clinical-chart grid over a soft top glow: atmosphere, zero assets. */
-    background-image:
-      radial-gradient(720px 420px at 18% -8%, rgba(79, 141, 253, .16), transparent 60%),
-      radial-gradient(640px 380px at 92% 0%, rgba(34, 211, 238, .10), transparent 55%),
-      linear-gradient(var(--rule-soft) 1px, transparent 1px),
-      linear-gradient(90deg, var(--rule-soft) 1px, transparent 1px);
-    background-size: 100% 100%, 100% 100%, 100% 34px, 34px 100%;
-    background-position: 0 0, 0 0, -1px -1px, -1px -1px;
-    background-repeat: no-repeat, no-repeat, repeat, repeat;
-  }
-
-  .shell { max-width: 1080px; margin: 0 auto; padding: 0 24px 96px; }
-
-  /* --- header ------------------------------------------------------- */
-
-  header.masthead {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 24px;
-    flex-wrap: wrap;
-    padding: 44px 0 18px;
-    border-bottom: 1px solid var(--rule);
-  }
-  .wordmark {
-    margin: 0;
-    font-size: 34px;
-    font-weight: 700;
-    letter-spacing: -.025em;
-    line-height: 1.05;
-  }
-  .wordmark .dot {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .tagline {
-    margin: 6px 0 0;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-  }
-  .status-dot {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: .06em;
-    color: var(--ink-faint);
-    padding-bottom: 6px;
-  }
-  .status-dot i {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--ink-faint);
-    box-shadow: 0 0 0 3px var(--rule-soft);
-  }
-  .status-dot.live i { background: var(--pass); box-shadow: 0 0 0 3px var(--pass-bg); animation: pulse-dot 2s ease-in-out infinite; }
-  .status-dot.down i { background: var(--fail); box-shadow: 0 0 0 3px var(--fail-bg); }
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; } 50% { opacity: .45; }
-  }
-
-  /* --- stat strip: what this system actually is, in numbers ---------- */
-
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1px;
-    margin: 22px 0 0;
-    background: var(--rule);
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .stat {
-    padding: 16px 18px;
-    background: var(--card);
-  }
-  .stat b {
-    display: block;
-    font-family: var(--mono);
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: -.02em;
-    background: linear-gradient(135deg, var(--ink) 30%, var(--accent-2));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .stat span {
-    display: block;
-    margin-top: 4px;
-    font-size: 11px;
-    color: var(--ink-faint);
-    letter-spacing: .02em;
-  }
-  @media (max-width: 620px) {
-    .stats { grid-template-columns: repeat(2, 1fr); }
-  }
-
-  /* --- disclaimer strip --------------------------------------------- */
-
-  .disclaimer {
-    margin: 0;
-    padding: 12px 16px;
-    background: var(--skip-bg);
-    border: 1px solid var(--rule);
-    border-top: none;
-    font-size: 11.5px;
-    line-height: 1.5;
-    color: var(--ink-soft);
-  }
-  .disclaimer b {
-    display: block;
-    font-size: 10px;
-    letter-spacing: .14em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 3px;
-  }
-
-  /* --- query form ---------------------------------------------------- */
-
-  form.ask {
-    display: flex;
-    gap: 10px;
-    margin: 32px 0 0;
-    flex-wrap: wrap;
-  }
-  .field { flex: 1 1 340px; position: relative; }
-  label.micro {
-    display: block;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 7px;
-  }
-  input[type=text] {
-    width: 100%;
-    padding: 14px 16px;
-    font: inherit;
-    color: var(--ink);
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    box-shadow: var(--shadow);
-    transition: border-color .16s ease, box-shadow .16s ease;
-  }
-  input[type=text]::placeholder { color: var(--ink-faint); }
-  input[type=text]:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-  button.primary {
-    align-self: flex-end;
-    min-width: 132px;
-    padding: 14px 22px;
-    font: inherit;
-    font-weight: 600;
-    letter-spacing: .02em;
-    color: #04101f;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-    box-shadow: 0 8px 20px -8px rgba(79, 141, 253, .55);
-    transition: filter .16s ease, transform .16s ease;
-  }
-  button.primary:hover:not(:disabled) { filter: brightness(1.08); }
-  button.primary:active:not(:disabled) { transform: translateY(1px); }
-  button.primary:disabled { opacity: .55; cursor: progress; box-shadow: none; }
-  .spinner {
-    display: inline-block;
-    width: 12px; height: 12px;
-    margin-right: 8px;
-    vertical-align: -1px;
-    border: 2px solid rgba(4, 16, 31, .3);
-    border-top-color: #04101f;
-    border-radius: 50%;
-    animation: spin .7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .seeds { margin: 14px 0 0; font-size: 12px; color: var(--ink-faint); }
-  .seeds button {
-    font: inherit;
-    color: var(--accent);
-    background: none;
-    border: none;
-    border-bottom: 1px dotted currentColor;
-    padding: 0;
-    margin-right: 14px;
-    cursor: pointer;
-  }
-  .seeds button:hover { color: var(--ink); }
-
-  /* --- progress / errors --------------------------------------------- */
-
-  .working {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 18px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--ink-faint);
-  }
-  .working b {
-    font-weight: 700;
-    letter-spacing: .04em;
-    color: var(--ink-soft);
-  }
-  .dot-sep { color: var(--rule); }
-  .link-btn {
-    font: inherit;
-    font-family: var(--mono);
-    color: var(--accent-2);
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    text-decoration: underline;
-    text-decoration-style: dotted;
-    text-underline-offset: 2px;
-  }
-  .link-btn:hover { color: var(--accent); }
-
-  /* --- agent activity side panel --------------------------------------- */
-
-  .panel-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(3, 6, 12, .55);
-    backdrop-filter: blur(1px);
-    z-index: 40;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity .25s ease;
-  }
-  .panel-backdrop.is-open { opacity: 1; pointer-events: auto; }
-
-  .agent-panel {
-    position: fixed;
-    top: 0; right: 0;
-    width: min(400px, 100vw);
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    background: var(--card);
-    border-left: 1px solid var(--rule);
-    box-shadow: -16px 0 40px -16px rgba(0, 0, 0, .6);
-    z-index: 41;
-    transform: translateX(100%);
-    transition: transform .3s cubic-bezier(.2, .8, .3, 1);
-  }
-  .agent-panel.is-open { transform: translateX(0); }
-
-  .panel-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 20px 20px 16px;
-    border-bottom: 1px solid var(--rule);
-    flex: none;
-  }
-  .panel-head b {
-    display: block;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--ink);
-  }
-  .panel-sub {
-    display: block;
-    margin-top: 3px;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--ink-faint);
-  }
-  .panel-close {
-    flex: none;
-    width: 26px; height: 26px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
-    line-height: 1;
-    color: var(--ink-faint);
-    background: none;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .panel-close:hover { color: var(--ink); border-color: var(--ink-faint); }
-
-  .stage-track { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 14px 16px 4px; }
-  .stage {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 4px;
-    border-radius: 3px;
-    opacity: .4;
-    transition: opacity .25s ease;
-  }
-  .stage.is-active, .stage.is-done { opacity: 1; }
-  .stage-icon {
-    flex: none;
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    border: 1.5px solid var(--rule);
-    font-family: var(--mono);
-    font-size: 10.5px;
-    color: var(--ink-faint);
-    background: var(--paper);
-    transition: border-color .2s ease, background .2s ease, box-shadow .2s ease;
-  }
-  .stage.is-active .stage-icon {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    box-shadow: 0 0 0 4px var(--accent-soft);
-  }
-  .stage.is-active .stage-icon i {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    animation: pulse-dot 1s ease-in-out infinite;
-  }
-  .stage.is-done .stage-icon {
-    border-color: var(--pass);
-    background: var(--pass-bg);
-    color: var(--pass);
-  }
-  .stage-body { flex: 1; min-width: 0; }
-  .stage-label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--ink-soft);
-  }
-  .stage.is-active .stage-label { color: var(--accent-2); }
-  .stage.is-done .stage-label { color: var(--ink); }
-  .stage-detail {
-    margin-top: 1px;
-    font-size: 11px;
-    color: var(--ink-faint);
-    font-family: var(--mono);
-    line-height: 1.5;
-  }
-  .llm-pill {
-    flex: none;
-    font-family: var(--mono);
-    font-size: 9.5px;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 8px;
-    letter-spacing: .02em;
-    background: var(--accent-soft);
-    color: var(--accent-2);
-    border: 1px solid rgba(79, 141, 253, .35);
-  }
-  .llm-pill.zero {
-    background: var(--skip-bg);
-    color: var(--ink-faint);
-    border-color: var(--rule);
-  }
-  .bar {
-    flex: none;
-    height: 3px;
-    margin: 10px 16px 16px;
-    border-radius: 2px;
-    background: var(--rule-soft);
-    overflow: hidden;
-  }
-  .bar i {
-    display: block;
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transition: width .4s cubic-bezier(.2, .7, .3, 1);
-  }
-  .panel-log-head {
-    flex: none;
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 10px 16px;
-    border-top: 1px solid var(--rule);
-    font-size: 10.5px;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-  }
-  .panel-log-head span:last-child {
-    font-family: var(--mono);
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 600;
-    color: var(--accent-2);
-  }
-  .panel-log {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 4px 16px 20px;
-  }
-  .log-line {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    padding: 6px 0;
-    border-bottom: 1px dashed var(--rule-soft);
-    font-size: 11.5px;
-    animation: rise .3s cubic-bezier(.2, .7, .3, 1) both;
-  }
-  .log-line:last-child { border-bottom: none; }
-  .log-time {
-    flex: none;
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--ink-faint);
-    padding-top: 1px;
-  }
-  .log-body { min-width: 0; }
-  .log-stage {
-    font-family: var(--mono);
-    font-weight: 700;
-    font-size: 10.5px;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-    color: var(--accent-2);
-  }
-  .log-msg { color: var(--ink-soft); line-height: 1.5; }
-
-  @media (max-width: 620px) {
-    .agent-panel {
-      top: auto; right: 0; left: 0; bottom: 0;
-      width: auto; height: 78vh;
-      border-left: none;
-      border-top: 1px solid var(--rule);
-      border-radius: 10px 10px 0 0;
-      transform: translateY(100%);
-    }
-    .agent-panel.is-open { transform: translateY(0); }
-  }
-
-  .error-box {
-    margin-top: 28px;
-    padding: 16px 18px;
-    background: var(--fail-bg);
-    border: 1px solid rgba(248, 113, 113, .3);
-    border-left: 3px solid var(--fail);
-    border-radius: 3px;
-    color: #fecaca;
-    font-size: 13.5px;
-  }
-
-  /* --- results ------------------------------------------------------- */
-
-  .results { margin-top: 36px; }
-  .results > * { animation: rise .5s cubic-bezier(.2, .7, .3, 1) both; }
-  .results > *:nth-child(1) { animation-delay: .02s; }
-  .results > *:nth-child(2) { animation-delay: .08s; }
-  .results > *:nth-child(3) { animation-delay: .14s; }
-  .results > *:nth-child(4) { animation-delay: .20s; }
-  .results > *:nth-child(5) { animation-delay: .26s; }
-  .results > *:nth-child(6) { animation-delay: .32s; }
-  @keyframes rise {
-    from { opacity: 0; transform: translateY(10px); }
-    to   { opacity: 1; transform: none; }
-  }
-
-  section { margin-bottom: 34px; }
-  h2.section-title {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin: 0 0 14px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: .18em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-  }
-  h2.section-title::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: var(--rule);
-  }
-  h2.section-title .count {
-    font-family: var(--mono);
-    letter-spacing: 0;
-    color: var(--ink-soft);
-  }
-
-  .asked {
-    margin: 0 0 26px;
-    font-size: 19px;
-    font-weight: 600;
-    letter-spacing: -.01em;
-    line-height: 1.4;
-  }
-  .asked span {
-    display: block;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 6px;
-  }
-
-  /* funnel */
-  .funnel { background: var(--card); border: 1px solid var(--rule); border-radius: 3px;
-            box-shadow: var(--shadow); padding: 18px 20px; }
-  .funnel-line { font-family: var(--mono); font-size: 13px; color: var(--ink-soft); }
-  .funnel-line b { color: var(--ink); font-weight: 600; }
-  .funnel-line .arrow { color: var(--ink-faint); margin: 0 6px; }
-  .funnel-track {
-    display: flex;
-    height: 10px;
-    margin-top: 12px;
-    border-radius: 2px;
-    overflow: hidden;
-    background: var(--skip-bg);
-  }
-  .funnel-track i { height: 100%; transition: width .6s cubic-bezier(.2, .7, .3, 1); }
-  .funnel-track .seg-kept { background: var(--pass); }
-  .funnel-track .seg-del  { background: var(--fail); }
-  .funnel-legend {
-    display: flex; flex-wrap: wrap; gap: 16px;
-    margin-top: 10px; font-size: 11px; color: var(--ink-faint);
-  }
-  .funnel-legend em { font-style: normal; font-family: var(--mono); color: var(--ink-soft); }
-  .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
-  .sw-kept { background: var(--pass); }
-  .sw-del { background: var(--fail); }
-  .sw-gen { background: var(--info); }
-  .by-reason { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--rule);
-               font-size: 12px; color: var(--ink-soft); }
-  .by-reason div { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
-  .by-reason span:last-child { font-family: var(--mono); color: var(--fail); }
-
-  /* answer */
-  .answer {
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-left: 3px solid var(--accent);
-    border-radius: 3px;
-    box-shadow: var(--shadow);
-    padding: 24px 26px;
-    font-size: 16.5px;
-    line-height: 1.72;
-  }
-  .answer .sid {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--accent);
-    background: var(--accent-soft);
-    padding: 1px 5px;
-    border-radius: 2px;
-    white-space: nowrap;
-  }
-
-  /* abstention */
-  .abstain {
-    background: var(--flag-bg);
-    border: 1px solid rgba(251, 191, 36, .3);
-    border-left: 3px solid var(--flag);
-    border-radius: 3px;
-    padding: 20px 22px;
-  }
-  .abstain h3 {
-    margin: 0 0 8px;
-    font-size: 15px;
-    color: #fcd34d;
-    letter-spacing: -.01em;
-  }
-  .abstain p { margin: 0 0 10px; font-size: 13.5px; color: #fde68a; }
-  .abstain ul { margin: 0; padding-left: 20px; font-size: 13.5px; color: #fde68a; }
-  .abstain li { margin: 3px 0; }
-
-  /* claim cards */
-  .claim {
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    box-shadow: var(--shadow);
-    padding: 18px 20px;
-    margin-bottom: 12px;
-  }
-  .claim.flagged { border-left: 3px solid var(--flag); }
-  .claim.kept { border-left: 3px solid var(--pass); }
-  .claim-head {
-    display: flex; justify-content: space-between; align-items: baseline;
-    gap: 12px; margin-bottom: 8px;
-  }
-  .claim-id { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
-  .claim-text { margin: 0 0 12px; font-size: 15px; line-height: 1.6; }
-  .checks { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
-  .badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 9px;
-    border-radius: 2px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: .02em;
-    border: 1px solid transparent;
-  }
-  .badge .mark { font-family: var(--mono); }
-  .b-pass { background: var(--pass-bg); color: var(--pass); border-color: rgba(52, 211, 153, .35); }
-  .b-fail { background: var(--fail-bg); color: var(--fail); border-color: rgba(248, 113, 113, .35); }
-  .b-flag { background: var(--flag-bg); color: var(--flag); border-color: rgba(251, 191, 36, .35); }
-  .b-skip { background: var(--skip-bg); color: var(--ink-faint); border-color: var(--rule); }
-  .b-info { background: var(--info-bg); color: var(--info); border-color: rgba(56, 189, 248, .35); }
-  .verdict {
-    font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
-    margin-bottom: 10px;
-  }
-  .verdict .conf { color: var(--ink-faint); }
-  blockquote.quote {
-    margin: 0 0 12px;
-    padding: 10px 14px;
-    background: #0c1220;
-    border-left: 2px solid var(--rule);
-    font-size: 13.5px;
-    line-height: 1.6;
-    color: var(--ink-soft);
-    font-style: italic;
-  }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  a.chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    max-width: 100%;
-    padding: 3px 9px;
-    font-size: 11.5px;
-    font-family: var(--mono);
-    color: var(--ink-soft);
-    text-decoration: none;
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    border-radius: 2px;
-    transition: border-color .15s ease, color .15s ease, background .15s ease;
-  }
-  a.chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-  a.chip .chip-sid { font-weight: 600; color: var(--accent); }
-  .flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  .flag-badge {
-    padding: 3px 9px;
-    font-size: 11px;
-    border-radius: 2px;
-    background: rgba(251, 191, 36, .12);
-    color: #fcd34d;
-    border: 1px solid rgba(251, 191, 36, .3);
-  }
-
-  /* deleted claims */
-  details.deleted-wrap {
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    box-shadow: var(--shadow);
-    padding: 0;
-  }
-  details.deleted-wrap > summary {
-    cursor: pointer;
-    padding: 14px 18px;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--ink-soft);
-    list-style: none;
-    display: flex; align-items: center; gap: 10px;
-  }
-  details.deleted-wrap > summary::-webkit-details-marker { display: none; }
-  details.deleted-wrap > summary::before {
-    content: "+";
-    font-family: var(--mono);
-    color: var(--fail);
-    font-size: 14px;
-  }
-  details.deleted-wrap[open] > summary::before { content: "\\2212"; }
-  details.deleted-wrap > summary:hover { color: var(--ink); }
-  .deleted-body { padding: 0 18px 6px; border-top: 1px dashed var(--rule); }
-  .deleted-row { padding: 12px 0; border-bottom: 1px dashed var(--rule-soft); }
-  .deleted-row:last-child { border-bottom: none; }
-  .deleted-row p {
-    margin: 0 0 5px;
-    font-size: 13.5px;
-    color: var(--ink-faint);
-    text-decoration: line-through;
-    text-decoration-color: rgba(248, 113, 113, .45);
-  }
-  .deleted-why {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    color: var(--fail);
-  }
-  .deleted-why::before { content: "deleted \\2014 "; color: var(--ink-faint); }
-
-  /* evidence */
-  ol.evidence { list-style: none; margin: 0; padding: 0; counter-reset: none; }
-  li.ev {
-    display: grid;
-    grid-template-columns: 52px 1fr auto;
-    gap: 14px;
-    align-items: start;
-    padding: 14px 18px;
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    margin-bottom: 8px;
-    box-shadow: var(--shadow);
-  }
-  li.ev.retracted { border-left: 3px solid var(--fail); background: rgba(248, 113, 113, .07); }
-  .ev-sid {
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
-    padding-top: 2px;
-  }
-  .ev-title { font-size: 14.5px; line-height: 1.5; margin: 0 0 5px; }
-  .ev-title a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule); }
-  .ev-title a:hover { color: var(--accent); border-bottom-color: var(--accent); }
-  .ev-meta {
-    font-size: 11.5px;
-    color: var(--ink-faint);
-    font-family: var(--mono);
-    display: flex; flex-wrap: wrap; gap: 4px 10px;
-  }
-  .ev-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .ev-score {
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
-    background: var(--accent-soft);
-    border: 1px solid rgba(79, 141, 253, .3);
-    border-radius: 2px;
-    padding: 3px 8px;
-    white-space: nowrap;
-  }
-  .ev-score.mid { color: var(--flag); background: var(--flag-bg); border-color: rgba(251, 191, 36, .3); }
-  .ev-score.low { color: var(--ink-faint); background: var(--skip-bg); border-color: var(--rule); }
-
-  .empty {
-    padding: 16px 18px;
-    background: var(--card);
-    border: 1px dashed var(--rule);
-    border-radius: 3px;
-    font-size: 13px;
-    color: var(--ink-faint);
-  }
-
-  footer.foot {
-    margin-top: 48px;
-    padding-top: 16px;
-    border-top: 1px solid var(--rule);
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--ink-faint);
-    display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: space-between;
-  }
-
-  @media (max-width: 620px) {
-    .shell { padding: 0 16px 64px; }
-    .wordmark { font-size: 27px; }
-    button.primary { width: 100%; }
-    li.ev { grid-template-columns: 44px 1fr; }
-    li.ev .ev-score { grid-column: 2; justify-self: start; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    * { animation: none !important; transition: none !important; }
-  }
-</style>
-</head>
-<body>
-<div class="shell">
-
-  <header class="masthead">
-    <div>
-      <h1 class="wordmark">EvidenceBoard<span class="dot">.</span></h1>
-      <p class="tagline">Verification-first clinical evidence</p>
-    </div>
-    <div class="status-dot" id="health"><i></i><span>checking service&hellip;</span></div>
-  </header>
-
-  <div class="stats">
-    <div class="stat"><b>5</b><span>agents in the pipeline</span></div>
-    <div class="stat"><b>3</b><span>sources &middot; PubMed, Europe&nbsp;PMC, CT.gov</span></div>
-    <div class="stat"><b>3</b><span>checks per claim &middot; exists, entails, stands</span></div>
-    <div class="stat"><b>{{POOL_CAP}}</b><span>records ranked per question</span></div>
-  </div>
-
-  <p class="disclaimer"><b>Disclaimer</b>{{DISCLAIMER}}</p>
-
-  <form class="ask" id="ask-form" autocomplete="off">
-    <div class="field">
-      <label class="micro" for="q">Clinical question</label>
-      <input type="text" id="q" name="q"
-             placeholder="e.g. Does metformin reduce all-cause mortality in type 2 diabetes?"
-             required>
-    </div>
-    <button class="primary" id="ask-btn" type="submit">Ask</button>
-  </form>
-
-  <p class="seeds" id="seeds"></p>
-
-  <div id="working" class="working" hidden>
-    <b>Pipeline running</b>
-    <span id="working-elapsed">0.0s</span>
-    <span class="dot-sep">&middot;</span>
-    <button type="button" id="working-reopen" class="link-btn">view agent activity</button>
-  </div>
-
-  <div id="error" class="error-box" hidden></div>
-
-  <div class="results" id="results" hidden></div>
-
-  <footer class="foot">
-    <span>EvidenceBoard &middot; stdlib server, no external assets</span>
-    <span id="foot-model"></span>
-  </footer>
-
-</div>
-
-<div id="panel-backdrop" class="panel-backdrop" hidden></div>
-<aside id="agent-panel" class="agent-panel" hidden aria-label="Live agent activity">
-  <div class="panel-head">
-    <div>
-      <b>Agent activity</b>
-      <span class="panel-sub" id="panel-elapsed">0.0s elapsed</span>
-    </div>
-    <button type="button" id="panel-close" class="panel-close" aria-label="Collapse panel">&times;</button>
-  </div>
-  <div class="stage-track" id="stage-track"></div>
-  <div class="bar"><i id="working-bar"></i></div>
-  <div class="panel-log-head">
-    <span>Live log</span>
-    <span id="panel-llm-total">0 real LLM calls so far</span>
-  </div>
-  <div class="panel-log" id="panel-log"></div>
-</aside>
-
-<script>
-(function () {
-  "use strict";
-
-  var form = document.getElementById("ask-form");
-  var input = document.getElementById("q");
-  var button = document.getElementById("ask-btn");
-  var working = document.getElementById("working");
-  var workingElapsed = document.getElementById("working-elapsed");
-  var workingReopen = document.getElementById("working-reopen");
-  var backdrop = document.getElementById("panel-backdrop");
-  var panel = document.getElementById("agent-panel");
-  var panelClose = document.getElementById("panel-close");
-  var panelElapsed = document.getElementById("panel-elapsed");
-  var panelLlmTotal = document.getElementById("panel-llm-total");
-  var panelLog = document.getElementById("panel-log");
-  var stageTrack = document.getElementById("stage-track");
-  var workingBar = document.getElementById("working-bar");
-  var errorBox = document.getElementById("error");
-  var results = document.getElementById("results");
-  var health = document.getElementById("health");
-  var footModel = document.getElementById("foot-model");
-  var seeds = document.getElementById("seeds");
-  var busy = false;
-
-  /* The six pipeline stages, in run order (see pipeline.py). This list is
-     ONLY labels/icons/placeholder copy for first paint -- every status
-     change and every "detail" line below is driven by real events read
-     live off /api/ask/stream (see streamAsk()), never simulated timing.
-     "llm" stages carry a real per-stage LLM-call count once done; the
-     retrieval stage is deterministic by design (ZERO AI, see
-     retrieval/retrieve.py) and is never expected to report calls > 0. */
-  var STAGE_ORDER = ["strategist", "retrieval", "appraiser", "synthesizer", "verifier", "red_team"];
-  var STAGE_META = {
-    strategist: { label: "Strategist", placeholder: "Planning 3\\u20135 targeted search queries" },
-    retrieval: { label: "Retrieval", placeholder: "Querying PubMed, Europe PMC, ClinicalTrials.gov \\u00b7 checking retractions" },
-    appraiser: { label: "Appraiser", placeholder: "Scoring evidence by design, recency & relevance" },
-    synthesizer: { label: "Synthesizer", placeholder: "Drafting a fully-cited answer" },
-    verifier: { label: "Verifier", placeholder: "Checking existence, entailment & standing of every claim" },
-    red_team: { label: "Red Team", placeholder: "Adversarial audit for weak or risky claims" }
-  };
-
-  var SEED_QUESTIONS = [
-    "Does metformin reduce all-cause mortality in type 2 diabetes?",
-    "Is tranexamic acid effective in traumatic brain injury?",
-    "Do SGLT2 inhibitors prevent heart failure hospitalisation in CKD?"
-  ];
-
-  // --- helpers -----------------------------------------------------------
-
-  function esc(value) {
-    if (value === null || value === undefined) { return ""; }
-    return String(value)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  function num(value) {
-    return typeof value === "number" && isFinite(value) ? value : 0;
-  }
-
-  /* Best available public URL for a record: the source's own url wins,
-     then the DOI, then a registry URL rebuilt from the native id. */
-  function linkFor(item) {
-    if (!item) { return ""; }
-    if (item.url) { return String(item.url); }
-    if (item.doi) { return "https://doi.org/" + encodeURIComponent(item.doi); }
-    var id = item.native_id ? String(item.native_id) : "";
-    if (!id) { return ""; }
-    var source = (item.source || "").toLowerCase();
-    if (source.indexOf("clinicaltrials") !== -1 || /^NCT/i.test(id)) {
-      return "https://clinicaltrials.gov/study/" + encodeURIComponent(id);
-    }
-    if (source.indexOf("europepmc") !== -1 && !/^\\d+$/.test(id)) {
-      return "https://europepmc.org/article/MED/" + encodeURIComponent(id);
-    }
-    return "https://pubmed.ncbi.nlm.nih.gov/" + encodeURIComponent(id) + "/";
-  }
-
-  /* Wrap [S3] / [S3, S7] citation markers so the answer reads as data. */
-  function markSids(text) {
-    return esc(text).replace(/\\[(S\\d+(?:\\s*,\\s*S\\d+)*)\\]/g,
-      function (match) { return '<span class="sid">' + match + "</span>"; });
-  }
-
-  function badge(kind, label, mark) {
-    return '<span class="badge b-' + kind + '"><span class="mark">' + mark +
-           "</span>" + esc(label) + "</span>";
-  }
-
-  /* The three verification checks use different vocabularies (the
-     entailment judge answers supports/refutes/nei), so map each to a
-     colour + glyph rather than assuming a shared pass/fail wording. */
-  function checkBadge(name, outcome) {
-    var value = (outcome || "skipped").toLowerCase();
-    var kind = "skip";
-    var mark = "\\u2013";
-    if (value === "pass" || value === "supports") { kind = "pass"; mark = "\\u2713"; }
-    else if (value === "fail" || value === "refutes") { kind = "fail"; mark = "\\u2717"; }
-    else if (value === "flag" || value === "nei") { kind = "flag"; mark = "!"; }
-    return badge(kind, name + " \\u00b7 " + value, mark);
-  }
-
-  // --- rendering ---------------------------------------------------------
-
-  function renderFunnel(funnel) {
-    var generated = num(funnel.claims_generated);
-    var deleted = num(funnel.claims_deleted);
-    var kept = num(funnel.claims_kept);
-    var total = generated > 0 ? generated : (deleted + kept);
-    var keptPct = total ? (kept / total) * 100 : 0;
-    var delPct = total ? (deleted / total) * 100 : 0;
-
-    var reasons = funnel.by_reason && typeof funnel.by_reason === "object"
-      ? Object.keys(funnel.by_reason) : [];
-    var reasonHtml = "";
-    if (reasons.length) {
-      reasonHtml = '<div class="by-reason">' + reasons.map(function (reason) {
-        return "<div><span>" + esc(reason) + "</span><span>&times;" +
-               esc(funnel.by_reason[reason]) + "</span></div>";
-      }).join("") + "</div>";
-    }
-
-    return '<section><h2 class="section-title">Verification funnel</h2>' +
-      '<div class="funnel">' +
-        '<div class="funnel-line"><b>' + generated + "</b> claims generated" +
-          '<span class="arrow">&rarr;</span><b>' + deleted + "</b> deleted" +
-          '<span class="arrow">&rarr;</span><b>' + kept + "</b> shown</div>" +
-        '<div class="funnel-track">' +
-          '<i class="seg-kept" style="width:' + keptPct.toFixed(1) + '%"></i>' +
-          '<i class="seg-del" style="width:' + delPct.toFixed(1) + '%"></i>' +
-        "</div>" +
-        '<div class="funnel-legend">' +
-          '<span><i class="swatch sw-gen"></i>generated <em>' + generated + "</em></span>" +
-          '<span><i class="swatch sw-del"></i>deleted <em>' + deleted + "</em></span>" +
-          '<span><i class="swatch sw-kept"></i>shown <em>' + kept + "</em></span>" +
-        "</div>" + reasonHtml +
-      "</div></section>";
-  }
-
-  function renderAbstain(report) {
-    var reasons = report.abstain_reasons || [];
-    var items = reasons.length
-      ? reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("")
-      : "<li>no reason recorded</li>";
-    return '<section><div class="abstain">' +
-      "<h3>No answer given &mdash; the evidence did not support one</h3>" +
-      "<p>EvidenceBoard abstains rather than answering from thin or " +
-      "unverifiable evidence. The pool it did find is listed below.</p>" +
-      "<ul>" + items + "</ul>" +
-      "</div></section>";
-  }
-
-  function renderAnswer(report) {
-    var text = (report.answer_text || "").trim();
-    if (!text) { return ""; }
-    return '<section><h2 class="section-title">Answer</h2>' +
-      '<div class="answer">' + markSids(text) + "</div></section>";
-  }
-
-  function renderCitations(citations) {
-    if (!citations || !citations.length) { return ""; }
-    return '<div class="chips">' + citations.map(function (c) {
-      var label = c.citation_key || c.sid || "source";
-      var url = linkFor(c);
-      var inner = '<span class="chip-sid">' + esc(c.sid || "") + "</span>" + esc(label);
-      if (!url) { return '<span class="chip">' + inner + "</span>"; }
-      return '<a class="chip" href="' + esc(url) + '" target="_blank" ' +
-             'rel="noopener noreferrer" title="' + esc(c.title || label) + '">' +
-             inner + "</a>";
-    }).join("") + "</div>";
-  }
-
-  function renderClaim(claim) {
-    var checks = claim.checks || {};
-    var conf = typeof claim.confidence === "number"
-      ? ' <span class="conf">confidence ' + claim.confidence.toFixed(2) + "</span>" : "";
-    var verdict = claim.verdict
-      ? '<div class="verdict">verdict: ' + esc(claim.verdict) + conf + "</div>" : "";
-    var quote = claim.evidence_quote
-      ? '<blockquote class="quote">' + esc(claim.evidence_quote) + "</blockquote>" : "";
-    var flags = (claim.flags && claim.flags.length)
-      ? '<div class="flags">' + claim.flags.map(function (f) {
-          return '<span class="flag-badge">' + esc(f) + "</span>";
-        }).join("") + "</div>"
-      : "";
-    var statusBadge = claim.status === "flagged"
-      ? badge("flag", "flagged", "!")
-      : badge("pass", "kept", "\\u2713");
-
-    return '<article class="claim ' + esc(claim.status || "kept") + '">' +
-      '<div class="claim-head">' +
-        '<div class="checks">' + statusBadge + "</div>" +
-        '<div class="claim-id">' + esc(claim.claim_id || "") + "</div>" +
-      "</div>" +
-      '<p class="claim-text">' + markSids(claim.text) + "</p>" +
-      '<div class="checks">' +
-        checkBadge("existence", checks.existence) +
-        checkBadge("entailment", checks.entailment) +
-        checkBadge("standing", checks.standing) +
-      "</div>" +
-      verdict + quote + renderCitations(claim.citations) + flags +
-      "</article>";
-  }
-
-  function renderKept(claims) {
-    if (!claims.length) { return ""; }
-    return '<section><h2 class="section-title">Verified claims ' +
-      '<span class="count">' + claims.length + "</span></h2>" +
-      claims.map(renderClaim).join("") + "</section>";
-  }
-
-  function renderDeleted(claims) {
-    if (!claims.length) { return ""; }
-    var rows = claims.map(function (claim) {
-      return '<div class="deleted-row"><p>' + esc(claim.text) + "</p>" +
-        '<div class="deleted-why">' + esc(claim.deletion_reason || "unspecified") +
-        "</div></div>";
-    }).join("");
-    return "<section><details class=\\"deleted-wrap\\"><summary>" +
-      claims.length + (claims.length === 1 ? " claim was" : " claims were") +
-      " deleted by verification" +
-      '</summary><div class="deleted-body">' + rows + "</div></details></section>";
-  }
-
-  function renderEvidence(evidence) {
-    if (!evidence.length) {
-      return '<section><h2 class="section-title">Evidence pool</h2>' +
-        '<div class="empty">No records were retrieved for this question.</div></section>';
-    }
-    var rows = evidence.map(function (item) {
-      var score = num(item.relevance_score);
-      var scoreClass = score >= 60 ? "" : (score >= 30 ? " mid" : " low");
-      var url = linkFor(item);
-      var title = esc(item.title || "(untitled record)");
-      var titleHtml = url
-        ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' +
-          title + "</a>"
-        : title;
-
-      var meta = [];
-      if (item.journal) { meta.push("<span>" + esc(item.journal) + "</span>"); }
-      if (item.publication_date) { meta.push("<span>" + esc(item.publication_date) + "</span>"); }
-      if (item.study_design) { meta.push("<span>" + esc(item.study_design) + "</span>"); }
-      if (item.citation_key) { meta.push("<span>" + esc(item.citation_key) + "</span>"); }
-
-      var tags = [];
-      if (item.is_retracted) { tags.push(badge("fail", "retracted", "\\u2717")); }
-      if (item.is_preprint) { tags.push(badge("flag", "preprint \\u00b7 not peer reviewed", "!")); }
-      if (item.trial_status) { tags.push(badge("info", "trial: " + item.trial_status, "\\u25cf")); }
-
-      return '<li class="ev' + (item.is_retracted ? " retracted" : "") + '">' +
-        '<div class="ev-sid">' + esc(item.sid || "") + "</div>" +
-        "<div>" +
-          '<p class="ev-title">' + titleHtml + "</p>" +
-          '<div class="ev-meta">' + meta.join("") + "</div>" +
-          (tags.length ? '<div class="ev-tags">' + tags.join("") + "</div>" : "") +
-        "</div>" +
-        '<div class="ev-score' + scoreClass + '">' + score + "</div>" +
-        "</li>";
-    }).join("");
-    return '<section><h2 class="section-title">Evidence pool ' +
-      '<span class="count">' + evidence.length + " ranked</span></h2>" +
-      '<ol class="evidence">' + rows + "</ol></section>";
-  }
-
-  function render(report) {
-    var claims = report.claims || [];
-    var kept = claims.filter(function (c) {
-      return c.status === "kept" || c.status === "flagged";
-    });
-    var deleted = claims.filter(function (c) { return c.status === "deleted"; });
-
-    var html = '<p class="asked"><span>Question</span>' + esc(report.question) + "</p>";
-    html += report.abstained ? renderAbstain(report) : renderAnswer(report);
-    html += renderFunnel(report.funnel || {});
-    html += renderKept(kept);
-    html += renderDeleted(deleted);
-    html += renderEvidence(report.evidence || []);
-
-    results.innerHTML = html;
-    results.hidden = false;
-  }
-
-  // --- live agent panel ----------------------------------------------------
-  //
-  // Driven entirely by /api/ask/stream: one real NDJSON line per pipeline
-  // stage boundary, straight from EvidencePipeline's on_event callback
-  // (see pipeline.py). Nothing here is timed or guessed -- a stage's row
-  // only moves because the server said so, and its "N LLM calls" pill is
-  // the real delta read off the shared FailoverLLMClient's call counter
-  // (see config.py). retrieval always reports 0: that stage is
-  // deliberately zero-AI by design, not a fallback.
-
-  var stageState = {};   // stageId -> { status, detail, llmCalls }
-  var llmTotal = 0;
-  var runStartTime = 0;
-  var elapsedTimer = null;
-
-  function joinTrunc(list, max) {
-    list = list || [];
-    var shown = list.slice(0, max).map(function (q) { return '"' + q + '"'; });
-    var extra = list.length - shown.length;
-    return shown.join("; ") + (extra > 0 ? " +" + extra + " more" : "");
-  }
-
-  /* Builds the human-readable line for one stage from the REAL fields the
-     matching pipeline.py _emit() call actually sends -- see the field
-     names documented there (queries, pool_size, top_score, funnel, ...). */
-  function formatDetail(stageId, event) {
-    if (event.status === "start") { return STAGE_META[stageId].placeholder; }
-    if (stageId === "strategist") {
-      var qn = (event.queries || []).length;
-      return qn + " quer" + (qn === 1 ? "y" : "ies") + " planned: " + joinTrunc(event.queries, 2);
-    }
-    if (stageId === "retrieval") {
-      var rn = num(event.pool_size);
-      return rn + " record" + (rn === 1 ? "" : "s") + " retrieved" +
-        (event.retracted ? " \\u00b7 " + event.retracted + " retracted excluded" : "");
-    }
-    if (stageId === "appraiser") {
-      var an = num(event.appraised);
-      return an + " record" + (an === 1 ? "" : "s") + " scored" +
-        (typeof event.top_score === "number" ? " \\u00b7 top score " + event.top_score : "");
-    }
-    if (stageId === "synthesizer") {
-      if (event.abstained) { return "Judged the evidence insufficient \\u2014 abstaining"; }
-      var sn = num(event.sentences);
-      return sn + " cited sentence" + (sn === 1 ? "" : "s") + " drafted";
-    }
-    if (stageId === "verifier") {
-      var f = event.funnel || {};
-      return num(f.claims_generated) + " generated \\u2192 " + num(f.claims_deleted) +
-        " deleted \\u2192 " + num(f.claims_kept) + " kept";
-    }
-    if (stageId === "red_team") {
-      var fc = num(event.flagged_claims);
-      return fc + " claim" + (fc === 1 ? "" : "s") + " flagged";
-    }
-    return "";
-  }
-
-  function renderStages() {
-    stageTrack.innerHTML = STAGE_ORDER.map(function (id, i) {
-      var meta = STAGE_META[id];
-      var st = stageState[id] || { status: "pending" };
-      var cls = st.status === "done" ? "done" : (st.status === "start" ? "active" : "pending");
-      var numLabel = (i + 1 < 10 ? "0" : "") + (i + 1);
-      var icon = cls === "done" ? "\\u2713" : (cls === "active" ? "<i></i>" : numLabel);
-      var detail = st.detail || meta.placeholder;
-      var pill = "";
-      if (cls === "done" && typeof st.llmCalls === "number") {
-        pill = ' <span class="llm-pill' + (st.llmCalls === 0 ? " zero" : "") + '">' +
-          st.llmCalls + " LLM call" + (st.llmCalls === 1 ? "" : "s") + "</span>";
-      }
-      return '<div class="stage is-' + cls + '">' +
-        '<div class="stage-icon">' + icon + "</div>" +
-        '<div class="stage-body">' +
-          '<div class="stage-label">' + esc(meta.label) + pill + "</div>" +
-          '<div class="stage-detail">' + esc(detail) + "</div>" +
-        "</div></div>";
-    }).join("");
-
-    var done = STAGE_ORDER.filter(function (id) {
-      return stageState[id] && stageState[id].status === "done";
-    }).length;
-    workingBar.style.width = Math.max(4, (done / STAGE_ORDER.length) * 100) + "%";
-  }
-
-  function appendLog(stageId, status, event) {
-    var meta = STAGE_META[stageId];
-    var label = meta ? meta.label : "Pipeline";
-    var msg;
-    if (stageId === "complete") {
-      msg = status === "answered" ? "Answer ready." : ("Abstained" + (event.reason ? ": " + event.reason : "."));
-    } else if (status === "start") {
-      msg = "started";
-    } else {
-      msg = formatDetail(stageId, event);
-      if (typeof event.llm_calls === "number") {
-        msg += event.llm_calls > 0
-          ? " (" + event.llm_calls + " real LLM call" + (event.llm_calls === 1 ? "" : "s") + ")"
-          : " (deterministic \\u2014 no LLM call)";
-      }
-    }
-    var elapsed = ((Date.now() - runStartTime) / 1000).toFixed(1) + "s";
-    var row = document.createElement("div");
-    row.className = "log-line";
-    row.innerHTML = '<span class="log-time">+' + elapsed + "</span>" +
-      '<div class="log-body"><span class="log-stage">' + esc(label) + "</span> " +
-      '<span class="log-msg">' + esc(msg) + "</span></div>";
-    panelLog.appendChild(row);
-    panelLog.scrollTop = panelLog.scrollHeight;
-  }
-
-  function handleStageEvent(event) {
-    var stageId = event.stage;
-    if (stageId === "complete") {
-      appendLog(stageId, event.status, event);
-      return;
-    }
-    if (!STAGE_META[stageId]) { return; } // forward-compatible: ignore unknown ids
-    var st = stageState[stageId] || {};
-    st.status = event.status;
-    if (event.status === "done") {
-      st.detail = formatDetail(stageId, event);
-      st.llmCalls = ("llm_calls" in event) ? event.llm_calls : null;
-      if (typeof st.llmCalls === "number") {
-        llmTotal += st.llmCalls;
-        panelLlmTotal.textContent = llmTotal + " real LLM call" + (llmTotal === 1 ? "" : "s") + " so far";
-      }
-    }
-    stageState[stageId] = st;
-    renderStages();
-    appendLog(stageId, event.status, event);
-  }
-
-  // --- panel open/close -----------------------------------------------------
-
-  function openPanel() {
-    backdrop.hidden = false;
-    panel.hidden = false;
-    void panel.offsetWidth; // force a reflow so the slide-in transition plays
-    backdrop.className = "panel-backdrop is-open";
-    panel.className = "agent-panel is-open";
-  }
-
-  function closePanel() {
-    backdrop.className = "panel-backdrop";
-    panel.className = "agent-panel";
-  }
-
-  backdrop.addEventListener("click", closePanel);
-  panelClose.addEventListener("click", closePanel);
-  workingReopen.addEventListener("click", openPanel);
-
-  // --- request lifecycle -------------------------------------------------
-
-  function updateElapsed() {
-    var s = ((Date.now() - runStartTime) / 1000).toFixed(1) + "s";
-    workingElapsed.textContent = s;
-    panelElapsed.textContent = s + " elapsed";
-  }
-
-  function setBusy(state) {
-    busy = state;
-    button.disabled = state;
-    button.innerHTML = state ? '<span class="spinner"></span>Working' : "Ask";
-    working.hidden = !state;
-    if (state) {
-      runStartTime = Date.now();
-      if (elapsedTimer) { clearInterval(elapsedTimer); }
-      elapsedTimer = setInterval(updateElapsed, 100);
-      updateElapsed();
-    } else if (elapsedTimer) {
-      clearInterval(elapsedTimer);
-      elapsedTimer = null;
-    }
-  }
-
-  function showError(message) {
-    errorBox.textContent = message;
-    errorBox.hidden = false;
-  }
-
-  function streamAsk(question) {
-    if (busy) { return; }
-    errorBox.hidden = true;
-    results.hidden = true;
-    results.innerHTML = "";
-    stageState = {};
-    llmTotal = 0;
-    panelLlmTotal.textContent = "0 real LLM calls so far";
-    panelLog.innerHTML = "";
-    renderStages();
-    workingBar.style.width = "4%";
-    setBusy(true);
-    openPanel();
-
-    fetch("/api/ask/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: question })
-    }).then(function (response) {
-      if (!response.ok) {
-        return response.json().catch(function () { return null; }).then(function (data) {
-          throw new Error((data && data.error) || ("Request failed with HTTP " + response.status + "."));
-        });
-      }
-      if (!response.body || !response.body.getReader) {
-        throw new Error("This browser does not support streamed responses.");
-      }
-
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = "";
-      var finalReport = null;
-
-      function handleLine(line) {
-        line = line.trim();
-        if (!line) { return; }
-        var msg;
-        try { msg = JSON.parse(line); } catch (e) { return; }
-        if (msg.type === "stage") { handleStageEvent(msg); }
-        else if (msg.type === "result") { finalReport = msg.report; }
-        else if (msg.type === "error") { throw new Error(msg.error || "Pipeline error."); }
-      }
-
-      function pump() {
-        return reader.read().then(function (chunk) {
-          if (chunk.done) { return; }
-          buffer += decoder.decode(chunk.value, { stream: true });
-          var lines = buffer.split("\\n");
-          buffer = lines.pop();
-          lines.forEach(handleLine);
-          return pump();
-        });
-      }
-
-      return pump().then(function () {
-        if (!finalReport) { throw new Error("Stream ended without a result."); }
-        return finalReport;
-      });
-    }).then(function (report) {
-      return new Promise(function (resolve) { setTimeout(resolve, 350); }).then(function () {
-        render(report);
-        closePanel();
-      });
-    }).catch(function (err) {
-      showError(err && err.message ? err.message : "Request failed.");
-    }).then(function () {
-      setBusy(false);
-    });
-  }
-
-  form.addEventListener("submit", function (event) {
-    event.preventDefault();
-    var question = input.value.trim();
-    if (!question) {
-      showError("Enter a clinical question first.");
-      return;
-    }
-    streamAsk(question);
-  });
-
-  SEED_QUESTIONS.forEach(function (question, index) {
-    var b = document.createElement("button");
-    b.type = "button";
-    b.textContent = index === 0 ? "Try: " + question : question;
-    b.addEventListener("click", function () {
-      input.value = question;
-      input.focus();
-    });
-    seeds.appendChild(b);
-  });
-
-  // --- health probe ------------------------------------------------------
-
-  fetch("/api/health").then(function (r) { return r.json(); }).then(function (h) {
-    health.className = "status-dot live";
-    health.innerHTML = "<i></i><span>" + esc(h.llm_model || "model unknown") +
-      " &middot; " + esc(h.keys_count) + " key" +
-      (num(h.keys_count) === 1 ? "" : "s") + "</span>";
-    var parts = [];
-    if (h.llm_model) { parts.push("default: " + h.llm_model); }
-    if (h.sensitive_model) { parts.push("entailment: " + h.sensitive_model); }
-    footModel.textContent = parts.join("  \\u00b7  ");
-  }).catch(function () {
-    health.className = "status-dot down";
-    health.innerHTML = "<i></i><span>service unreachable</span>";
-  });
-
-  input.focus();
-}());
-</script>
-</body>
-</html>
-"""
-
-
-def build_index_html(disclaimer: str = DISCLAIMER, pool_cap: int = 30) -> str:
-    """Render the single-page UI with the canonical disclaimer injected.
-
-    A plain ``str.replace`` (not ``format``) because the template is full of
-    CSS/JS braces. ``pool_cap`` feeds the header stat strip (see
-    Settings.pool_cap) so the on-page number never drifts from the running
-    configuration.
-    """
+#: The built frontend, produced by `npm run build` in web/. Resolved once
+#: at import time; do_GET re-checks .exists() per request so a build that
+#: appears while the server is already running (or a fresh checkout with
+#: no build yet) is handled without a restart.
+WEB_DIST = (Path(__file__).parent.parent / "web" / "dist").resolve()
+
+#: The ONLY cross-origin caller this API ever needs to trust: the
+#: frontend's own Vite dev server (see web/vite.config.ts's proxy comment
+#: -- in production the built frontend is same-origin and needs no CORS
+#: allowance at all). See _cors()'s docstring for why this must never
+#: become a wildcard.
+_DEV_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
+
+
+def _no_build_message() -> bytes:
     return (
-        INDEX_TEMPLATE.replace("{{DISCLAIMER}}", disclaimer)
-        .replace("{{POOL_CAP}}", str(pool_cap))
+        b"<!doctype html><html><body style=\"font-family:monospace;padding:2rem\">"
+        b"<h1>EvidenceBoard API is running, but the frontend isn't built yet.</h1>"
+        b"<p>Run <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>, "
+        b"then reload -- or run <code>npm run dev</code> in web/ for local development "
+        b"(it proxies /api/* to this server).</p>"
+        b"<p>The API itself is live: <a href=\"/api/health\">/api/health</a></p>"
+        b"</body></html>"
     )
 
 
@@ -1559,18 +97,21 @@ def build_index_html(disclaimer: str = DISCLAIMER, pool_cap: int = 30) -> str:
 
 
 class EvidenceHandler(BaseHTTPRequestHandler):
-    """Serves the UI and the JSON API over one shared pipeline instance.
+    """Serves the built frontend (if present) and the JSON API over one
+    shared pipeline instance + one shared history/cache database.
 
-    ``pipeline``, ``use_mock`` and ``settings`` are class attributes set once
-    by :func:`run_server`: every request thread reads the same pipeline, which
-    is safe because the agents hold no per-question state.
+    ``pipeline``, ``use_mock``, ``settings`` and ``db`` are class
+    attributes set once by :func:`run_server`: every request thread reads
+    the same objects, which is safe because the agents hold no
+    per-question state and ``db`` writes are internally serialized (see
+    core/store.py's ``_write_lock``).
     """
 
     #: Shared, set by run_server() before the server starts accepting.
     pipeline: Optional[EvidencePipeline] = None
     use_mock: bool = False
     settings: Optional[Settings] = None
-    index_html: str = ""
+    db: Optional[sqlite3.Connection] = None
 
     server_version = "EvidenceBoard/1.0"
     sys_version = ""  # do not advertise the Python version
@@ -1579,10 +120,33 @@ class EvidenceHandler(BaseHTTPRequestHandler):
     # --- response plumbing -------------------------------------------------
 
     def _cors(self) -> None:
-        """CORS headers (identical on every response, incl. errors)."""
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        """CORS headers (identical on every response, incl. errors).
+
+        Origin-allowlisted, NOT wildcard -- see the security-review note on
+        _DEV_ORIGINS. A wildcard `Access-Control-Allow-Origin: *` combined
+        with DELETE would let ANY website the user has open in another tab
+        silently issue `DELETE /api/history` (bulk-wipe, needs only the
+        static `{"confirm":true}` body) or read `GET /api/history` (which
+        can contain sensitive clinical questions) via a background
+        cross-origin fetch -- the browser's CORS preflight would approve
+        it, no user interaction beyond having this server running. Two
+        origins never need this header at all regardless of what it says:
+        same-origin requests (the built frontend in production) and non-
+        browser clients (curl, contract.md's examples) -- CORS is a
+        browser-only, response-reading restriction. So this only actually
+        restricts an unrecognized third-party origin, which is the point.
+        """
+        origin = self.headers.get("Origin")
+        if origin in _DEV_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # else: no Origin header (same-origin/non-browser -- unaffected, see
+        # above) or an origin we don't recognize -- send no CORS headers at
+        # all, so a browser blocks every cross-origin use, read or write,
+        # from anywhere else. Allow-Methods/-Headers would be meaningless
+        # without a matching Allow-Origin anyway.
 
     def _respond(self, status: int, body: bytes, content_type: str) -> None:
         """Send one complete response (headers + body)."""
@@ -1635,20 +199,19 @@ class EvidenceHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path in ("/", "/index.html"):
-            html = self.index_html or build_index_html(
-                pool_cap=self.settings.pool_cap if self.settings else 30
-            )
-            self._respond(
-                200,
-                html.encode("utf-8"),
-                "text/html; charset=utf-8",
-            )
-            return
         if path == "/api/health":
             self._send_json(200, self._health())
             return
-        self._send_error_json(404, f"no such endpoint: {path}")
+        if path == "/api/history":
+            self._handle_history_list()
+            return
+        if path.startswith("/api/history/"):
+            self._handle_history_detail(path[len("/api/history/"):])
+            return
+        if path.startswith("/api/"):
+            self._send_error_json(404, f"no such endpoint: {path}")
+            return
+        self._serve_static(path)
 
     def do_HEAD(self) -> None:  # noqa: N802
         """Same routing as GET; _respond() suppresses the body."""
@@ -1663,6 +226,54 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             self._handle_ask_stream()
             return
         self._send_error_json(404, f"no such endpoint: {path}")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path == "/api/history":
+            self._handle_history_clear()
+            return
+        if path.startswith("/api/history/"):
+            self._handle_history_delete(path[len("/api/history/"):])
+            return
+        self._send_error_json(404, f"no such endpoint: {path}")
+
+    # --- static file serving (production: the built frontend) ---------------
+
+    def _serve_static(self, path: str) -> None:
+        """Serve ../web/dist -- the built frontend uses HashRouter (routes
+        are '/#/ask', '/#/history', never real server paths), so there is
+        deliberately NO SPA-fallback/catch-all route here: every real GET
+        path is either '/', '/index.html', or a literal file under
+        web/dist/assets/. That keeps this handler's path-traversal surface
+        to "does the resolved path stay inside WEB_DIST", not "reimplement
+        client-side routing on the server" -- see the plan's security
+        review notes on this being new attack surface.
+        """
+        if not WEB_DIST.is_dir():
+            self._respond(200, _no_build_message(), "text/html; charset=utf-8")
+            return
+
+        rel = "index.html" if path in ("/", "/index.html") else path.lstrip("/")
+        try:
+            resolved = (WEB_DIST / rel).resolve()
+        except (OSError, ValueError):
+            self._send_error_json(400, "malformed path")
+            return
+
+        if resolved != WEB_DIST and WEB_DIST not in resolved.parents:
+            # Would escape web/dist/ (e.g. "..%2f..%2fetc/passwd") -- reject
+            # outright rather than let it fall through to a 404 that might
+            # leak whether the file exists elsewhere on disk.
+            self._send_error_json(403, "forbidden")
+            return
+        if not resolved.is_file():
+            self._send_error_json(404, f"no such file: {path}")
+            return
+
+        content_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
+            content_type += "; charset=utf-8"
+        self._respond(200, resolved.read_bytes(), content_type)
 
     # --- endpoint implementations -------------------------------------------
 
@@ -1681,14 +292,18 @@ class EvidenceHandler(BaseHTTPRequestHandler):
 
         Raises ValueError with a client-facing message for anything the
         caller can fix (bad length, oversized body, malformed JSON).
+        Returns {} for a DELETE with no body (confirm-flag endpoints check
+        for that explicitly rather than treating an empty body as a 400).
         """
         raw_length = self.headers.get("Content-Length")
         try:
             length = int(raw_length or 0)
         except ValueError:
             raise ValueError("invalid Content-Length header")
-        if length <= 0:
-            raise ValueError("request body is empty")
+        if length == 0:
+            return {}
+        if length < 0:
+            raise ValueError("invalid Content-Length header")
         if length > MAX_BODY_BYTES:
             raise ValueError(f"request body exceeds {MAX_BODY_BYTES} bytes")
         raw = self.rfile.read(length)
@@ -1700,23 +315,133 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return payload
 
-    def _handle_ask(self) -> None:
-        """POST /api/ask -- run one question through the pipeline.
+    # --- history / cache -----------------------------------------------------
 
-        An abstention is a successful outcome (HTTP 200 with
-        ``abstained: true``), so 500 here means the server itself broke.
-        """
+    def _check_cache(self, cache_key: str) -> Optional[dict]:
+        if self.db is None:
+            return None
+        return store.find_cached(self.db, cache_key)
+
+    def _record(self, *, question: str, cache_key: str, report: dict, source: str) -> Optional[str]:
+        if self.db is None:
+            return None
+        try:
+            return store.record_run(
+                self.db, question=question, cache_key=cache_key,
+                report=report, abstained=bool(report.get("abstained")), source=source,
+            )
+        except Exception as exc:  # history is a convenience, never a hard dependency
+            print(f"[server] failed to record history ({exc}); continuing")
+            return None
+
+    def _handle_history_list(self) -> None:
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(self.path).query)
+
+        def _int_param(name: str, default: int) -> int:
+            raw = query.get(name, [None])[0]
+            if raw is None:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                raise ValueError(f"'{name}' must be an integer")
+
+        try:
+            limit = _int_param("limit", 50)
+            offset = _int_param("offset", 0)
+        except ValueError as exc:
+            self._send_error_json(400, str(exc))
+            return
+
+        abstained: Optional[bool] = None
+        raw_abstained = query.get("abstained", [None])[0]
+        if raw_abstained is not None:
+            abstained = raw_abstained.strip().lower() in ("1", "true", "yes")
+
+        if self.db is None:
+            self._send_json(200, {"runs": [], "total": 0})
+            return
+        runs, total = store.list_runs(self.db, limit=limit, offset=offset, abstained=abstained)
+        self._send_json(200, {"runs": runs, "total": total})
+
+    def _handle_history_detail(self, run_id: str) -> None:
+        if not store.RUN_ID_PATTERN.match(run_id):
+            self._send_error_json(400, "malformed run id")
+            return
+        if self.db is None:
+            self._send_error_json(404, f"no such run: {run_id}")
+            return
+        run = store.get_run(self.db, run_id)
+        if run is None:
+            self._send_error_json(404, f"no such run: {run_id}")
+            return
+        self._send_json(200, run)
+
+    def _handle_history_delete(self, run_id: str) -> None:
+        if not store.RUN_ID_PATTERN.match(run_id):
+            self._send_error_json(400, "malformed run id")
+            return
+        if self.db is None or not store.delete_run(self.db, run_id):
+            self._send_error_json(404, f"no such run: {run_id}")
+            return
+        self._respond(204, b"", "application/json; charset=utf-8")
+
+    def _handle_history_clear(self) -> None:
         try:
             payload = self._read_json_body()
         except ValueError as exc:
             self._send_error_json(400, str(exc))
             return
+        if payload.get("confirm") is not True:
+            self._send_error_json(400, "clearing all history requires a JSON body of {\"confirm\": true}")
+            return
+        deleted = store.clear_all(self.db) if self.db is not None else 0
+        self._send_json(200, {"deleted": deleted})
 
+    # --- ask -----------------------------------------------------------------
+
+    def _read_ask_payload(self) -> Optional[tuple[str, bool]]:
+        """Shared body parsing for /api/ask and /api/ask/stream.
+
+        Returns (question, force_refresh) or None after already having
+        sent an error response.
+        """
+        try:
+            payload = self._read_json_body()
+        except ValueError as exc:
+            self._send_error_json(400, str(exc))
+            return None
         question = payload.get("question")
         if not isinstance(question, str) or not question.strip():
             self._send_error_json(400, "field 'question' is required and must be a non-empty string")
+            return None
+        force_refresh = payload.get("force_refresh") is True
+        return question.strip(), force_refresh
+
+    def _handle_ask(self) -> None:
+        """POST /api/ask -- run one question through the pipeline (or
+        replay a cached report), synchronously.
+
+        An abstention is a successful outcome (HTTP 200 with
+        ``abstained: true``), so 500 here means the server itself broke.
+        """
+        parsed = self._read_ask_payload()
+        if parsed is None:
             return
-        question = question.strip()
+        question, force_refresh = parsed
+        cache_key = store.normalize_question(question)
+
+        if not force_refresh:
+            cached = self._check_cache(cache_key)
+            if cached is not None:
+                print(f"[server] ask (cache hit): {question[:120]}")
+                report = dict(cached["report"])
+                report["cached"] = True
+                report["run_id"] = cached["id"]
+                self._send_json(200, report)
+                return
 
         if self.pipeline is None:
             self._send_error_json(503, "pipeline is not available on this server")
@@ -1737,6 +462,14 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             self._send_error_json(500, "pipeline returned a malformed report")
             return
 
+        run_id = self._record(
+            question=question, cache_key=cache_key, report=report,
+            source="mock" if self.use_mock else "live",
+        )
+        report = dict(report)
+        report["cached"] = False
+        report["run_id"] = run_id
+
         try:
             self._send_json(200, report)
         except (TypeError, ValueError) as exc:
@@ -1752,38 +485,25 @@ class EvidenceHandler(BaseHTTPRequestHandler):
     def _handle_ask_stream(self) -> None:
         """POST /api/ask/stream -- same question, but pushes one NDJSON
         line per real pipeline stage as it actually completes, then a
-        final line with the full report.
+        final line with the full report. A cache hit sends exactly one
+        ``{"type":"cache_hit",...}`` line instead -- NEVER a faked set of
+        six stage events for agents that didn't run this time.
 
-        Every progress line comes from EvidencePipeline's on_event
-        callback (see pipeline.py): real stage boundaries, real counts,
-        real LLM-call deltas from the shared FailoverLLMClient. Nothing
-        here is timed or simulated -- if a stage is slow, its line simply
-        arrives late. This is what makes the UI's live agent panel an
-        honest signal of whether the model is actually being called,
-        not a paced animation.
+        Every progress line otherwise comes from EvidencePipeline's
+        on_event callback (see pipeline.py): real stage boundaries, real
+        counts, real LLM-call deltas from the shared FailoverLLMClient.
+        Nothing here is timed or simulated -- if a stage is slow, its line
+        simply arrives late.
 
         Framed as HTTP/1.1 chunked transfer (no Content-Length is
         possible for a body whose length isn't known up front) so the
         connection stays keep-alive-safe like every other response here.
         """
-        try:
-            payload = self._read_json_body()
-        except ValueError as exc:
-            self._send_error_json(400, str(exc))
+        parsed = self._read_ask_payload()
+        if parsed is None:
             return
-
-        question = payload.get("question")
-        if not isinstance(question, str) or not question.strip():
-            self._send_error_json(400, "field 'question' is required and must be a non-empty string")
-            return
-        question = question.strip()
-
-        if self.pipeline is None:
-            self._send_error_json(503, "pipeline is not available on this server")
-            return
-
-        mode = " (mock)" if self.use_mock else ""
-        print(f"[server] ask{mode} (stream): {question[:120]}")
+        question, force_refresh = parsed
+        cache_key = store.normalize_question(question)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -1795,6 +515,36 @@ class EvidenceHandler(BaseHTTPRequestHandler):
         def send_line(payload: dict) -> None:
             line = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
             self._write_chunk(line)
+
+        if not force_refresh:
+            cached = self._check_cache(cache_key)
+            if cached is not None:
+                print(f"[server] ask (stream, cache hit): {question[:120]}")
+                try:
+                    send_line({"type": "cache_hit", "run_id": cached["id"], "cached_at": cached["created_at"]})
+                    report = dict(cached["report"])
+                    report["cached"] = True
+                    report["run_id"] = cached["id"]
+                    send_line({"type": "result", "report": report})
+                except Exception as exc:
+                    print(f"[server] stream write failed ({exc}); client likely gone")
+                finally:
+                    try:
+                        self._end_chunks()
+                    except Exception:
+                        pass
+                return
+
+        if self.pipeline is None:
+            try:
+                send_line({"type": "error", "error": "pipeline is not available on this server"})
+                self._end_chunks()
+            except Exception:
+                pass
+            return
+
+        mode = " (mock)" if self.use_mock else ""
+        print(f"[server] ask{mode} (stream): {question[:120]}")
 
         def on_event(event: dict) -> None:
             # A client that has gone away must not break the pipeline run
@@ -1827,6 +577,14 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             return
+
+        run_id = self._record(
+            question=question, cache_key=cache_key, report=report,
+            source="mock" if self.use_mock else "live",
+        )
+        report = dict(report)
+        report["cached"] = False
+        report["run_id"] = run_id
 
         try:
             send_line({"type": "result", "report": report})
@@ -1864,14 +622,19 @@ def run_server(
     EvidenceHandler.pipeline = pipeline
     EvidenceHandler.settings = settings
     EvidenceHandler.use_mock = use_mock
-    EvidenceHandler.index_html = build_index_html(pool_cap=settings.pool_cap)
+    EvidenceHandler.db = store.connect(settings.db_path)
 
     httpd = ThreadingHTTPServer((settings.server_host, settings.server_port), EvidenceHandler)
     httpd.daemon_threads = True
     host, port = settings.server_host, settings.server_port
     print(f"[server] listening on http://{host}:{port}")
+    print(f"[server] history/cache database: {settings.db_path}")
+    if WEB_DIST.is_dir():
+        print(f"[server] serving built frontend from {WEB_DIST}")
+    else:
+        print("[server] no frontend build found -- run `npm run build` in web/, or `npm run dev` there for local development")
     if use_mock:
-        print("[server] mock mode: /api/ask replays demo/mock_response.json")
+        print("[server] mock mode: every ask replays demo/mock_response.json")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -1895,12 +658,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="api.server",
-        description="Serve the EvidenceBoard UI and JSON API (stdlib only).",
+        description="Serve the EvidenceBoard API (and built frontend, if present).",
     )
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="replay demo/mock_response.json for every /api/ask (offline demo)",
+        help="replay demo/mock_response.json for every ask (offline demo)",
     )
     args = parser.parse_args(argv)
 
