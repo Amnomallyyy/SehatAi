@@ -132,6 +132,7 @@ class Settings:
     llm_timeout: int = 60
     server_host: str = "127.0.0.1"
     server_port: int = 8000
+    db_path: str = "evidenceboard.db"  # history + response cache (core/store.py)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -151,6 +152,7 @@ class Settings:
             llm_timeout=_env_int("LLM_TIMEOUT", 60),
             server_host=_env_str("SERVER_HOST", "127.0.0.1"),
             server_port=_env_int("SERVER_PORT", 8000),
+            db_path=_env_str("DB_PATH", "evidenceboard.db"),
         )
 
     @property
