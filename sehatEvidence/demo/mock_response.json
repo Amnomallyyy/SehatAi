@@ -1,335 +1,361 @@
 {
-    "question": "Does SGLT2 inhibitor therapy reduce heart failure hospitalization in patients with type 2 diabetes?",
-    "abstained": false,
-    "abstain_reasons": [],
-    "funnel": {
-        "claims_generated": 7,
-        "claims_deleted": 2,
-        "claims_kept": 5,
-        "by_reason": {
-            "unsupported by cited evidence": 1,
-            "citation unresolvable: EPMC/PPR512843": 1
+  "question": "Does SGLT2 inhibitor therapy reduce heart failure hospitalization in patients with type 2 diabetes?",
+  "abstained": false,
+  "abstain_reasons": [],
+  "funnel": {
+    "claims_generated": 7,
+    "claims_deleted": 2,
+    "claims_kept": 5,
+    "by_reason": {
+      "unsupported by cited evidence": 1,
+      "citation unresolvable: EPMC/PPR512843": 1
+    }
+  },
+  "answer_text": "In adults with type 2 diabetes and established or high risk of atherosclerotic cardiovascular disease, dapagliflozin reduced the composite of cardiovascular death or hospitalization for heart failure, an effect driven almost entirely by a 27% relative reduction in heart failure hospitalization [S1]. Empagliflozin produced a consistent 30% relative reduction in first hospitalization for heart failure in patients with reduced ejection fraction, and the benefit was of similar magnitude in the prespecified subgroups with and without diabetes [S2]. A meta-analysis of five large cardiovascular outcome trials estimated a pooled hazard ratio of 0.68 for hospitalization for heart failure with SGLT2 inhibition in type 2 diabetes, with no meaningful heterogeneity between agents [S3]. Separation of the heart failure hospitalization curves appeared within the first few months of randomization, earlier than would be expected from glucose lowering alone [S1] [S4]. In routine care, initiation of an SGLT2 inhibitor rather than a DPP-4 inhibitor was associated with a lower rate of heart failure hospitalization, although residual confounding by indication cannot be excluded in an observational design [S6].",
+  "claims": [
+    {
+      "claim_id": "s0-c0",
+      "text": "In adults with type 2 diabetes and established or high risk of atherosclerotic cardiovascular disease, dapagliflozin reduced the composite of cardiovascular death or hospitalization for heart failure, an effect driven almost entirely by a 27% relative reduction in heart failure hospitalization [S1].",
+      "status": "kept",
+      "deletion_reason": null,
+      "flags": [],
+      "checks": {
+        "existence": "pass",
+        "entailment": "supports",
+        "standing": "pass"
+      },
+      "verdict": "SUPPORTS",
+      "confidence": 0.94,
+      "evidence_quote": "Dapagliflozin resulted in a lower rate of cardiovascular death or hospitalization for heart failure (4.9% vs. 5.8%; hazard ratio, 0.83; 95% CI, 0.73 to 0.95; P=0.005), which reflected a lower rate of hospitalization for heart failure (hazard ratio, 0.73; 95% CI, 0.61 to 0.88).",
+      "citations": [
+        {
+          "sid": "S1",
+          "citation_key": "MED/30415602",
+          "title": "Dapagliflozin and Cardiovascular Outcomes in Type 2 Diabetes",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/30415602"
         }
+      ],
+      "flag_details": []
     },
-    "answer_text": "In adults with type 2 diabetes and established or high risk of atherosclerotic cardiovascular disease, dapagliflozin reduced the composite of cardiovascular death or hospitalization for heart failure, an effect driven almost entirely by a 27% relative reduction in heart failure hospitalization [S1]. Empagliflozin produced a consistent 30% relative reduction in first hospitalization for heart failure in patients with reduced ejection fraction, and the benefit was of similar magnitude in the prespecified subgroups with and without diabetes [S2]. A meta-analysis of five large cardiovascular outcome trials estimated a pooled hazard ratio of 0.68 for hospitalization for heart failure with SGLT2 inhibition in type 2 diabetes, with no meaningful heterogeneity between agents [S3]. Separation of the heart failure hospitalization curves appeared within the first few months of randomization, earlier than would be expected from glucose lowering alone [S1] [S4]. In routine care, initiation of an SGLT2 inhibitor rather than a DPP-4 inhibitor was associated with a lower rate of heart failure hospitalization, although residual confounding by indication cannot be excluded in an observational design [S6].",
-    "claims": [
+    {
+      "claim_id": "s0-c1",
+      "text": "Empagliflozin produced a consistent 30% relative reduction in first hospitalization for heart failure in patients with reduced ejection fraction, and the benefit was of similar magnitude in the prespecified subgroups with and without diabetes [S2].",
+      "status": "kept",
+      "deletion_reason": null,
+      "flags": [],
+      "checks": {
+        "existence": "pass",
+        "entailment": "supports",
+        "standing": "pass"
+      },
+      "verdict": "SUPPORTS",
+      "confidence": 0.91,
+      "evidence_quote": "The total number of hospitalizations for heart failure was lower in the empagliflozin group than in the placebo group (hazard ratio, 0.70; 95% CI, 0.58 to 0.85; P<0.001). The effects of empagliflozin were similar in patients with or without diabetes at baseline.",
+      "citations": [
         {
-            "claim_id": "s0-c0",
-            "text": "In adults with type 2 diabetes and established or high risk of atherosclerotic cardiovascular disease, dapagliflozin reduced the composite of cardiovascular death or hospitalization for heart failure, an effect driven almost entirely by a 27% relative reduction in heart failure hospitalization [S1].",
-            "status": "kept",
-            "deletion_reason": null,
-            "flags": [],
-            "checks": {
-                "existence": "pass",
-                "entailment": "supports",
-                "standing": "pass"
-            },
-            "verdict": "SUPPORTS",
-            "confidence": 0.94,
-            "evidence_quote": "Dapagliflozin resulted in a lower rate of cardiovascular death or hospitalization for heart failure (4.9% vs. 5.8%; hazard ratio, 0.83; 95% CI, 0.73 to 0.95; P=0.005), which reflected a lower rate of hospitalization for heart failure (hazard ratio, 0.73; 95% CI, 0.61 to 0.88).",
-            "citations": [
-                {
-                    "sid": "S1",
-                    "citation_key": "MED/30415602",
-                    "title": "Dapagliflozin and Cardiovascular Outcomes in Type 2 Diabetes",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/30415602"
-                }
-            ]
-        },
-        {
-            "claim_id": "s0-c1",
-            "text": "Empagliflozin produced a consistent 30% relative reduction in first hospitalization for heart failure in patients with reduced ejection fraction, and the benefit was of similar magnitude in the prespecified subgroups with and without diabetes [S2].",
-            "status": "kept",
-            "deletion_reason": null,
-            "flags": [],
-            "checks": {
-                "existence": "pass",
-                "entailment": "supports",
-                "standing": "pass"
-            },
-            "verdict": "SUPPORTS",
-            "confidence": 0.91,
-            "evidence_quote": "The total number of hospitalizations for heart failure was lower in the empagliflozin group than in the placebo group (hazard ratio, 0.70; 95% CI, 0.58 to 0.85; P<0.001). The effects of empagliflozin were similar in patients with or without diabetes at baseline.",
-            "citations": [
-                {
-                    "sid": "S2",
-                    "citation_key": "MED/32865377",
-                    "title": "Cardiovascular and Renal Outcomes with Empagliflozin in Heart Failure with Reduced Ejection Fraction",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/32865377"
-                }
-            ]
-        },
-        {
-            "claim_id": "s1-c0",
-            "text": "A meta-analysis of five large cardiovascular outcome trials estimated a pooled hazard ratio of 0.68 for hospitalization for heart failure with SGLT2 inhibition in type 2 diabetes, with no meaningful heterogeneity between agents [S3].",
-            "status": "kept",
-            "deletion_reason": null,
-            "flags": [],
-            "checks": {
-                "existence": "pass",
-                "entailment": "supports",
-                "standing": "pass"
-            },
-            "verdict": "SUPPORTS",
-            "confidence": 0.89,
-            "evidence_quote": "Across 46,969 participants in five placebo-controlled cardiovascular outcome trials, SGLT2 inhibitors reduced hospitalization for heart failure (HR 0.68, 95% CI 0.61-0.76; I2=0%), with consistent effects across individual agents.",
-            "citations": [
-                {
-                    "sid": "S3",
-                    "citation_key": "MED/34449189",
-                    "title": "SGLT2 Inhibitors and Heart Failure Outcomes in Type 2 Diabetes: A Systematic Review and Meta-Analysis of Cardiovascular Outcome Trials",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/34449189"
-                }
-            ]
-        },
-        {
-            "claim_id": "s2-c0",
-            "text": "Separation of the heart failure hospitalization curves appeared within the first few months of randomization, earlier than would be expected from glucose lowering alone [S1] [S4].",
-            "status": "kept",
-            "deletion_reason": null,
-            "flags": [],
-            "checks": {
-                "existence": "pass",
-                "entailment": "supports",
-                "standing": "pass"
-            },
-            "verdict": "SUPPORTS",
-            "confidence": 0.78,
-            "evidence_quote": "The reduction in the rate of hospitalization for heart failure was apparent within the first 3 months after randomisation and was maintained thereafter, a time course inconsistent with an effect mediated primarily by glycaemic control.",
-            "citations": [
-                {
-                    "sid": "S1",
-                    "citation_key": "MED/30415602",
-                    "title": "Dapagliflozin and Cardiovascular Outcomes in Type 2 Diabetes",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/30415602"
-                },
-                {
-                    "sid": "S4",
-                    "citation_key": "MED/31694747",
-                    "title": "Dapagliflozin in Patients with Heart Failure and Reduced Ejection Fraction",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/31694747"
-                }
-            ]
-        },
-        {
-            "claim_id": "s3-c0",
-            "text": "In routine care, initiation of an SGLT2 inhibitor rather than a DPP-4 inhibitor was associated with a lower rate of heart failure hospitalization, although residual confounding by indication cannot be excluded in an observational design [S6].",
-            "status": "flagged",
-            "deletion_reason": null,
-            "flags": [
-                "weakly supported"
-            ],
-            "checks": {
-                "existence": "pass",
-                "entailment": "supports",
-                "standing": "pass"
-            },
-            "verdict": "SUPPORTS",
-            "confidence": 0.61,
-            "evidence_quote": "In 1:1 propensity-score-matched cohorts of 128,293 patients, SGLT2 inhibitor initiation was associated with a lower rate of hospitalization for heart failure than DPP-4 inhibitor initiation (HR 0.71, 95% CI 0.64-0.79); results were attenuated in analyses restricted to patients without prior heart failure.",
-            "citations": [
-                {
-                    "sid": "S6",
-                    "citation_key": "MED/34728162",
-                    "title": "SGLT2 Inhibitors Versus DPP-4 Inhibitors and Risk of Hospitalization for Heart Failure: A Nationwide Propensity-Score-Matched Cohort Study",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/34728162"
-                }
-            ]
-        },
-        {
-            "claim_id": "s4-c0",
-            "text": "The reduction in heart failure hospitalization is accompanied by a significant reduction in all-cause mortality in patients with type 2 diabetes and preserved ejection fraction [S3].",
-            "status": "deleted",
-            "deletion_reason": "unsupported by cited evidence",
-            "flags": [],
-            "checks": {
-                "existence": "pass",
-                "entailment": "nei",
-                "standing": "skipped"
-            },
-            "verdict": "NOT_ENOUGH_INFO",
-            "confidence": 0.31,
-            "evidence_quote": "All-cause mortality was not significantly reduced (HR 0.90, 95% CI 0.80-1.01), and no preserved-ejection-fraction subgroup analysis was reported.",
-            "citations": [
-                {
-                    "sid": "S3",
-                    "citation_key": "MED/34449189",
-                    "title": "SGLT2 Inhibitors and Heart Failure Outcomes in Type 2 Diabetes: A Systematic Review and Meta-Analysis of Cardiovascular Outcome Trials",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/34449189"
-                }
-            ]
-        },
-        {
-            "claim_id": "s5-c0",
-            "text": "Benefit on heart failure hospitalization extends to patients on maintenance dialysis, in whom SGLT2 inhibitors reduced admissions by roughly one third [S7].",
-            "status": "deleted",
-            "deletion_reason": "citation unresolvable: EPMC/PPR512843",
-            "flags": [],
-            "checks": {
-                "existence": "fail",
-                "entailment": "skipped",
-                "standing": "skipped"
-            },
-            "verdict": null,
-            "confidence": null,
-            "evidence_quote": null,
-            "citations": [
-                {
-                    "sid": "S7",
-                    "citation_key": "EPMC/PPR512843",
-                    "title": "SGLT2 Inhibition in Patients Receiving Maintenance Haemodialysis: A Retrospective Multicentre Analysis",
-                    "url": "https://europepmc.org/article/PPR/PPR512843"
-                }
-            ]
+          "sid": "S2",
+          "citation_key": "MED/32865377",
+          "title": "Cardiovascular and Renal Outcomes with Empagliflozin in Heart Failure with Reduced Ejection Fraction",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/32865377"
         }
-    ],
-    "evidence": [
+      ],
+      "flag_details": []
+    },
+    {
+      "claim_id": "s1-c0",
+      "text": "A meta-analysis of five large cardiovascular outcome trials estimated a pooled hazard ratio of 0.68 for hospitalization for heart failure with SGLT2 inhibition in type 2 diabetes, with no meaningful heterogeneity between agents [S3].",
+      "status": "kept",
+      "deletion_reason": null,
+      "flags": [],
+      "checks": {
+        "existence": "pass",
+        "entailment": "supports",
+        "standing": "pass"
+      },
+      "verdict": "SUPPORTS",
+      "confidence": 0.89,
+      "evidence_quote": "Across 46,969 participants in five placebo-controlled cardiovascular outcome trials, SGLT2 inhibitors reduced hospitalization for heart failure (HR 0.68, 95% CI 0.61-0.76; I2=0%), with consistent effects across individual agents.",
+      "citations": [
         {
-            "sid": "S1",
-            "citation_key": "MED/30415602",
-            "source": "pubmed",
-            "native_id": "30415602",
-            "doi": "10.1056/NEJMoa1812389",
-            "url": "https://pubmed.ncbi.nlm.nih.gov/30415602",
-            "title": "Dapagliflozin and Cardiovascular Outcomes in Type 2 Diabetes",
-            "journal": "The New England Journal of Medicine",
-            "publication_date": "2019-01-24",
-            "study_design": "rct",
-            "trial_status": null,
-            "is_preprint": false,
-            "is_retracted": false,
-            "relevance_score": 95,
-            "rationale": "Large multicentre placebo-controlled cardiovascular outcome trial in exactly the population asked about (type 2 diabetes), with hospitalization for heart failure as a component of the primary composite endpoint. OCEBM level 1b; directly answers the question.",
-            "abstract": "Background: The effect of sodium-glucose cotransporter 2 inhibitors on cardiovascular outcomes in patients with type 2 diabetes across a broad spectrum of cardiovascular risk remains incompletely defined. Methods: We randomly assigned 17,160 patients with type 2 diabetes and established atherosclerotic cardiovascular disease or multiple risk factors to receive dapagliflozin 10 mg daily or placebo, with a median follow-up of 4.2 years. Results: Dapagliflozin resulted in a lower rate of cardiovascular death or hospitalization for heart failure (4.9% vs. 5.8%; hazard ratio, 0.83; 95% CI, 0.73 to 0.95; P=0.005), which reflected a lower rate of hospitalization for heart failure (hazard ratio, 0.73; 95% CI, 0.61 to 0.88); there was no between-group difference in cardiovascular death. The reduction in the rate of hospitalization for heart failure was apparent within the first 3 months after randomisation and was maintained thereafter, a time course inconsistent with an effect mediated primarily by glycaemic control. Conclusions: In patients with type 2 diabetes, dapagliflozin reduced hospitalization for heart failure without a significant reduction in the rate of major adverse cardiovascular events."
-        },
-        {
-            "sid": "S2",
-            "citation_key": "MED/32865377",
-            "source": "pubmed",
-            "native_id": "32865377",
-            "doi": "10.1056/NEJMoa2022190",
-            "url": "https://pubmed.ncbi.nlm.nih.gov/32865377",
-            "title": "Cardiovascular and Renal Outcomes with Empagliflozin in Heart Failure with Reduced Ejection Fraction",
-            "journal": "The New England Journal of Medicine",
-            "publication_date": "2020-10-08",
-            "study_design": "rct",
-            "trial_status": null,
-            "is_preprint": false,
-            "is_retracted": false,
-            "relevance_score": 93,
-            "rationale": "Pivotal placebo-controlled RCT with hospitalization for heart failure in the primary composite endpoint and a prespecified diabetes subgroup, so it speaks to the diabetic population directly. OCEBM level 1b; slightly indirect because enrolment was defined by heart failure rather than by diabetes.",
-            "abstract": "Background: Sodium-glucose cotransporter 2 inhibitors reduce the risk of heart failure events in patients with type 2 diabetes, but their effect in patients with established heart failure and a reduced ejection fraction, with or without diabetes, required dedicated evaluation. Methods: We randomly assigned 3,730 patients with class II-IV heart failure and an ejection fraction of 40% or less to receive empagliflozin 10 mg once daily or placebo, in addition to recommended therapy. Results: The primary outcome of cardiovascular death or hospitalization for heart failure occurred in 361 of 1,863 patients in the empagliflozin group and 462 of 1,867 patients in the placebo group (hazard ratio, 0.75; 95% CI, 0.65 to 0.86; P<0.001). The total number of hospitalizations for heart failure was lower in the empagliflozin group than in the placebo group (hazard ratio, 0.70; 95% CI, 0.58 to 0.85; P<0.001). The effects of empagliflozin were similar in patients with or without diabetes at baseline. Uncomplicated genital tract infection was reported more frequently with empagliflozin. Conclusions: Empagliflozin reduced the combined risk of cardiovascular death or hospitalization for heart failure regardless of the presence of diabetes."
-        },
-        {
-            "sid": "S3",
-            "citation_key": "MED/34449189",
-            "source": "pubmed",
-            "native_id": "34449189",
-            "doi": "10.1016/S0140-6736(21)01234-5",
-            "url": "https://pubmed.ncbi.nlm.nih.gov/34449189",
-            "title": "SGLT2 Inhibitors and Heart Failure Outcomes in Type 2 Diabetes: A Systematic Review and Meta-Analysis of Cardiovascular Outcome Trials",
-            "journal": "The Lancet",
-            "publication_date": "2022-05-14",
-            "study_design": "meta_analysis",
-            "trial_status": null,
-            "is_preprint": false,
-            "is_retracted": false,
-            "relevance_score": 90,
-            "rationale": "Pooled analysis of the placebo-controlled cardiovascular outcome trials with heart failure hospitalization as a prespecified outcome. Highest evidence tier for the question, though re-based to OCEBM 2a because the pooled estimate carries trial-level rather than patient-level data.",
-            "abstract": "Background: Individual cardiovascular outcome trials of SGLT2 inhibitors in type 2 diabetes were powered for composite atherosclerotic endpoints rather than for heart failure hospitalization. Methods: We searched MEDLINE, Embase and CENTRAL to 31 December 2021 for placebo-controlled cardiovascular outcome trials of SGLT2 inhibitors enrolling adults with type 2 diabetes, and pooled outcomes using random-effects models. Findings: Across 46,969 participants in five placebo-controlled cardiovascular outcome trials, SGLT2 inhibitors reduced hospitalization for heart failure (HR 0.68, 95% CI 0.61-0.76; I2=0%), with consistent effects across individual agents. Major adverse cardiovascular events were modestly reduced (HR 0.90, 95% CI 0.85-0.95), and the effect on heart failure hospitalization was larger in participants with a baseline history of heart failure (P for interaction 0.02). All-cause mortality was not significantly reduced (HR 0.90, 95% CI 0.80-1.01), and no preserved-ejection-fraction subgroup analysis was reported. Interpretation: SGLT2 inhibition consistently and substantially reduces hospitalization for heart failure in type 2 diabetes."
-        },
-        {
-            "sid": "S4",
-            "citation_key": "MED/31694747",
-            "source": "pubmed",
-            "native_id": "31694747",
-            "doi": "10.1056/NEJMoa1911303",
-            "url": "https://pubmed.ncbi.nlm.nih.gov/31694747",
-            "title": "Dapagliflozin in Patients with Heart Failure and Reduced Ejection Fraction",
-            "journal": "The New England Journal of Medicine",
-            "publication_date": "2019-11-21",
-            "study_design": "rct",
-            "trial_status": null,
-            "is_preprint": false,
-            "is_retracted": false,
-            "relevance_score": 86,
-            "rationale": "Randomised placebo-controlled trial reporting worsening heart failure events and an early time-to-event separation; the diabetic subgroup was prespecified. OCEBM level 1b, one step indirect for a diabetes-framed question.",
-            "abstract": "Background: In patients with type 2 diabetes, SGLT2 inhibitors reduce the risk of a first hospitalization for heart failure, possibly through glucose-independent mechanisms. Methods: We randomly assigned 4,744 patients with New York Heart Association class II-IV heart failure and an ejection fraction of 40% or less to receive dapagliflozin 10 mg once daily or placebo, in addition to recommended therapy; 45% of participants had type 2 diabetes at baseline. Results: The primary composite outcome of worsening heart failure or cardiovascular death occurred in 386 of 2,373 patients in the dapagliflozin group and 502 of 2,371 patients in the placebo group (hazard ratio, 0.74; 95% CI, 0.65 to 0.85; P<0.001). Hospitalization for heart failure occurred in 231 versus 318 patients (hazard ratio, 0.70; 95% CI, 0.59 to 0.83). Curves for hospitalization for heart failure separated within 28 days of randomisation. Findings were similar in patients with and without type 2 diabetes. Conclusions: Among patients with heart failure and a reduced ejection fraction, dapagliflozin reduced the risk of worsening heart failure or cardiovascular death regardless of diabetes status."
-        },
-        {
-            "sid": "S5",
-            "citation_key": "NCT/NCT03619213",
-            "source": "clinical_trials",
-            "native_id": "NCT03619213",
-            "doi": null,
-            "url": "https://clinicaltrials.gov/study/NCT03619213",
-            "title": "Empagliflozin Outcome Trial in Patients With Chronic Heart Failure and Type 2 Diabetes (EMPACT-HF)",
-            "journal": null,
-            "publication_date": "2023-08-02",
-            "study_design": "clinical_trial_record",
-            "trial_status": "COMPLETED",
-            "is_preprint": false,
-            "is_retracted": false,
-            "relevance_score": 74,
-            "rationale": "Completed phase 3 registry record with hospitalization for heart failure as the primary endpoint in a diabetic population. Registration records are protocol-level evidence rather than peer-reviewed results, so it is capped below the published trials but confirms the outcome definition and prespecified analysis.",
-            "abstract": "Brief summary: This phase 3, randomised, double-blind, placebo-controlled trial evaluated whether empagliflozin 10 mg once daily reduces the risk of hospitalization for heart failure or cardiovascular death in adults with chronic heart failure and type 2 diabetes receiving guideline-directed medical therapy. Primary outcome measure: time to first adjudicated hospitalization for heart failure or cardiovascular death, assessed up to 36 months. Enrolment: 2,412 participants at 214 sites. Overall status: COMPLETED. Results posted: yes."
-        },
-        {
-            "sid": "S6",
-            "citation_key": "MED/34728162",
-            "source": "pubmed",
-            "native_id": "34728162",
-            "doi": "10.1161/CIRCULATIONAHA.121.055364",
-            "url": "https://pubmed.ncbi.nlm.nih.gov/34728162",
-            "title": "SGLT2 Inhibitors Versus DPP-4 Inhibitors and Risk of Hospitalization for Heart Failure: A Nationwide Propensity-Score-Matched Cohort Study",
-            "journal": "Circulation",
-            "publication_date": "2021-09-07",
-            "study_design": "cohort",
-            "trial_status": null,
-            "is_preprint": false,
-            "is_retracted": false,
-            "relevance_score": 68,
-            "rationale": "Large active-comparator new-user cohort study providing routine-care effectiveness data in the population of interest. Observational design caps it at the cohort tier; confounding by indication remains plausible despite propensity-score matching.",
-            "abstract": "Background: Whether the heart failure benefits observed in SGLT2 inhibitor trials translate to routine clinical practice is uncertain. Methods: Using two nationwide claims databases, we conducted an active-comparator, new-user cohort study of adults with type 2 diabetes initiating an SGLT2 inhibitor or a DPP-4 inhibitor between 2014 and 2020, with 1:1 propensity-score matching on 78 baseline covariates. Results: In 1:1 propensity-score-matched cohorts of 128,293 patients, SGLT2 inhibitor initiation was associated with a lower rate of hospitalization for heart failure than DPP-4 inhibitor initiation (HR 0.71, 95% CI 0.64-0.79); results were attenuated in analyses restricted to patients without prior heart failure. Rates of diabetic ketoacidosis were higher with SGLT2 inhibitors. Conclusions: Routine-care data are consistent with the trial evidence, with the caveat that residual confounding by indication cannot be excluded."
-        },
-        {
-            "sid": "S7",
-            "citation_key": "EPMC/PPR512843",
-            "source": "europe_pmc",
-            "native_id": "PPR512843",
-            "doi": "10.1101/2024.02.11.24302518",
-            "url": "https://europepmc.org/article/PPR/PPR512843",
-            "title": "SGLT2 Inhibition in Patients Receiving Maintenance Haemodialysis: A Retrospective Multicentre Analysis",
-            "journal": "medRxiv",
-            "publication_date": "2024-02-14",
-            "study_design": "preprint",
-            "trial_status": null,
-            "is_preprint": true,
-            "is_retracted": false,
-            "relevance_score": 61,
-            "rationale": "Addresses heart failure admissions but in a dialysis population excluded from every pivotal trial, and it has not been peer reviewed. Hard-capped at the preprint ceiling; retained in the pool only because on-topic dialysis data are otherwise absent.",
-            "abstract": "Background: Patients receiving maintenance haemodialysis were excluded from the pivotal SGLT2 inhibitor outcome trials, leaving their cardiac benefit undefined. Methods: We retrospectively reviewed 412 adults with type 2 diabetes on maintenance haemodialysis across nine centres, comparing those prescribed an SGLT2 inhibitor with matched non-users. Results: Heart failure admissions occurred in 18.4% of users versus 26.9% of non-users over 24 months (adjusted HR 0.66, 95% CI 0.42-1.04). Volume-related admissions and symptomatic hypotension did not differ. Conclusions: These hypothesis-generating data require confirmation in randomised trials before any change in dialysis practice. This preprint has not been certified by peer review."
-        },
-        {
-            "sid": "S8",
-            "citation_key": "MED/30512883",
-            "source": "pubmed",
-            "native_id": "30512883",
-            "doi": "10.1016/j.jdiacomp.2018.11.004",
-            "url": "https://pubmed.ncbi.nlm.nih.gov/30512883",
-            "title": "RETRACTED: Marked Reduction in Heart Failure Admissions After Canagliflozin Initiation in a Single-Centre Diabetes Registry",
-            "journal": "Journal of Diabetes and Its Complications",
-            "publication_date": "2019-04-02",
-            "study_design": "cohort",
-            "trial_status": null,
-            "is_preprint": false,
-            "is_retracted": true,
-            "retraction_notice_id": "34115887",
-            "retraction_source": "pubmed",
-            "relevance_score": 55,
-            "rationale": "Retracted for irreproducible outcome ascertainment and duplicated records; surfaced here only so the retraction is visible to the reader. Excluded from ranking as usable evidence per COPE/NLM policy, and any claim citing it fails the standing check.",
-            "abstract": "Background: Single-centre registries can provide early effectiveness signals for new glucose-lowering agents. Methods: We reviewed 289 adults with type 2 diabetes initiating canagliflozin at one tertiary centre and compared heart failure admission rates with a historical control period. Results: Heart failure admissions fell by 61% after canagliflozin initiation (P<0.001). Conclusions: Canagliflozin was associated with a large reduction in heart failure admissions in routine care. RETRACTION NOTICE: This article has been retracted at the request of the editors following an institutional review that identified duplicated patient records and outcome ascertainment that could not be reproduced from source documents."
+          "sid": "S3",
+          "citation_key": "MED/34449189",
+          "title": "SGLT2 Inhibitors and Heart Failure Outcomes in Type 2 Diabetes: A Systematic Review and Meta-Analysis of Cardiovascular Outcome Trials",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/34449189"
         }
-    ],
-    "disclaimer": "EvidenceBoard is a literature search and evidence-summarization aid for healthcare professionals. It is not a medical device and does not provide medical advice, diagnosis, or treatment recommendations. Every claim must be verified against the primary source (links provided) before clinical use. Do not enter patient-identifiable information. Automated verification checks can err; the treating clinician remains responsible for clinical decisions."
+      ],
+      "flag_details": []
+    },
+    {
+      "claim_id": "s2-c0",
+      "text": "Separation of the heart failure hospitalization curves appeared within the first few months of randomization, earlier than would be expected from glucose lowering alone [S1] [S4].",
+      "status": "kept",
+      "deletion_reason": null,
+      "flags": [],
+      "checks": {
+        "existence": "pass",
+        "entailment": "supports",
+        "standing": "pass"
+      },
+      "verdict": "SUPPORTS",
+      "confidence": 0.78,
+      "evidence_quote": "The reduction in the rate of hospitalization for heart failure was apparent within the first 3 months after randomisation and was maintained thereafter, a time course inconsistent with an effect mediated primarily by glycaemic control.",
+      "citations": [
+        {
+          "sid": "S1",
+          "citation_key": "MED/30415602",
+          "title": "Dapagliflozin and Cardiovascular Outcomes in Type 2 Diabetes",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/30415602"
+        },
+        {
+          "sid": "S4",
+          "citation_key": "MED/31694747",
+          "title": "Dapagliflozin in Patients with Heart Failure and Reduced Ejection Fraction",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/31694747"
+        }
+      ],
+      "flag_details": []
+    },
+    {
+      "claim_id": "s3-c0",
+      "text": "In routine care, initiation of an SGLT2 inhibitor rather than a DPP-4 inhibitor was associated with a lower rate of heart failure hospitalization, although residual confounding by indication cannot be excluded in an observational design [S6].",
+      "status": "flagged",
+      "deletion_reason": null,
+      "flags": [
+        "weakly supported"
+      ],
+      "checks": {
+        "existence": "pass",
+        "entailment": "supports",
+        "standing": "pass"
+      },
+      "verdict": "SUPPORTS",
+      "confidence": 0.61,
+      "evidence_quote": "In 1:1 propensity-score-matched cohorts of 128,293 patients, SGLT2 inhibitor initiation was associated with a lower rate of hospitalization for heart failure than DPP-4 inhibitor initiation (HR 0.71, 95% CI 0.64-0.79); results were attenuated in analyses restricted to patients without prior heart failure.",
+      "citations": [
+        {
+          "sid": "S6",
+          "citation_key": "MED/34728162",
+          "title": "SGLT2 Inhibitors Versus DPP-4 Inhibitors and Risk of Hospitalization for Heart Failure: A Nationwide Propensity-Score-Matched Cohort Study",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/34728162"
+        }
+      ],
+      "flag_details": [
+        {
+          "source": "verifier",
+          "label": "weakly supported",
+          "note": null
+        }
+      ]
+    },
+    {
+      "claim_id": "s4-c0",
+      "text": "The reduction in heart failure hospitalization is accompanied by a significant reduction in all-cause mortality in patients with type 2 diabetes and preserved ejection fraction [S3].",
+      "status": "deleted",
+      "deletion_reason": "unsupported by cited evidence",
+      "flags": [],
+      "checks": {
+        "existence": "pass",
+        "entailment": "nei",
+        "standing": "skipped"
+      },
+      "verdict": "NOT_ENOUGH_INFO",
+      "confidence": 0.31,
+      "evidence_quote": "All-cause mortality was not significantly reduced (HR 0.90, 95% CI 0.80-1.01), and no preserved-ejection-fraction subgroup analysis was reported.",
+      "citations": [
+        {
+          "sid": "S3",
+          "citation_key": "MED/34449189",
+          "title": "SGLT2 Inhibitors and Heart Failure Outcomes in Type 2 Diabetes: A Systematic Review and Meta-Analysis of Cardiovascular Outcome Trials",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/34449189"
+        }
+      ],
+      "flag_details": []
+    },
+    {
+      "claim_id": "s5-c0",
+      "text": "Benefit on heart failure hospitalization extends to patients on maintenance dialysis, in whom SGLT2 inhibitors reduced admissions by roughly one third [S7].",
+      "status": "deleted",
+      "deletion_reason": "citation unresolvable: EPMC/PPR512843",
+      "flags": [],
+      "checks": {
+        "existence": "fail",
+        "entailment": "skipped",
+        "standing": "skipped"
+      },
+      "verdict": null,
+      "confidence": null,
+      "evidence_quote": null,
+      "citations": [
+        {
+          "sid": "S7",
+          "citation_key": "EPMC/PPR512843",
+          "title": "SGLT2 Inhibition in Patients Receiving Maintenance Haemodialysis: A Retrospective Multicentre Analysis",
+          "url": "https://europepmc.org/article/PPR/PPR512843"
+        }
+      ],
+      "flag_details": []
+    }
+  ],
+  "evidence": [
+    {
+      "sid": "S1",
+      "citation_key": "MED/30415602",
+      "source": "pubmed",
+      "native_id": "30415602",
+      "doi": "10.1056/NEJMoa1812389",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/30415602",
+      "title": "Dapagliflozin and Cardiovascular Outcomes in Type 2 Diabetes",
+      "journal": "The New England Journal of Medicine",
+      "publication_date": "2019-01-24",
+      "study_design": "rct",
+      "trial_status": null,
+      "is_preprint": false,
+      "is_retracted": false,
+      "relevance_score": 95,
+      "rationale": "Large multicentre placebo-controlled cardiovascular outcome trial in exactly the population asked about (type 2 diabetes), with hospitalization for heart failure as a component of the primary composite endpoint. OCEBM level 1b; directly answers the question.",
+      "abstract": "Background: The effect of sodium-glucose cotransporter 2 inhibitors on cardiovascular outcomes in patients with type 2 diabetes across a broad spectrum of cardiovascular risk remains incompletely defined. Methods: We randomly assigned 17,160 patients with type 2 diabetes and established atherosclerotic cardiovascular disease or multiple risk factors to receive dapagliflozin 10 mg daily or placebo, with a median follow-up of 4.2 years. Results: Dapagliflozin resulted in a lower rate of cardiovascular death or hospitalization for heart failure (4.9% vs. 5.8%; hazard ratio, 0.83; 95% CI, 0.73 to 0.95; P=0.005), which reflected a lower rate of hospitalization for heart failure (hazard ratio, 0.73; 95% CI, 0.61 to 0.88); there was no between-group difference in cardiovascular death. The reduction in the rate of hospitalization for heart failure was apparent within the first 3 months after randomisation and was maintained thereafter, a time course inconsistent with an effect mediated primarily by glycaemic control. Conclusions: In patients with type 2 diabetes, dapagliflozin reduced hospitalization for heart failure without a significant reduction in the rate of major adverse cardiovascular events.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S2",
+      "citation_key": "MED/32865377",
+      "source": "pubmed",
+      "native_id": "32865377",
+      "doi": "10.1056/NEJMoa2022190",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/32865377",
+      "title": "Cardiovascular and Renal Outcomes with Empagliflozin in Heart Failure with Reduced Ejection Fraction",
+      "journal": "The New England Journal of Medicine",
+      "publication_date": "2020-10-08",
+      "study_design": "rct",
+      "trial_status": null,
+      "is_preprint": false,
+      "is_retracted": false,
+      "relevance_score": 93,
+      "rationale": "Pivotal placebo-controlled RCT with hospitalization for heart failure in the primary composite endpoint and a prespecified diabetes subgroup, so it speaks to the diabetic population directly. OCEBM level 1b; slightly indirect because enrolment was defined by heart failure rather than by diabetes.",
+      "abstract": "Background: Sodium-glucose cotransporter 2 inhibitors reduce the risk of heart failure events in patients with type 2 diabetes, but their effect in patients with established heart failure and a reduced ejection fraction, with or without diabetes, required dedicated evaluation. Methods: We randomly assigned 3,730 patients with class II-IV heart failure and an ejection fraction of 40% or less to receive empagliflozin 10 mg once daily or placebo, in addition to recommended therapy. Results: The primary outcome of cardiovascular death or hospitalization for heart failure occurred in 361 of 1,863 patients in the empagliflozin group and 462 of 1,867 patients in the placebo group (hazard ratio, 0.75; 95% CI, 0.65 to 0.86; P<0.001). The total number of hospitalizations for heart failure was lower in the empagliflozin group than in the placebo group (hazard ratio, 0.70; 95% CI, 0.58 to 0.85; P<0.001). The effects of empagliflozin were similar in patients with or without diabetes at baseline. Uncomplicated genital tract infection was reported more frequently with empagliflozin. Conclusions: Empagliflozin reduced the combined risk of cardiovascular death or hospitalization for heart failure regardless of the presence of diabetes.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S3",
+      "citation_key": "MED/34449189",
+      "source": "pubmed",
+      "native_id": "34449189",
+      "doi": "10.1016/S0140-6736(21)01234-5",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34449189",
+      "title": "SGLT2 Inhibitors and Heart Failure Outcomes in Type 2 Diabetes: A Systematic Review and Meta-Analysis of Cardiovascular Outcome Trials",
+      "journal": "The Lancet",
+      "publication_date": "2022-05-14",
+      "study_design": "meta_analysis",
+      "trial_status": null,
+      "is_preprint": false,
+      "is_retracted": false,
+      "relevance_score": 90,
+      "rationale": "Pooled analysis of the placebo-controlled cardiovascular outcome trials with heart failure hospitalization as a prespecified outcome. Highest evidence tier for the question, though re-based to OCEBM 2a because the pooled estimate carries trial-level rather than patient-level data.",
+      "abstract": "Background: Individual cardiovascular outcome trials of SGLT2 inhibitors in type 2 diabetes were powered for composite atherosclerotic endpoints rather than for heart failure hospitalization. Methods: We searched MEDLINE, Embase and CENTRAL to 31 December 2021 for placebo-controlled cardiovascular outcome trials of SGLT2 inhibitors enrolling adults with type 2 diabetes, and pooled outcomes using random-effects models. Findings: Across 46,969 participants in five placebo-controlled cardiovascular outcome trials, SGLT2 inhibitors reduced hospitalization for heart failure (HR 0.68, 95% CI 0.61-0.76; I2=0%), with consistent effects across individual agents. Major adverse cardiovascular events were modestly reduced (HR 0.90, 95% CI 0.85-0.95), and the effect on heart failure hospitalization was larger in participants with a baseline history of heart failure (P for interaction 0.02). All-cause mortality was not significantly reduced (HR 0.90, 95% CI 0.80-1.01), and no preserved-ejection-fraction subgroup analysis was reported. Interpretation: SGLT2 inhibition consistently and substantially reduces hospitalization for heart failure in type 2 diabetes.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S4",
+      "citation_key": "MED/31694747",
+      "source": "pubmed",
+      "native_id": "31694747",
+      "doi": "10.1056/NEJMoa1911303",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/31694747",
+      "title": "Dapagliflozin in Patients with Heart Failure and Reduced Ejection Fraction",
+      "journal": "The New England Journal of Medicine",
+      "publication_date": "2019-11-21",
+      "study_design": "rct",
+      "trial_status": null,
+      "is_preprint": false,
+      "is_retracted": false,
+      "relevance_score": 86,
+      "rationale": "Randomised placebo-controlled trial reporting worsening heart failure events and an early time-to-event separation; the diabetic subgroup was prespecified. OCEBM level 1b, one step indirect for a diabetes-framed question.",
+      "abstract": "Background: In patients with type 2 diabetes, SGLT2 inhibitors reduce the risk of a first hospitalization for heart failure, possibly through glucose-independent mechanisms. Methods: We randomly assigned 4,744 patients with New York Heart Association class II-IV heart failure and an ejection fraction of 40% or less to receive dapagliflozin 10 mg once daily or placebo, in addition to recommended therapy; 45% of participants had type 2 diabetes at baseline. Results: The primary composite outcome of worsening heart failure or cardiovascular death occurred in 386 of 2,373 patients in the dapagliflozin group and 502 of 2,371 patients in the placebo group (hazard ratio, 0.74; 95% CI, 0.65 to 0.85; P<0.001). Hospitalization for heart failure occurred in 231 versus 318 patients (hazard ratio, 0.70; 95% CI, 0.59 to 0.83). Curves for hospitalization for heart failure separated within 28 days of randomisation. Findings were similar in patients with and without type 2 diabetes. Conclusions: Among patients with heart failure and a reduced ejection fraction, dapagliflozin reduced the risk of worsening heart failure or cardiovascular death regardless of diabetes status.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S5",
+      "citation_key": "NCT/NCT03619213",
+      "source": "clinical_trials",
+      "native_id": "NCT03619213",
+      "doi": null,
+      "url": "https://clinicaltrials.gov/study/NCT03619213",
+      "title": "Empagliflozin Outcome Trial in Patients With Chronic Heart Failure and Type 2 Diabetes (EMPACT-HF)",
+      "journal": null,
+      "publication_date": "2023-08-02",
+      "study_design": "clinical_trial_record",
+      "trial_status": "COMPLETED",
+      "is_preprint": false,
+      "is_retracted": false,
+      "relevance_score": 74,
+      "rationale": "Completed phase 3 registry record with hospitalization for heart failure as the primary endpoint in a diabetic population. Registration records are protocol-level evidence rather than peer-reviewed results, so it is capped below the published trials but confirms the outcome definition and prespecified analysis.",
+      "abstract": "Brief summary: This phase 3, randomised, double-blind, placebo-controlled trial evaluated whether empagliflozin 10 mg once daily reduces the risk of hospitalization for heart failure or cardiovascular death in adults with chronic heart failure and type 2 diabetes receiving guideline-directed medical therapy. Primary outcome measure: time to first adjudicated hospitalization for heart failure or cardiovascular death, assessed up to 36 months. Enrolment: 2,412 participants at 214 sites. Overall status: COMPLETED. Results posted: yes.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S6",
+      "citation_key": "MED/34728162",
+      "source": "pubmed",
+      "native_id": "34728162",
+      "doi": "10.1161/CIRCULATIONAHA.121.055364",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34728162",
+      "title": "SGLT2 Inhibitors Versus DPP-4 Inhibitors and Risk of Hospitalization for Heart Failure: A Nationwide Propensity-Score-Matched Cohort Study",
+      "journal": "Circulation",
+      "publication_date": "2021-09-07",
+      "study_design": "cohort",
+      "trial_status": null,
+      "is_preprint": false,
+      "is_retracted": false,
+      "relevance_score": 68,
+      "rationale": "Large active-comparator new-user cohort study providing routine-care effectiveness data in the population of interest. Observational design caps it at the cohort tier; confounding by indication remains plausible despite propensity-score matching.",
+      "abstract": "Background: Whether the heart failure benefits observed in SGLT2 inhibitor trials translate to routine clinical practice is uncertain. Methods: Using two nationwide claims databases, we conducted an active-comparator, new-user cohort study of adults with type 2 diabetes initiating an SGLT2 inhibitor or a DPP-4 inhibitor between 2014 and 2020, with 1:1 propensity-score matching on 78 baseline covariates. Results: In 1:1 propensity-score-matched cohorts of 128,293 patients, SGLT2 inhibitor initiation was associated with a lower rate of hospitalization for heart failure than DPP-4 inhibitor initiation (HR 0.71, 95% CI 0.64-0.79); results were attenuated in analyses restricted to patients without prior heart failure. Rates of diabetic ketoacidosis were higher with SGLT2 inhibitors. Conclusions: Routine-care data are consistent with the trial evidence, with the caveat that residual confounding by indication cannot be excluded.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S7",
+      "citation_key": "EPMC/PPR512843",
+      "source": "europe_pmc",
+      "native_id": "PPR512843",
+      "doi": "10.1101/2024.02.11.24302518",
+      "url": "https://europepmc.org/article/PPR/PPR512843",
+      "title": "SGLT2 Inhibition in Patients Receiving Maintenance Haemodialysis: A Retrospective Multicentre Analysis",
+      "journal": "medRxiv",
+      "publication_date": "2024-02-14",
+      "study_design": "preprint",
+      "trial_status": null,
+      "is_preprint": true,
+      "is_retracted": false,
+      "relevance_score": 61,
+      "rationale": "Addresses heart failure admissions but in a dialysis population excluded from every pivotal trial, and it has not been peer reviewed. Hard-capped at the preprint ceiling; retained in the pool only because on-topic dialysis data are otherwise absent.",
+      "abstract": "Background: Patients receiving maintenance haemodialysis were excluded from the pivotal SGLT2 inhibitor outcome trials, leaving their cardiac benefit undefined. Methods: We retrospectively reviewed 412 adults with type 2 diabetes on maintenance haemodialysis across nine centres, comparing those prescribed an SGLT2 inhibitor with matched non-users. Results: Heart failure admissions occurred in 18.4% of users versus 26.9% of non-users over 24 months (adjusted HR 0.66, 95% CI 0.42-1.04). Volume-related admissions and symptomatic hypotension did not differ. Conclusions: These hypothesis-generating data require confirmation in randomised trials before any change in dialysis practice. This preprint has not been certified by peer review.",
+      "retraction_source": null
+    },
+    {
+      "sid": "S8",
+      "citation_key": "MED/30512883",
+      "source": "pubmed",
+      "native_id": "30512883",
+      "doi": "10.1016/j.jdiacomp.2018.11.004",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/30512883",
+      "title": "RETRACTED: Marked Reduction in Heart Failure Admissions After Canagliflozin Initiation in a Single-Centre Diabetes Registry",
+      "journal": "Journal of Diabetes and Its Complications",
+      "publication_date": "2019-04-02",
+      "study_design": "cohort",
+      "trial_status": null,
+      "is_preprint": false,
+      "is_retracted": true,
+      "retraction_notice_id": "34115887",
+      "retraction_source": "pubmed",
+      "relevance_score": 55,
+      "rationale": "Retracted for irreproducible outcome ascertainment and duplicated records; surfaced here only so the retraction is visible to the reader. Excluded from ranking as usable evidence per COPE/NLM policy, and any claim citing it fails the standing check.",
+      "abstract": "Background: Single-centre registries can provide early effectiveness signals for new glucose-lowering agents. Methods: We reviewed 289 adults with type 2 diabetes initiating canagliflozin at one tertiary centre and compared heart failure admission rates with a historical control period. Results: Heart failure admissions fell by 61% after canagliflozin initiation (P<0.001). Conclusions: Canagliflozin was associated with a large reduction in heart failure admissions in routine care. RETRACTION NOTICE: This article has been retracted at the request of the editors following an institutional review that identified duplicated patient records and outcome ascertainment that could not be reproduced from source documents."
+    }
+  ],
+  "disclaimer": "EvidenceBoard is a literature search and evidence-summarization aid for healthcare professionals. It is not a medical device and does not provide medical advice, diagnosis, or treatment recommendations. Every claim must be verified against the primary source (links provided) before clinical use. Do not enter patient-identifiable information. Automated verification checks can err; the treating clinician remains responsible for clinical decisions.",
+  "queries": [
+    "SGLT2 inhibitors heart failure hospitalization type 2 diabetes",
+    "dapagliflozin empagliflozin heart failure outcome trials",
+    "SGLT2 inhibitor cardiovascular outcome meta-analysis"
+  ],
+  "synthesizer_parse_deletions": []
 }

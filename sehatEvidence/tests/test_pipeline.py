@@ -75,6 +75,7 @@ def make_record(
     url: str = None,
     is_preprint: bool = False,
     is_retracted: bool = False,
+    retraction_source: str = None,
     trial_status: str = None,
 ) -> EvidenceRecord:
     """One EvidenceRecord with sane defaults; only what a test cares about
@@ -91,6 +92,7 @@ def make_record(
         study_design=design,
         is_preprint=is_preprint,
         is_retracted=is_retracted,
+        retraction_source=retraction_source,
         trial_status=trial_status,
         url=url or f"https://pubmed.ncbi.nlm.nih.gov/{native_id}/",
     )
@@ -283,17 +285,22 @@ def make_claim(
     *,
     deletion_reason: str = None,
     flags: list = None,
+    flag_details: list = None,
     entailment: str = "supports",
     standing: str = "pass",
     verdict: str = "SUPPORTS",
     confidence: float = 0.9,
 ) -> Claim:
+    flags = list(flags or [])
     return Claim(
         claim_id=claim_id,
         text=text,
         status=status,
         deletion_reason=deletion_reason,
-        flags=list(flags or []),
+        flags=flags,
+        flag_details=list(flag_details) if flag_details is not None else [
+            {"source": "verifier", "label": f, "note": None} for f in flags
+        ],
         checks=ClaimCheck(existence="pass", entailment=entailment, standing=standing),
         verdict=verdict,
         confidence=confidence,
@@ -392,6 +399,8 @@ def assert_report_shape(report: dict) -> None:
         "claims",
         "evidence",
         "disclaimer",
+        "queries",
+        "synthesizer_parse_deletions",
     }
     assert set(report) == expected, f"report keys: {sorted(report)}"
     assert report["disclaimer"] == DISCLAIMER, "disclaimer must be verbatim"
@@ -834,6 +843,32 @@ def test_factory_is_importable() -> None:
     print("PASS 11: build_default_pipeline -- shared failover client, pool cap wired")
 
 
+def test_retraction_source_reaches_evidence_dict() -> None:
+    """Regression test for the _build_evidence_items() bug: retraction_source
+    was silently dropped before reaching the evidence dict, so
+    agents/verifier.py's `retracted[0].get("retraction_source") or "retracted"`
+    lookup always missed and fell back to the generic "(retracted)" label
+    instead of e.g. "(crossref)". Exercises the real function, not a fake."""
+    record = make_record(
+        "88888888", StudyDesign.RCT, is_retracted=True, retraction_source="crossref"
+    )
+    appraised = [AppraisedRecord(record=record, score=90, rationale="on-topic RCT")]
+    items = pipeline_module._build_evidence_items(appraised)
+    assert items[0]["retraction_source"] == "crossref", items[0]
+    assert items[0]["is_retracted"] is True
+
+    # And a record with no known source falls back to None, not a bogus
+    # sentinel string -- the Verifier's own `or "retracted"` handles the
+    # generic-label case; the pipeline layer must not do that itself.
+    unattributed = make_record("77777777", StudyDesign.RCT, is_retracted=True)
+    items2 = pipeline_module._build_evidence_items(
+        [AppraisedRecord(record=unattributed, score=90, rationale="on-topic RCT")]
+    )
+    assert items2[0]["retraction_source"] is None, items2[0]
+
+    print("PASS 12: retraction_source reaches the evidence dict (pipeline._build_evidence_items fix)")
+
+
 def run() -> None:
     test_happy_path()
     test_synthesizer_abstains()
@@ -846,6 +881,7 @@ def run() -> None:
     test_top_level_llm_net()
     test_strategist_fail_open()
     test_factory_is_importable()
+    test_retraction_source_reaches_evidence_dict()
     print("All pipeline tests passed.")
 
 

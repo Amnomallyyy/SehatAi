@@ -125,6 +125,7 @@ class Claim:
     status: str              # "kept" | "flagged" | "deleted"
     deletion_reason: Optional[str]
     flags: list[str]         # e.g. ["weakly supported", "expression of concern"]
+    flag_details: list[dict] # parallel to `flags`; [{"source": "verifier"|"red_team", "label", "note"}]
     checks: ClaimCheck
     verdict: Optional[str]   # "SUPPORTS" | "REFUTES" | "NOT_ENOUGH_INFO" | None
     confidence: Optional[float]
@@ -315,6 +316,7 @@ class Verifier:
                 "status": "kept",
                 "deletion_reason": None,
                 "flags": [],
+                "flag_details": [],
                 "verdict": None,
                 "confidence": None,
                 "quote": None,
@@ -356,6 +358,9 @@ class Verifier:
                 row["entailment"] = "supports"
                 if verdict.confidence < self.min_support_confidence:
                     row["flags"].append("weakly supported")
+                    row["flag_details"].append(
+                        {"source": "verifier", "label": "weakly supported", "note": None}
+                    )
                     row["status"] = "flagged"
             elif verdict.verdict == "REFUTES":
                 row["entailment"] = "refutes"
@@ -386,6 +391,9 @@ class Verifier:
                 if any(marker in haystack for marker in _STANDING_FLAG_MARKERS):
                     row["standing"] = "flag"
                     row["flags"].append("expression of concern")
+                    row["flag_details"].append(
+                        {"source": "verifier", "label": "expression of concern", "note": None}
+                    )
                 else:
                     row["standing"] = "pass"
 
@@ -822,6 +830,7 @@ class Verifier:
                     status=row["status"],
                     deletion_reason=row["deletion_reason"],
                     flags=list(row["flags"]),
+                    flag_details=list(row["flag_details"]),
                     checks=ClaimCheck(
                         existence=row["existence"],
                         entailment=row["entailment"],

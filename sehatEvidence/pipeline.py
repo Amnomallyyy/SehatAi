@@ -144,6 +144,7 @@ def serialize_claim(claim: Claim) -> dict:
         "status": claim.status,
         "deletion_reason": claim.deletion_reason,
         "flags": list(claim.flags),
+        "flag_details": list(claim.flag_details),
         "checks": {
             "existence": claim.checks.existence,
             "entailment": claim.checks.entailment,
@@ -184,6 +185,7 @@ def _build_evidence_items(appraised: list[AppraisedRecord]) -> list[dict]:
                 "trial_status": r.trial_status,
                 "is_preprint": r.is_preprint,
                 "is_retracted": r.is_retracted,
+                "retraction_source": r.retraction_source,
                 "relevance_score": ap.score,
                 "rationale": ap.rationale,
                 "abstract": r.abstract,
@@ -313,7 +315,7 @@ class EvidencePipeline:
         )
         if len(pool) < MIN_POOL_RECORDS:
             _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_THIN_POOL)
-            return self._abstain(question, ABSTAIN_THIN_POOL, [])
+            return self._abstain(question, ABSTAIN_THIN_POOL, [], queries=queries)
 
         # --- Stage 3: appraisal (ranks, caps, drops retracted records) ----
         # The FULL pool -- retracted records included -- stays in `pool` so
@@ -341,7 +343,7 @@ class EvidencePipeline:
         ]
         if len(high_relevance) < MIN_HIGH_RELEVANCE_RECORDS:
             _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_LOW_RELEVANCE)
-            return self._abstain(question, ABSTAIN_LOW_RELEVANCE, evidence_items)
+            return self._abstain(question, ABSTAIN_LOW_RELEVANCE, evidence_items, queries=queries)
 
         # --- Stage 4: synthesis (citation-forced; fails closed) -----------
         _emit(on_event, stage="synthesizer", status="start")
@@ -357,7 +359,7 @@ class EvidencePipeline:
                 llm_calls=_delta(before, _agent_llm_calls(self.synthesizer)),
             )
             _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_LLM_SYNTHESIS)
-            return self._abstain(question, ABSTAIN_LLM_SYNTHESIS, evidence_items)
+            return self._abstain(question, ABSTAIN_LLM_SYNTHESIS, evidence_items, queries=queries)
         print(
             f"[pipeline] synthesizer produced {len(synthesis.sentences)} sentences"
         )
@@ -369,7 +371,8 @@ class EvidencePipeline:
         if synthesis.abstained:
             _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_SYNTH_INSUFFICIENT)
             return self._abstain(
-                question, ABSTAIN_SYNTH_INSUFFICIENT, evidence_items
+                question, ABSTAIN_SYNTH_INSUFFICIENT, evidence_items,
+                queries=queries, parse_deletions=synthesis.parse_deletions,
             )
 
         # --- Stage 5: verification (the only stage that may delete) -------
@@ -419,6 +422,10 @@ class EvidencePipeline:
             "claims": [serialize_claim(c) for c in claims],
             "evidence": evidence_items,
             "disclaimer": DISCLAIMER,
+            "queries": list(queries),
+            "synthesizer_parse_deletions": [
+                {"text": d.text, "reason": d.reason} for d in synthesis.parse_deletions
+            ],
         }
         print("[pipeline] complete")
         return result
@@ -455,19 +462,31 @@ class EvidencePipeline:
             label = f"{flag.flag}: {flag.note}" if flag.note else flag.flag
             if label not in claim.flags:
                 claim.flags.append(label)
+                claim.flag_details.append(
+                    {"source": "red_team", "label": flag.flag, "note": flag.note}
+                )
 
     # ------------------------------------------------------------------
     # Abstention and mock replay
     # ------------------------------------------------------------------
 
     def _abstain(
-        self, question: str, reason: str, evidence_items: list[dict]
+        self,
+        question: str,
+        reason: str,
+        evidence_items: list[dict],
+        queries: Optional[list[str]] = None,
+        parse_deletions: Optional[list] = None,
     ) -> dict:
         """Build the abstention report: same shape, no answer, one reason.
 
         `evidence_items` is whatever the run got as far as building -- the
         UI still shows the pool it found, which is exactly what makes an
-        abstention auditable rather than a dead end.
+        abstention auditable rather than a dead end. `queries` is the
+        Strategist's planned searches when the run got that far (empty for
+        the top-level LLMError net and mock-replay-failure paths, which
+        never reach stage 1); `parse_deletions` is populated only when the
+        Synthesizer itself already ran and self-abstained.
         """
         print(f"[pipeline] abstained: {[reason]}")
         return {
@@ -479,6 +498,10 @@ class EvidencePipeline:
             "claims": [],
             "evidence": evidence_items or [],
             "disclaimer": DISCLAIMER,
+            "queries": list(queries or []),
+            "synthesizer_parse_deletions": [
+                {"text": d.text, "reason": d.reason} for d in (parse_deletions or [])
+            ],
         }
 
     def _load_mock(self, question: str) -> dict:
