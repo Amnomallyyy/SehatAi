@@ -234,6 +234,8 @@ class FailoverLLMClient:
         self._clients: list = list(clients)
         self._active: int = 0  # index of the currently selected client
         self._rotations: int = 0  # total rotations, for diagnostics
+        self._calls: int = 0  # successful complete()/complete_json() calls
+        self._call_failures: int = 0  # failed attempts across all keys
 
     # --- diagnostics ----------------------------------------------------------
 
@@ -246,6 +248,23 @@ class FailoverLLMClient:
     def client_count(self) -> int:
         """Number of wrapped clients (== number of API keys)."""
         return len(self._clients)
+
+    @property
+    def calls(self) -> int:
+        """Total successful LLM calls made through this client so far.
+
+        The single source of truth for "is this agent actually calling the
+        model": every agent shares one FailoverLLMClient (see
+        build_default_pipeline), so pipeline.py snapshots this counter
+        before/after each stage to report real per-agent LLM usage --
+        never inferred, never simulated.
+        """
+        return self._calls
+
+    @property
+    def call_failures(self) -> int:
+        """Total failed attempts (across all key rotations) so far."""
+        return self._call_failures
 
     # --- LLMClient-compatible surface -------------------------------------------
 
@@ -277,13 +296,17 @@ class FailoverLLMClient:
         for _attempt in range(n):
             client = self._clients[self._active]
             try:
-                return getattr(client, method_name)(*args, **kwargs)
+                result = getattr(client, method_name)(*args, **kwargs)
             except LLMError as failure:
                 exc = failure
+                self._call_failures += 1
                 print(
                     f"[config] LLM key {self._active + 1}/{n} failed "
                     f"({exc}); rotating..."
                 )
                 self._rotations += 1
                 self._active = (self._active + 1) % n
+                continue
+            self._calls += 1
+            return result
         raise LLMError(f"All {n} LLM keys failed; last error: {exc}")
