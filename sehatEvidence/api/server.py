@@ -53,10 +53,11 @@ MAX_BODY_BYTES = 64 * 1024
 # The embedded single-page UI
 # ---------------------------------------------------------------------------
 #
-# One template string, one placeholder ({{DISCLAIMER}}), substituted by
-# build_index_html() so config.DISCLAIMER stays the single source of truth
-# for the legal copy. Everything else -- layout, palette, motion -- is
-# inline: this page must render identically on an air-gapped laptop.
+# One template string, two placeholders ({{DISCLAIMER}}, {{POOL_CAP}}),
+# substituted by build_index_html() so config.DISCLAIMER and
+# Settings.pool_cap stay the single source of truth for what the page
+# claims. Everything else -- layout, palette, motion -- is inline: this
+# page must render identically on an air-gapped laptop.
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -66,25 +67,26 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <title>EvidenceBoard &middot; verification-first clinical evidence</title>
 <style>
   :root {
-    --ink: #14201c;
-    --ink-soft: #4a5b55;
-    --ink-faint: #8b9995;
-    --paper: #fbfaf7;
-    --card: #ffffff;
-    --rule: #e3e0d8;
-    --rule-soft: #eeece5;
-    --accent: #0f5c4a;
-    --accent-soft: #e6f0ec;
-    --pass: #1a6b4f;
-    --pass-bg: #e7f2ec;
-    --fail: #a2301f;
-    --fail-bg: #fbeae6;
-    --flag: #8a5a06;
-    --flag-bg: #fdf2dd;
-    --skip-bg: #f1efe9;
-    --info: #1c4f7c;
-    --info-bg: #e8f0f7;
-    --shadow: 0 1px 2px rgba(20, 32, 28, .05), 0 8px 24px -12px rgba(20, 32, 28, .16);
+    --ink: #eaeef7;
+    --ink-soft: #a7b1c6;
+    --ink-faint: #6b7690;
+    --paper: #060911;
+    --card: #101726;
+    --rule: #242e45;
+    --rule-soft: #161d2e;
+    --accent: #4f8dfd;
+    --accent-2: #22d3ee;
+    --accent-soft: rgba(79, 141, 253, .14);
+    --pass: #34d399;
+    --pass-bg: rgba(52, 211, 153, .12);
+    --fail: #f87171;
+    --fail-bg: rgba(248, 113, 113, .12);
+    --flag: #fbbf24;
+    --flag-bg: rgba(251, 191, 36, .12);
+    --skip-bg: #161d2e;
+    --info: #38bdf8;
+    --info-bg: rgba(56, 189, 248, .12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 16px 40px -16px rgba(0, 0, 0, .65);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
 
@@ -99,12 +101,15 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     line-height: 1.6;
     color: var(--ink);
     background-color: var(--paper);
-    /* Faint clinical-chart grid: atmosphere with zero assets. */
+    /* Faint clinical-chart grid over a soft top glow: atmosphere, zero assets. */
     background-image:
+      radial-gradient(720px 420px at 18% -8%, rgba(79, 141, 253, .16), transparent 60%),
+      radial-gradient(640px 380px at 92% 0%, rgba(34, 211, 238, .10), transparent 55%),
       linear-gradient(var(--rule-soft) 1px, transparent 1px),
       linear-gradient(90deg, var(--rule-soft) 1px, transparent 1px);
-    background-size: 100% 34px, 34px 100%;
-    background-position: -1px -1px;
+    background-size: 100% 100%, 100% 100%, 100% 34px, 34px 100%;
+    background-position: 0 0, 0 0, -1px -1px, -1px -1px;
+    background-repeat: no-repeat, no-repeat, repeat, repeat;
   }
 
   .shell { max-width: 1080px; margin: 0 auto; padding: 0 24px 96px; }
@@ -118,7 +123,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     gap: 24px;
     flex-wrap: wrap;
     padding: 44px 0 18px;
-    border-bottom: 2px solid var(--ink);
+    border-bottom: 1px solid var(--rule);
   }
   .wordmark {
     margin: 0;
@@ -127,7 +132,12 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     letter-spacing: -.025em;
     line-height: 1.05;
   }
-  .wordmark .dot { color: var(--accent); }
+  .wordmark .dot {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
   .tagline {
     margin: 6px 0 0;
     font-size: 12px;
@@ -151,8 +161,49 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     background: var(--ink-faint);
     box-shadow: 0 0 0 3px var(--rule-soft);
   }
-  .status-dot.live i { background: var(--pass); box-shadow: 0 0 0 3px var(--pass-bg); }
+  .status-dot.live i { background: var(--pass); box-shadow: 0 0 0 3px var(--pass-bg); animation: pulse-dot 2s ease-in-out infinite; }
   .status-dot.down i { background: var(--fail); box-shadow: 0 0 0 3px var(--fail-bg); }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; } 50% { opacity: .45; }
+  }
+
+  /* --- stat strip: what this system actually is, in numbers ---------- */
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    margin: 22px 0 0;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .stat {
+    padding: 16px 18px;
+    background: var(--card);
+  }
+  .stat b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    background: linear-gradient(135deg, var(--ink) 30%, var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .stat span {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: .02em;
+  }
+  @media (max-width: 620px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
 
   /* --- disclaimer strip --------------------------------------------- */
 
@@ -217,23 +268,24 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     font: inherit;
     font-weight: 600;
     letter-spacing: .02em;
-    color: #fff;
-    background: var(--accent);
-    border: 1px solid var(--accent);
+    color: #04101f;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border: none;
     border-radius: 3px;
     cursor: pointer;
-    transition: background .16s ease, transform .16s ease;
+    box-shadow: 0 8px 20px -8px rgba(79, 141, 253, .55);
+    transition: filter .16s ease, transform .16s ease;
   }
-  button.primary:hover:not(:disabled) { background: #0b4638; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.08); }
   button.primary:active:not(:disabled) { transform: translateY(1px); }
-  button.primary:disabled { opacity: .6; cursor: progress; }
+  button.primary:disabled { opacity: .55; cursor: progress; box-shadow: none; }
   .spinner {
     display: inline-block;
     width: 12px; height: 12px;
     margin-right: 8px;
     vertical-align: -1px;
-    border: 2px solid rgba(255, 255, 255, .35);
-    border-top-color: #fff;
+    border: 2px solid rgba(4, 16, 31, .3);
+    border-top-color: #04101f;
     border-radius: 50%;
     animation: spin .7s linear infinite;
   }
@@ -256,41 +308,108 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 
   .working {
     margin-top: 28px;
-    padding: 18px 20px;
+    padding: 22px 24px 18px;
     background: var(--card);
     border: 1px solid var(--rule);
-    border-left: 3px solid var(--accent);
-    border-radius: 3px;
-    font-family: var(--mono);
-    font-size: 12.5px;
-    color: var(--ink-soft);
+    border-radius: 4px;
     box-shadow: var(--shadow);
   }
+  .working-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .working-head b {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .working-head span {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+  .stage-track { display: flex; flex-direction: column; gap: 2px; }
+  .stage {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 6px;
+    border-radius: 3px;
+    opacity: .4;
+    transition: opacity .25s ease;
+  }
+  .stage.is-active, .stage.is-done { opacity: 1; }
+  .stage-icon {
+    flex: none;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 1.5px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    background: var(--paper);
+    transition: border-color .2s ease, background .2s ease, box-shadow .2s ease;
+  }
+  .stage.is-active .stage-icon {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .stage.is-active .stage-icon i {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    animation: pulse-dot 1s ease-in-out infinite;
+  }
+  .stage.is-done .stage-icon {
+    border-color: var(--pass);
+    background: var(--pass-bg);
+    color: var(--pass);
+  }
+  .stage-body { flex: 1; min-width: 0; }
+  .stage-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+  }
+  .stage.is-active .stage-label { color: var(--accent-2); }
+  .stage.is-done .stage-label { color: var(--ink); }
+  .stage-detail {
+    margin-top: 1px;
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .working .bar {
-    height: 2px;
-    margin-top: 12px;
+    height: 3px;
+    margin-top: 18px;
+    border-radius: 2px;
     background: var(--rule-soft);
     overflow: hidden;
   }
   .working .bar i {
     display: block;
-    width: 34%;
     height: 100%;
-    background: var(--accent);
-    animation: sweep 1.5s ease-in-out infinite;
-  }
-  @keyframes sweep {
-    0%   { transform: translateX(-100%); }
-    100% { transform: translateX(320%); }
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .5s cubic-bezier(.2, .7, .3, 1);
   }
   .error-box {
     margin-top: 28px;
     padding: 16px 18px;
     background: var(--fail-bg);
-    border: 1px solid #eccfc8;
+    border: 1px solid rgba(248, 113, 113, .3);
     border-left: 3px solid var(--fail);
     border-radius: 3px;
-    color: #7d2517;
+    color: #fecaca;
     font-size: 13.5px;
   }
 
@@ -406,7 +525,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   /* abstention */
   .abstain {
     background: var(--flag-bg);
-    border: 1px solid #eeddb4;
+    border: 1px solid rgba(251, 191, 36, .3);
     border-left: 3px solid var(--flag);
     border-radius: 3px;
     padding: 20px 22px;
@@ -414,11 +533,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .abstain h3 {
     margin: 0 0 8px;
     font-size: 15px;
-    color: #6f4905;
+    color: #fcd34d;
     letter-spacing: -.01em;
   }
-  .abstain p { margin: 0 0 10px; font-size: 13.5px; color: #6f4905; }
-  .abstain ul { margin: 0; padding-left: 20px; font-size: 13.5px; color: #6f4905; }
+  .abstain p { margin: 0 0 10px; font-size: 13.5px; color: #fde68a; }
+  .abstain ul { margin: 0; padding-left: 20px; font-size: 13.5px; color: #fde68a; }
   .abstain li { margin: 3px 0; }
 
   /* claim cards */
@@ -449,11 +568,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     border: 1px solid transparent;
   }
   .badge .mark { font-family: var(--mono); }
-  .b-pass { background: var(--pass-bg); color: var(--pass); border-color: #cbe3d6; }
-  .b-fail { background: var(--fail-bg); color: var(--fail); border-color: #eccfc8; }
-  .b-flag { background: var(--flag-bg); color: var(--flag); border-color: #eeddb4; }
+  .b-pass { background: var(--pass-bg); color: var(--pass); border-color: rgba(52, 211, 153, .35); }
+  .b-fail { background: var(--fail-bg); color: var(--fail); border-color: rgba(248, 113, 113, .35); }
+  .b-flag { background: var(--flag-bg); color: var(--flag); border-color: rgba(251, 191, 36, .35); }
   .b-skip { background: var(--skip-bg); color: var(--ink-faint); border-color: var(--rule); }
-  .b-info { background: var(--info-bg); color: var(--info); border-color: #cfdeeb; }
+  .b-info { background: var(--info-bg); color: var(--info); border-color: rgba(56, 189, 248, .35); }
   .verdict {
     font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
     margin-bottom: 10px;
@@ -462,7 +581,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   blockquote.quote {
     margin: 0 0 12px;
     padding: 10px 14px;
-    background: #faf9f5;
+    background: #0c1220;
     border-left: 2px solid var(--rule);
     font-size: 13.5px;
     line-height: 1.6;
@@ -490,9 +609,9 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     padding: 3px 9px;
     font-size: 11px;
     border-radius: 2px;
-    background: #fdf0e2;
-    color: #8a4a06;
-    border: 1px solid #f0dcc2;
+    background: rgba(251, 191, 36, .12);
+    color: #fcd34d;
+    border: 1px solid rgba(251, 191, 36, .3);
   }
 
   /* deleted claims */
@@ -529,7 +648,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     font-size: 13.5px;
     color: var(--ink-faint);
     text-decoration: line-through;
-    text-decoration-color: #d4b3ab;
+    text-decoration-color: rgba(248, 113, 113, .45);
   }
   .deleted-why {
     font-family: var(--mono);
@@ -552,7 +671,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     margin-bottom: 8px;
     box-shadow: var(--shadow);
   }
-  li.ev.retracted { border-left: 3px solid var(--fail); background: #fffbfa; }
+  li.ev.retracted { border-left: 3px solid var(--fail); background: rgba(248, 113, 113, .07); }
   .ev-sid {
     font-family: var(--mono);
     font-size: 12px;
@@ -576,12 +695,12 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     font-weight: 600;
     color: var(--accent);
     background: var(--accent-soft);
-    border: 1px solid #cfe2db;
+    border: 1px solid rgba(79, 141, 253, .3);
     border-radius: 2px;
     padding: 3px 8px;
     white-space: nowrap;
   }
-  .ev-score.mid { color: var(--flag); background: var(--flag-bg); border-color: #eeddb4; }
+  .ev-score.mid { color: var(--flag); background: var(--flag-bg); border-color: rgba(251, 191, 36, .3); }
   .ev-score.low { color: var(--ink-faint); background: var(--skip-bg); border-color: var(--rule); }
 
   .empty {
@@ -627,6 +746,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div class="status-dot" id="health"><i></i><span>checking service&hellip;</span></div>
   </header>
 
+  <div class="stats">
+    <div class="stat"><b>5</b><span>agents in the pipeline</span></div>
+    <div class="stat"><b>3</b><span>sources &middot; PubMed, Europe&nbsp;PMC, CT.gov</span></div>
+    <div class="stat"><b>3</b><span>checks per claim &middot; exists, entails, stands</span></div>
+    <div class="stat"><b>{{POOL_CAP}}</b><span>records ranked per question</span></div>
+  </div>
+
   <p class="disclaimer"><b>Disclaimer</b>{{DISCLAIMER}}</p>
 
   <form class="ask" id="ask-form" autocomplete="off">
@@ -642,8 +768,12 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   <p class="seeds" id="seeds"></p>
 
   <div id="working" class="working" hidden>
-    <span id="working-text">Planning queries, retrieving the evidence pool, verifying every claim&hellip;</span>
-    <div class="bar"><i></i></div>
+    <div class="working-head">
+      <b>Pipeline running</b>
+      <span id="working-elapsed">0.0s</span>
+    </div>
+    <div class="stage-track" id="stage-track"></div>
+    <div class="bar"><i id="working-bar"></i></div>
   </div>
 
   <div id="error" class="error-box" hidden></div>
@@ -665,12 +795,28 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   var input = document.getElementById("q");
   var button = document.getElementById("ask-btn");
   var working = document.getElementById("working");
+  var stageTrack = document.getElementById("stage-track");
+  var workingBar = document.getElementById("working-bar");
+  var workingElapsed = document.getElementById("working-elapsed");
   var errorBox = document.getElementById("error");
   var results = document.getElementById("results");
   var health = document.getElementById("health");
   var footModel = document.getElementById("foot-model");
   var seeds = document.getElementById("seeds");
   var busy = false;
+
+  /* The six pipeline stages, in run order (see pipeline.py). Each agent
+     really does run in this sequence; what is simulated here is only the
+     PACING of the reveal (the API call is one blocking request, not a
+     progress stream), never the stage list or the final results. */
+  var STAGES = [
+    { label: "Strategist", detail: "Planning 3\\u20135 targeted search queries" },
+    { label: "Retrieval", detail: "Querying PubMed, Europe PMC, ClinicalTrials.gov \\u00b7 checking retractions" },
+    { label: "Appraiser", detail: "Scoring evidence by design, recency & relevance" },
+    { label: "Synthesizer", detail: "Drafting a fully-cited answer" },
+    { label: "Verifier", detail: "Checking existence, entailment & standing of every claim" },
+    { label: "Red Team", detail: "Adversarial audit for weak or risky claims" }
+  ];
 
   var SEED_QUESTIONS = [
     "Does metformin reduce all-cause mortality in type 2 diabetes?",
@@ -917,13 +1063,89 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     results.hidden = false;
   }
 
+  // --- live stage tracker --------------------------------------------------
+  //
+  // The API is one blocking POST /api/ask (30-120s live), not a progress
+  // stream, so there is no server signal per agent. What follows PACES a
+  // reveal of the real, fixed stage order from pipeline.py -- it never
+  // fabricates counts or outcomes; those only appear once the actual
+  // report renders. The final stage is deliberately never auto-completed:
+  // only the real response resolves it.
+
+  var STAGE_CUMULATIVE_MS = (function () {
+    var durations = [1100, 2200, 1500, 1700, 2600, 1300];
+    var sum = 0;
+    return durations.map(function (d) { sum += d; return sum; });
+  })();
+
+  function renderStages(currentStage) {
+    stageTrack.innerHTML = STAGES.map(function (stage, i) {
+      var state = i < currentStage ? "done" : (i === currentStage ? "active" : "pending");
+      var num = (i + 1 < 10 ? "0" : "") + (i + 1);
+      var icon = state === "done" ? "\\u2713" : (state === "active" ? "<i></i>" : num);
+      return '<div class="stage is-' + state + '">' +
+        '<div class="stage-icon">' + icon + "</div>" +
+        '<div class="stage-body">' +
+          '<div class="stage-label">' + esc(stage.label) + "</div>" +
+          '<div class="stage-detail">' + esc(stage.detail) + "</div>" +
+        "</div></div>";
+    }).join("");
+  }
+
+  function startStageTracker() {
+    var startTime = Date.now();
+    var currentStage = 0;
+    var finished = false;
+    renderStages(currentStage);
+    workingBar.style.width = "4%";
+    workingElapsed.textContent = "0.0s";
+
+    var timer = setInterval(function () {
+      if (finished) { return; }
+      var elapsed = Date.now() - startTime;
+      workingElapsed.textContent = (elapsed / 1000).toFixed(1) + "s";
+      var target = 0;
+      for (var i = 0; i < STAGE_CUMULATIVE_MS.length; i++) {
+        if (elapsed >= STAGE_CUMULATIVE_MS[i]) { target = i + 1; }
+      }
+      target = Math.min(target, STAGES.length - 1); // never auto-finish the last stage
+      if (target !== currentStage) {
+        currentStage = target;
+        renderStages(currentStage);
+      }
+      workingBar.style.width = Math.min(96, 6 + (currentStage / STAGES.length) * 90) + "%";
+    }, 100);
+
+    return {
+      finish: function () {
+        finished = true;
+        clearInterval(timer);
+        renderStages(STAGES.length);
+        workingBar.style.width = "100%";
+        return new Promise(function (resolve) { setTimeout(resolve, 420); });
+      },
+      stop: function () {
+        finished = true;
+        clearInterval(timer);
+      }
+    };
+  }
+
   // --- request lifecycle -------------------------------------------------
+
+  var activeTracker = null;
 
   function setBusy(state) {
     busy = state;
     button.disabled = state;
     button.innerHTML = state ? '<span class="spinner"></span>Working' : "Ask";
     working.hidden = !state;
+    if (state) {
+      activeTracker = startStageTracker();
+    } else if (activeTracker) {
+      activeTracker.stop();
+      activeTracker = null;
+    }
   }
 
   function showError(message) {
@@ -937,6 +1159,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     results.hidden = true;
     results.innerHTML = "";
     setBusy(true);
+    var tracker = activeTracker;
 
     fetch("/api/ask", {
       method: "POST",
@@ -954,8 +1177,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
         throw new Error((result.data && result.data.error) ||
                         ("Request failed with HTTP " + result.status + "."));
       }
-      render(result.data);
+      return (tracker ? tracker.finish() : Promise.resolve()).then(function () {
+        render(result.data);
+      });
     }).catch(function (err) {
+      if (tracker) { tracker.stop(); }
       showError(err && err.message ? err.message : "Request failed.");
     }).then(function () {
       setBusy(false);
@@ -1007,13 +1233,18 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-def build_index_html(disclaimer: str = DISCLAIMER) -> str:
+def build_index_html(disclaimer: str = DISCLAIMER, pool_cap: int = 30) -> str:
     """Render the single-page UI with the canonical disclaimer injected.
 
     A plain ``str.replace`` (not ``format``) because the template is full of
-    CSS/JS braces.
+    CSS/JS braces. ``pool_cap`` feeds the header stat strip (see
+    Settings.pool_cap) so the on-page number never drifts from the running
+    configuration.
     """
-    return INDEX_TEMPLATE.replace("{{DISCLAIMER}}", disclaimer)
+    return (
+        INDEX_TEMPLATE.replace("{{DISCLAIMER}}", disclaimer)
+        .replace("{{POOL_CAP}}", str(pool_cap))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1082,9 +1313,12 @@ class EvidenceHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path in ("/", "/index.html"):
+            html = self.index_html or build_index_html(
+                pool_cap=self.settings.pool_cap if self.settings else 30
+            )
             self._respond(
                 200,
-                (self.index_html or build_index_html()).encode("utf-8"),
+                html.encode("utf-8"),
                 "text/html; charset=utf-8",
             )
             return
@@ -1204,7 +1438,7 @@ def run_server(
     EvidenceHandler.pipeline = pipeline
     EvidenceHandler.settings = settings
     EvidenceHandler.use_mock = use_mock
-    EvidenceHandler.index_html = build_index_html()
+    EvidenceHandler.index_html = build_index_html(pool_cap=settings.pool_cap)
 
     httpd = ThreadingHTTPServer((settings.server_host, settings.server_port), EvidenceHandler)
     httpd.daemon_threads = True
