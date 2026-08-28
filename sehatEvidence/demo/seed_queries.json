@@ -1,0 +1,32 @@
+[
+    {
+        "question": "Does SGLT2 inhibitor therapy reduce heart failure hospitalization in patients with type 2 diabetes?",
+        "expected_behavior": "Strong answer with multiple RCT citations (DAPA-HF, EMPEROR-Reduced, DECLARE-TIMI 58) plus a supporting meta-analysis; existence checks resolve at NCBI, entailment returns SUPPORTS at high confidence, standing passes. Expect 5 of 7 claims kept with at most one 'weakly supported' flag on the real-world cohort claim; no abstention.",
+        "category": "therapy",
+        "showcase_feature": "verification_pass"
+    },
+    {
+        "question": "In hospitalized adults with community-acquired pneumonia, does adjunctive corticosteroid therapy reduce 30-day mortality?",
+        "expected_behavior": "Evidence is genuinely mixed (CAPE-COD showed benefit in severe CAP; earlier trials and meta-analyses were neutral), so the Synthesizer tends to overstate a mortality benefit for the whole population. The Verifier should delete those over-broad claims as 'unsupported by cited evidence' and keep only the severity-restricted ones, producing a visible generated-to-kept drop in the funnel.",
+        "category": "therapy",
+        "showcase_feature": "deletion_funnel"
+    },
+    {
+        "question": "What is the optimal intrathecal nusinersen dosing interval for adults with SMA type 4 who have already failed risdiplam?",
+        "expected_behavior": "Almost no primary literature exists for this exact population and sequencing question; retrieval returns a thin pool of reviews and off-target pediatric studies. The pipeline should fail closed and return a structured abstention (insufficient on-topic evidence) rather than assembling a plausible-sounding answer from unrelated records.",
+        "category": "therapy",
+        "showcase_feature": "abstention"
+    },
+    {
+        "question": "Does ivermectin reduce mortality in hospitalized patients with COVID-19?",
+        "expected_behavior": "The retrieval pool still surfaces widely cited but retracted or withdrawn work (e.g. the retracted Egyptian hospital trial) alongside the definitive negative RCTs (TOGETHER, ACTIV-6). The Appraiser drops retracted records from ranking and the Verifier standing check fails any claim resting on them, so the surviving answer should be a REFUTES-leaning no-benefit conclusion built only on standing evidence.",
+        "category": "therapy",
+        "showcase_feature": "standing_check"
+    },
+    {
+        "question": "How accurate are plasma p-tau217 assays for diagnosing Alzheimer disease pathology in a primary care population?",
+        "expected_behavior": "A diagnostic-accuracy question where much of the current activity lives in trial registrations rather than finished papers, so the ClinicalTrials.gov leg contributes visibly to the pool alongside published cohort validations. Expect clinical_trial_record entries in the evidence list (with trial_status badges) and kept claims that cite both a registry record and a peer-reviewed cohort.",
+        "category": "diagnosis",
+        "showcase_feature": "clinical_trial_integration"
+    }
+]
