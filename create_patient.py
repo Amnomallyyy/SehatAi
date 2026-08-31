@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-create_patient.py – CLI tool to create patients with hashed passwords.
+create_patient.py – CLI tool to create patients with all attributes.
 
 Usage:
-    python create_patient.py --name "John Doe" --dob 1990-01-01 --password "secret123"
-    python create_patient.py --name "Jane Smith" --dob 1985-06-15 --password "secure456" --consent
+    python create_patient.py --name "John Doe" --dob 1990-01-01 --sex male --password "test123" --consent
+    python create_patient.py --list
 """
 
 import argparse
@@ -16,7 +16,6 @@ from getpass import getpass
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# Local imports
 from auth import hash_password
 
 load_dotenv()
@@ -26,7 +25,6 @@ load_dotenv()
 # Supabase Client
 # ============================================================
 def get_supabase_client() -> Client:
-    """Get Supabase client from environment."""
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     if not url or not key:
@@ -35,92 +33,93 @@ def get_supabase_client() -> Client:
 
 
 # ============================================================
+# Helper: Calculate Age from DOB
+# ============================================================
+def calculate_age(dob_str: str) -> int:
+    born = datetime.strptime(dob_str, "%Y-%m-%d").date()
+    today = date.today()
+    age = today.year - born.year
+    if (today.month, today.day) < (born.month, born.day):
+        age -= 1
+    return age
+
+
+# ============================================================
 # Patient Creation Function
 # ============================================================
 def create_patient(
     name: str,
     date_of_birth: str,
+    sex: str,                # may be any case
     password: str,
     consented: bool = False
 ) -> dict:
-    """
-    Create a new patient with hashed password.
-
-    Returns:
-        dict with patient_id, name, and status
-    """
     print(f"\n👤 Creating patient: {name}")
     print("-" * 40)
 
-    # 1. Hash the password
-    print("🔐 Hashing password...")
+    # Calculate age
+    age = calculate_age(date_of_birth)
+    print(f"📊 Age: {age}")
+
+    # Hash password
     password_hash = hash_password(password)
 
-    # 2. Generate patient ID
+    # Generate patient ID
     patient_id = str(uuid.uuid4())
     print(f"📋 Patient ID: {patient_id}")
 
-    # 3. Prepare consent
+    # Consent timestamp
     consented_at = datetime.now().isoformat() if consented else None
 
-    # 4. Insert into Supabase
-    print("💾 Saving to Supabase...")
     supabase = get_supabase_client()
-    
+
+    # Ensure sex is lowercased for the constraint
+    sex_lower = sex.lower()
+
     data = {
         "id": patient_id,
         "name": name,
         "date_of_birth": date_of_birth,
+        "age": age,
+        "sex": sex_lower,                     # stored as lowercase
         "password_hash": password_hash,
         "consented_at": consented_at,
     }
-    
+
     try:
-        result = supabase.table('patients').insert(data).execute()
-        patient = result.data[0] if result.data else data
-        
+        supabase.table('patients').insert(data).execute()
         print("✅ Patient created successfully!")
         print(f"   ID: {patient_id}")
         print(f"   Name: {name}")
-        print(f"   Consent: {'✅ Yes' if consented else '❌ No (use --consent to enable)'}")
+        print(f"   DOB: {date_of_birth}")
+        print(f"   Age: {age}")
+        print(f"   Sex: {sex_lower.capitalize()}")   # display nicely
+        print(f"   Consent: {'✅ Yes' if consented else '❌ No'}")
         print("\n📝 Save this ID to test:")
         print(f"   python main.py --file your_document.pdf --patient-id {patient_id} --password '{password}'")
-        
-        return {
-            "status": "success",
-            "patient_id": patient_id,
-            "name": name,
-            "consented": consented
-        }
-        
+        return {"status": "success", "patient_id": patient_id, "name": name, "age": age, "sex": sex_lower}
     except Exception as e:
         print(f"❌ Error: {e}")
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+        return {"status": "error", "error": str(e)}
 
 
 # ============================================================
-# List Patients (Helper)
+# List Patients (with Age & Sex)
 # ============================================================
 def list_patients():
-    """List all existing patients."""
     print("\n📋 Existing Patients:")
     print("-" * 40)
-    
     supabase = get_supabase_client()
     result = supabase.table('patients') \
-        .select('id, name, date_of_birth, consented_at, created_at') \
+        .select('id, name, date_of_birth, age, sex, consented_at, created_at') \
         .execute()
-    
     if not result.data:
         print("   No patients found.")
         return
-    
     for p in result.data:
         consent = "✅ Yes" if p.get('consented_at') else "❌ No"
-        print(f"   🆔 {p['id'][:8]}... | {p['name']} | Consent: {consent} | DOB: {p.get('date_of_birth', 'N/A')}")
+        sex_display = p.get('sex', '?').capitalize()   # nice capitalisation
+        print(f"   🆔 {p['id'][:8]}... | {p['name']} | Age: {p.get('age', '?')} | Sex: {sex_display} | Consent: {consent}")
 
 
 # ============================================================
@@ -128,41 +127,31 @@ def list_patients():
 # ============================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="Create a patient with hashed password.",
+        description="Create a patient with all attributes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create a patient with password
-  python create_patient.py --name "John Doe" --dob 1990-01-01 --password "test123"
-
-  # Create with consent
-  python create_patient.py --name "Jane Smith" --dob 1985-06-15 --password "secret456" --consent
+  # Create a patient with all fields
+  python create_patient.py --name "John Doe" --dob 1990-01-01 --sex male --password "test123" --consent
 
   # List all patients
   python create_patient.py --list
         """
     )
-    
-    parser.add_argument('--name', help="Patient's full name")
-    parser.add_argument('--dob', help="Date of birth (YYYY-MM-DD)")
+    parser.add_argument('--name', required=True, help="Patient's full name")
+    parser.add_argument('--dob', required=True, help="Date of birth (YYYY-MM-DD)")
+    parser.add_argument('--sex', required=True, choices=['male', 'female', 'other'],
+                        help="Sex (must be one of: male, female, other) – case-insensitive")
     parser.add_argument('--password', help="Password (will prompt if not provided)")
     parser.add_argument('--consent', action='store_true', help="Mark consent as given")
     parser.add_argument('--list', action='store_true', help="List all existing patients")
-    
     args = parser.parse_args()
-    
-    # List patients
+
     if args.list:
         list_patients()
         return
-    
-    # Validate required args
-    if not args.name or not args.dob:
-        print("❌ Error: --name and --dob are required")
-        print("   Example: python create_patient.py --name 'John Doe' --dob 1990-01-01 --password 'test123'")
-        sys.exit(1)
-    
-    # Get password (prompt if not provided)
+
+    # Password handling
     password = args.password
     if not password:
         password = getpass("🔑 Enter password: ")
@@ -173,16 +162,16 @@ Examples:
         if len(password) < 4:
             print("❌ Password must be at least 4 characters")
             sys.exit(1)
-    
-    # Validate date format
+
+    # Validate DOB
     try:
-        date.fromisoformat(args.dob)
+        datetime.strptime(args.dob, "%Y-%m-%d")
     except ValueError:
         print(f"❌ Invalid date format: {args.dob}. Use YYYY-MM-DD")
         sys.exit(1)
-    
-    # Create patient
-    create_patient(args.name, args.dob, password, args.consent)
+
+    # Sex is already lowercased by choices, but we convert anyway
+    create_patient(args.name, args.dob, args.sex.lower(), password, args.consent)
 
 
 if __name__ == "__main__":
