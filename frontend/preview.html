@@ -1,0 +1,2220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CareLink — Doctor-Patient Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+/* ===== Reset & base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --navy:       #2D4A6B;
+  --navy-deep:  #1E3350;
+  --navy-mid:   #3D5F85;
+  --sky:        #E8F0F9;
+  --sky-mid:    #D0DFF0;
+  --base:       #F7F9FB;
+  --surface:    #FFFFFF;
+  --border:     #D8E2EC;
+  --text:       #1A2535;
+  --text-mid:   #4A5A6E;
+  --text-light: #7A8B9E;
+  --green:      #1A7F5A;
+  --green-bg:   #E6F5EF;
+  --amber:      #B45309;
+  --amber-bg:   #FEF3E2;
+  --red:        #C0392B;
+  --red-bg:     #FDEAEA;
+  --yellow:     #D97706;
+
+  --radius-sm:  4px;
+  --radius:     8px;
+  --radius-lg:  12px;
+
+  --shadow-sm:  0 1px 3px rgba(45,74,107,.08);
+  --shadow:     0 2px 8px rgba(45,74,107,.12);
+  --shadow-lg:  0 4px 20px rgba(45,74,107,.15);
+
+  --sidebar-w:  220px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html { font-size: 15px; }
+body {
+  font-family: var(--font);
+  background: var(--base);
+  color: var(--text);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+a { color: var(--navy); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { cursor: pointer; font: inherit; border: none; background: none; }
+input, textarea, select { font: inherit; }
+img { max-width: 100%; }
+
+/* ===== Typography scale ===== */
+.t-xl   { font-size: 1.75rem; font-weight: 700; line-height: 1.25; letter-spacing: -.02em; }
+.t-lg   { font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
+.t-md   { font-size: 1rem;    font-weight: 600; }
+.t-sm   { font-size: .875rem; }
+.t-xs   { font-size: .8125rem; color: var(--text-light); }
+.t-mono { font-family: 'SF Mono', 'Fira Mono', monospace; font-size: .8125rem; }
+
+/* ===== Layout shell ===== */
+#app    { display: flex; min-height: 100vh; }
+
+/* ===== Sidebar ===== */
+#sidebar {
+  width: var(--sidebar-w);
+  min-height: 100vh;
+  background: var(--navy-deep);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 0; top: 0;
+  z-index: 100;
+}
+.sidebar-brand {
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.sidebar-brand .wordmark {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -.01em;
+}
+.sidebar-brand .tagline {
+  font-size: .75rem;
+  color: rgba(255,255,255,.5);
+  margin-top: 2px;
+}
+.sidebar-user {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.sidebar-user .user-name { color: #fff; font-size: .875rem; font-weight: 600; }
+.sidebar-user .user-role { color: rgba(255,255,255,.5); font-size: .75rem; }
+.sidebar-nav { flex: 1; padding: 12px 0; }
+.nav-link {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px;
+  color: rgba(255,255,255,.65);
+  font-size: .875rem;
+  transition: background .15s, color .15s;
+}
+.nav-link:hover { background: rgba(255,255,255,.07); color: #fff; text-decoration: none; }
+.nav-link.active { background: rgba(255,255,255,.12); color: #fff; }
+.nav-link svg { width: 16px; height: 16px; flex-shrink: 0; }
+.nav-badge {
+  margin-left: auto;
+  background: var(--red);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 700;
+  min-width: 18px; height: 18px;
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 5px;
+}
+.sidebar-logout {
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255,255,255,.1);
+}
+.sidebar-logout button {
+  color: rgba(255,255,255,.5);
+  font-size: .8125rem;
+  transition: color .15s;
+}
+.sidebar-logout button:hover { color: #fff; }
+
+/* ===== Main content area ===== */
+#main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  min-width: 0;
+}
+.page { display: none; }
+.page.active { display: block; }
+
+/* ===== Page header ===== */
+.page-header {
+  padding: 28px 32px 0;
+  max-width: 820px;
+}
+.page-header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+.page-header p { color: var(--text-mid); margin-top: 4px; font-size: .9375rem; }
+
+/* ===== Auth pages ===== */
+#auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--base);
+}
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 40px 36px;
+}
+.auth-logo {
+  margin-bottom: 28px;
+}
+.auth-logo .wordmark { font-size: 1.1875rem; font-weight: 700; color: var(--navy); }
+.auth-logo .tagline  { font-size: .8125rem; color: var(--text-light); margin-top: 2px; }
+
+.auth-tabs { display: flex; gap: 0; margin-bottom: 28px; border-bottom: 2px solid var(--border); }
+.auth-tab {
+  flex: 1;
+  text-align: center;
+  padding: 10px;
+  font-size: .9375rem;
+  font-weight: 600;
+  color: var(--text-mid);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color .15s, border-color .15s;
+  background: none;
+}
+.auth-tab:hover { color: var(--navy); }
+.auth-tab.active { color: var(--navy); border-color: var(--navy); }
+
+/* ===== Form elements ===== */
+.field { margin-bottom: 18px; }
+.field label { display: block; font-size: .875rem; font-weight: 600; color: var(--text-mid); margin-bottom: 6px; }
+.field input, .field select, .field textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  font-size: .9375rem;
+  background: var(--base);
+  color: var(--text);
+  transition: border-color .15s, box-shadow .15s;
+}
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: none;
+  border-color: var(--navy-mid);
+  box-shadow: 0 0 0 3px rgba(45,74,107,.1);
+}
+.field input.error, .field select.error { border-color: var(--red); }
+
+.field-hint { font-size: .8125rem; color: var(--text-light); margin-top: 4px; }
+
+/* Role picker */
+.role-picker { display: flex; gap: 10px; }
+.role-option { flex: 1; }
+.role-option input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.role-option label {
+  display: block;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.role-option input:checked + label {
+  border-color: var(--navy);
+  background: var(--sky);
+}
+.role-label-title { font-weight: 600; font-size: .9375rem; color: var(--text); }
+.role-label-desc  { font-size: .78125rem; color: var(--text-light); margin-top: 3px; line-height: 1.35; }
+
+/* ===== Buttons ===== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 18px;
+  border-radius: var(--radius);
+  font-size: .9375rem;
+  font-weight: 600;
+  transition: background .15s, color .15s, opacity .15s, transform .1s;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: .55; pointer-events: none; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+
+.btn-primary { background: var(--navy); color: #fff; }
+.btn-primary:hover { background: var(--navy-deep); text-decoration: none; }
+
+.btn-secondary { background: var(--sky); color: var(--navy); }
+.btn-secondary:hover { background: var(--sky-mid); text-decoration: none; }
+
+.btn-outline {
+  background: transparent; color: var(--navy);
+  border: 1.5px solid var(--navy);
+}
+.btn-outline:hover { background: var(--sky); text-decoration: none; }
+
+.btn-ghost { background: transparent; color: var(--text-mid); }
+.btn-ghost:hover { background: var(--sky); color: var(--text); text-decoration: none; }
+
+.btn-danger { background: var(--red-bg); color: var(--red); }
+.btn-danger:hover { background: #f5c6c6; text-decoration: none; }
+
+.btn-success { background: var(--green-bg); color: var(--green); }
+.btn-success:hover { background: #c8eadb; text-decoration: none; }
+
+.btn-sm { padding: 5px 12px; font-size: .8125rem; }
+.btn-full { width: 100%; }
+
+.btn-loading { position: relative; color: transparent !important; pointer-events: none; }
+.btn-loading::after {
+  content: '';
+  position: absolute;
+  width: 16px; height: 16px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  color: white;
+}
+
+@keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+
+/* ===== Inline errors / notices ===== */
+.error-banner {
+  background: var(--red-bg);
+  border: 1px solid #f5c6c6;
+  border-radius: var(--radius);
+  color: var(--red);
+  padding: 10px 14px;
+  font-size: .875rem;
+  margin-bottom: 16px;
+}
+.success-banner {
+  background: var(--green-bg);
+  border: 1px solid #b8dec9;
+  border-radius: var(--radius);
+  color: var(--green);
+  padding: 10px 14px;
+  font-size: .875rem;
+  margin-bottom: 16px;
+}
+.notice-banner {
+  background: var(--sky);
+  border: 1px solid var(--sky-mid);
+  border-radius: var(--radius);
+  color: var(--navy);
+  padding: 10px 14px;
+  font-size: .875rem;
+  margin-bottom: 16px;
+}
+.field-error { font-size: .8125rem; color: var(--red); margin-top: 4px; }
+
+/* ===== Toast notifications ===== */
+#toast-container {
+  position: fixed;
+  bottom: 24px; right: 24px;
+  z-index: 9999;
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  background: var(--text);
+  color: #fff;
+  padding: 12px 18px;
+  border-radius: var(--radius);
+  font-size: .875rem;
+  box-shadow: var(--shadow-lg);
+  max-width: 320px;
+  animation: toast-in .25s ease;
+  pointer-events: all;
+}
+.toast.toast-error { background: var(--red); }
+.toast.toast-success { background: var(--green); }
+@keyframes toast-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform:none; } }
+
+/* ===== Connections page ===== */
+.connections-layout {
+  padding: 24px 32px;
+  max-width: 760px;
+  display: flex; flex-direction: column; gap: 32px;
+}
+.connections-section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.connections-section-header h2 {
+  font-size: 1rem; font-weight: 700; color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+.section-count {
+  background: var(--sky-mid); color: var(--navy);
+  font-size: .75rem; font-weight: 700;
+  padding: 1px 7px; border-radius: 10px;
+}
+.connection-list { display: flex; flex-direction: column; gap: 8px; }
+.connection-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex; align-items: center; gap: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.connection-card.incoming { border-left: 3px solid var(--amber); }
+.connection-card.accepted { border-left: 3px solid var(--green); }
+.connection-card.outgoing { border-left: 3px solid var(--border); }
+
+.avatar {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  background: var(--sky-mid);
+  color: var(--navy);
+  font-size: .9375rem;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.avatar-lg { width: 46px; height: 46px; font-size: 1.125rem; }
+
+.connection-info { flex: 1; min-width: 0; }
+.connection-name { font-weight: 600; font-size: .9375rem; color: var(--text); }
+.connection-meta { font-size: .8125rem; color: var(--text-light); margin-top: 1px; }
+.connection-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.role-badge {
+  display: inline-block;
+  font-size: .71875rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: lowercase;
+}
+.role-badge.doctor { background: var(--sky); color: var(--navy); }
+.role-badge.patient { background: #F0E8FF; color: #6B3FA0; }
+
+.status-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: .78125rem; font-weight: 600;
+  padding: 3px 10px; border-radius: 20px;
+}
+.status-pill.pending  { background: var(--amber-bg); color: var(--amber); }
+.status-pill.accepted { background: var(--green-bg); color: var(--green); }
+.status-pill.rejected { background: var(--red-bg); color: var(--red); }
+
+/* Send request form */
+.send-request-form {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+}
+.send-request-form .form-row {
+  display: flex; gap: 10px;
+}
+.send-request-form .form-row input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  font-size: .9375rem;
+  background: var(--base);
+  transition: border-color .15s;
+}
+.send-request-form .form-row input:focus {
+  outline: none; border-color: var(--navy-mid);
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 32px 24px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+.empty-state .empty-icon { font-size: 2rem; margin-bottom: 10px; }
+.empty-state p { color: var(--text-mid); font-size: .9375rem; max-width: 320px; margin: 0 auto; }
+.empty-state .empty-hint { font-size: .8125rem; color: var(--text-light); margin-top: 6px; }
+
+/* ===== Dashboard ===== */
+.dashboard-layout { padding: 24px 32px; max-width: 760px; }
+.conversations-list { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
+.conv-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex; align-items: center; gap: 14px;
+  cursor: pointer;
+  transition: box-shadow .15s, border-color .15s;
+  box-shadow: var(--shadow-sm);
+}
+.conv-card:hover { box-shadow: var(--shadow); border-color: var(--sky-mid); text-decoration: none; }
+.conv-card-info { flex: 1; min-width: 0; }
+.conv-card-name { font-weight: 600; font-size: .9375rem; color: var(--text); }
+.conv-card-preview { font-size: .8125rem; color: var(--text-light); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px; }
+.conv-card-time { font-size: .75rem; color: var(--text-light); flex-shrink: 0; }
+
+/* ===== Conversation view ===== */
+#conv-page {
+  display: none;
+  flex-direction: column;
+  height: 100vh;
+}
+#conv-page.active { display: flex; }
+
+.conv-header {
+  padding: 16px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px;
+  flex-shrink: 0;
+}
+.conv-header-back {
+  color: var(--text-mid);
+  background: none; border: none; cursor: pointer;
+  padding: 4px; border-radius: var(--radius-sm);
+  transition: background .15s;
+  display: flex; align-items: center;
+}
+.conv-header-back:hover { background: var(--sky); }
+.conv-header h2 { font-size: 1rem; font-weight: 700; }
+
+.conv-thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 4px;
+  scroll-behavior: smooth;
+}
+
+/* Messages */
+.msg-row { display: flex; gap: 10px; }
+.msg-row.mine { flex-direction: row-reverse; }
+
+.msg-bubble {
+  max-width: 480px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: .9375rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.msg-row:not(.mine) .msg-bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.msg-row.mine .msg-bubble {
+  background: var(--navy);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.msg-meta {
+  font-size: .71875rem; color: var(--text-light);
+  padding: 0 4px; margin-top: 3px; margin-bottom: 8px;
+}
+.msg-row.mine .msg-meta { text-align: right; }
+
+/* Inline report card in thread */
+.report-inline {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  display: flex; align-items: center; gap: 12px;
+  cursor: pointer;
+  transition: box-shadow .15s;
+  max-width: 380px;
+  box-shadow: var(--shadow-sm);
+}
+.report-inline:hover { box-shadow: var(--shadow); text-decoration: none; }
+.report-inline .report-icon {
+  width: 36px; height: 36px;
+  background: var(--sky);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--navy); flex-shrink: 0;
+}
+.report-inline-info { flex: 1; min-width: 0; }
+.report-inline-name { font-weight: 600; font-size: .9375rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.report-inline-meta { font-size: .78125rem; color: var(--text-light); margin-top: 2px; }
+.report-inline-status { flex-shrink: 0; }
+
+/* Composer */
+.conv-composer {
+  padding: 16px 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.composer-inner {
+  display: flex; gap: 10px; align-items: flex-end;
+  max-width: 700px;
+}
+.composer-inner textarea {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: .9375rem;
+  resize: none;
+  max-height: 140px;
+  min-height: 44px;
+  line-height: 1.45;
+  background: var(--base);
+  transition: border-color .15s;
+}
+.composer-inner textarea:focus { outline: none; border-color: var(--navy-mid); }
+
+/* Upload section */
+.upload-panel {
+  max-width: 700px;
+  margin-bottom: 12px;
+}
+.upload-trigger-btn {
+  font-size: .8125rem;
+  color: var(--navy);
+  background: var(--sky);
+  border: 1px solid var(--sky-mid);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  margin-bottom: 10px;
+}
+.upload-form {
+  background: var(--sky);
+  border: 1.5px dashed var(--sky-mid);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: none;
+  flex-direction: column; gap: 10px;
+}
+.upload-form.open { display: flex; }
+.upload-form input[type="file"] { font-size: .875rem; }
+.upload-form-row { display: flex; gap: 8px; align-items: flex-end; }
+.upload-form-row .field { flex: 1; margin: 0; }
+.upload-form-row .field input {
+  padding: 8px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* ===== Report detail page ===== */
+.report-layout { padding: 24px 32px; max-width: 820px; }
+.report-header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }
+.report-header-info { flex: 1; }
+.report-header h1 { font-size: 1.375rem; font-weight: 700; letter-spacing: -.02em; }
+.report-header-meta { font-size: .875rem; color: var(--text-light); margin-top: 4px; }
+.report-header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Status stepper */
+.status-stepper {
+  display: flex; align-items: center; gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 24px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+  overflow-x: auto;
+}
+.step {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px 0 0;
+}
+.step:first-child { padding-left: 0; }
+.step-dot {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .75rem; font-weight: 700;
+  color: var(--text-light);
+  flex-shrink: 0;
+  transition: border-color .2s, background .2s, color .2s;
+}
+.step.done .step-dot { background: var(--green); border-color: var(--green); color: #fff; }
+.step.current .step-dot { background: var(--navy); border-color: var(--navy); color: #fff; }
+.step-label { font-size: .8125rem; font-weight: 600; color: var(--text-light); white-space: nowrap; }
+.step.done .step-label { color: var(--green); }
+.step.current .step-label { color: var(--navy); }
+.step-connector { flex: 1; height: 2px; background: var(--border); min-width: 20px; }
+.step-connector.done { background: var(--green); }
+
+/* AI Summary section */
+.ai-summary-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+}
+.ai-summary-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.ai-summary-header h2 { font-size: .9375rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.ai-badge {
+  background: linear-gradient(135deg, var(--navy), var(--navy-mid));
+  color: #fff; font-size: .6875rem; font-weight: 700;
+  padding: 2px 7px; border-radius: 4px; letter-spacing: .04em;
+}
+.ai-summary-actions { display: flex; gap: 8px; }
+
+.ai-summary-body { padding: 20px; }
+.ai-field { margin-bottom: 20px; }
+.ai-field:last-child { margin-bottom: 0; }
+.ai-field-label {
+  font-size: .75rem; font-weight: 700; letter-spacing: .03em;
+  color: var(--text-light); margin-bottom: 8px; text-transform: uppercase;
+}
+.ai-field-content { font-size: .9375rem; color: var(--text); line-height: 1.55; }
+.ai-field-content ul { padding-left: 18px; }
+.ai-field-content li { margin-bottom: 4px; }
+
+/* Flagged values */
+.flagged-list { list-style: none; padding: 0; }
+.flagged-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  background: var(--amber-bg);
+  border: 1px solid #F6C675;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  font-size: .875rem;
+  color: var(--amber);
+  font-weight: 500;
+}
+.flagged-item:last-child { margin-bottom: 0; }
+
+/* Edit mode inputs */
+.ai-field-edit { display: none; }
+.ai-field-edit textarea, .ai-field-edit input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1.5px solid var(--navy-mid);
+  border-radius: var(--radius);
+  font-size: .9375rem;
+  background: var(--base);
+  resize: vertical;
+}
+.edit-mode .ai-field-content { display: none; }
+.edit-mode .ai-field-edit { display: block; }
+
+/* PDF preview */
+.pdf-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+}
+.pdf-section-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.pdf-section-header h2 { font-size: .9375rem; font-weight: 700; }
+.pdf-preview iframe {
+  width: 100%;
+  height: 480px;
+  border: none;
+  display: block;
+}
+.pdf-loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-light);
+  font-size: .9375rem;
+}
+
+/* Comments section */
+.comments-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.comments-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.comments-header h2 { font-size: .9375rem; font-weight: 700; }
+.comments-thread {
+  padding: 16px 20px;
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.comment-item { display: flex; gap: 10px; }
+.comment-item .avatar { width: 30px; height: 30px; font-size: .75rem; flex-shrink: 0; }
+.comment-body { background: var(--base); border-radius: var(--radius); padding: 8px 12px; flex: 1; }
+.comment-author { font-size: .75rem; font-weight: 700; color: var(--navy); }
+.comment-text { font-size: .9375rem; margin-top: 2px; line-height: 1.45; }
+.comment-time { font-size: .71875rem; color: var(--text-light); margin-top: 3px; }
+.comments-composer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 8px;
+}
+.comments-composer textarea {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  font-size: .9375rem;
+  resize: none;
+  min-height: 40px;
+  background: var(--base);
+  transition: border-color .15s;
+}
+.comments-composer textarea:focus { outline: none; border-color: var(--navy-mid); }
+
+/* AI summary loading overlay */
+.ai-loading-overlay {
+  display: none;
+  position: absolute; inset: 0;
+  background: rgba(247,249,251,.85);
+  z-index: 10;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 14px;
+  border-radius: var(--radius-lg);
+}
+.ai-loading-overlay.show { display: flex; }
+.ai-spinner {
+  width: 32px; height: 32px;
+  border: 3px solid var(--sky-mid);
+  border-top-color: var(--navy);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.ai-loading-text { color: var(--text-mid); font-size: .9375rem; }
+
+/* ===== Dividers ===== */
+.divider { height: 1px; background: var(--border); margin: 8px 0; }
+
+/* ===== Loading skeleton ===== */
+.skeleton {
+  background: linear-gradient(90deg, var(--sky) 25%, var(--sky-mid) 50%, var(--sky) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.skeleton-line { height: 14px; margin-bottom: 8px; }
+.skeleton-line.w60 { width: 60%; }
+.skeleton-line.w80 { width: 80%; }
+
+/* ===== Responsive ===== */
+@media (max-width: 680px) {
+  :root { --sidebar-w: 0px; }
+  #sidebar {
+    width: 100%;
+    min-height: auto;
+    height: auto;
+    bottom: 0; top: auto;
+    flex-direction: row;
+    align-items: stretch;
+    border-top: 1px solid rgba(255,255,255,.1);
+  }
+  .sidebar-brand, .sidebar-user, .sidebar-logout { display: none; }
+  .sidebar-nav { display: flex; flex-direction: row; padding: 0; width: 100%; }
+  .nav-link { flex-direction: column; gap: 2px; padding: 8px 10px; font-size: .65rem; align-items: center; justify-content: center; flex: 1; }
+  .nav-link span { display: none; }
+  .nav-link svg { width: 20px; height: 20px; }
+  .nav-badge { margin-left: 0; margin-top: -4px; }
+  #main { margin-left: 0; margin-bottom: 64px; }
+  #conv-page { height: calc(100vh - 64px); }
+  .page-header, .connections-layout, .dashboard-layout, .report-layout { padding: 16px; }
+  .send-request-form .form-row { flex-direction: column; }
+  .upload-form-row { flex-direction: column; }
+  .report-header-actions { width: 100%; }
+}
+@media (max-width: 480px) {
+  .msg-bubble { max-width: calc(100vw - 80px); }
+  .status-stepper { padding: 12px 16px; }
+}
+
+  </style>
+</head>
+<body>
+
+<!-- ── Toast container ── -->
+<div id="toast-container"></div>
+
+<!-- ══════════════════════════════════════════════════════════
+     AUTH PAGE (shown when logged out)
+═══════════════════════════════════════════════════════════ -->
+<div id="auth-page" style="display:none">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="wordmark">CareLink</div>
+      <div class="tagline">Secure doctor-patient communication</div>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login">Log in</button>
+      <button class="auth-tab" data-tab="signup">Create account</button>
+    </div>
+
+    <!-- Login form -->
+    <form id="login-form">
+      <div class="error-banner" style="display:none"></div>
+      <div class="field">
+        <label for="login-email">Email</label>
+        <input type="email" id="login-email" name="email" autocomplete="email" required placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" name="password" autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Log in</button>
+    </form>
+
+    <!-- Signup form -->
+    <form id="signup-form" style="display:none">
+      <div class="error-banner" style="display:none"></div>
+      <div class="field">
+        <label for="signup-name">Full name</label>
+        <input type="text" id="signup-name" name="name" autocomplete="name" required placeholder="e.g. Dr. Alice Smith">
+      </div>
+      <div class="field">
+        <label for="signup-email">Email</label>
+        <input type="email" id="signup-email" name="email" autocomplete="email" required placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="signup-password">Password</label>
+        <input type="password" id="signup-password" name="password" autocomplete="new-password" required placeholder="8+ characters" minlength="8">
+      </div>
+      <div class="field">
+        <label>I am a…</label>
+        <div class="role-picker">
+          <div class="role-option">
+            <input type="radio" id="role-doctor" name="role" value="doctor">
+            <label for="role-doctor">
+              <div class="role-label-title">🩺 Doctor</div>
+              <div class="role-label-desc">Review and respond to patient reports</div>
+            </label>
+          </div>
+          <div class="role-option">
+            <input type="radio" id="role-patient" name="role" value="patient">
+            <label for="role-patient">
+              <div class="role-label-title">👤 Patient</div>
+              <div class="role-label-desc">Share reports and message your care team</div>
+            </label>
+          </div>
+        </div>
+        <div class="field-hint">This choice is permanent and shapes how you use the app.</div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Create account</button>
+    </form>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     APP SHELL (shown when logged in)
+═══════════════════════════════════════════════════════════ -->
+<div id="app-shell" style="display:none; min-height:100vh; display:none">
+  <div id="app">
+
+    <!-- Sidebar -->
+    <nav id="sidebar">
+      <div class="sidebar-brand">
+        <div class="wordmark">CareLink</div>
+        <div class="tagline">Doctor-patient portal</div>
+      </div>
+      <div class="sidebar-user">
+        <div class="user-name" id="sidebar-name">…</div>
+        <div class="user-role" id="sidebar-role">…</div>
+      </div>
+      <div class="sidebar-nav">
+        <a href="#" class="nav-link" data-page="connections">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span>Connections</span>
+          <div class="nav-badge" id="conn-badge" style="display:none">0</div>
+        </a>
+        <a href="#" class="nav-link" data-page="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>Conversations</span>
+        </a>
+      </div>
+      <div class="sidebar-logout">
+        <button id="logout-btn">Sign out</button>
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main id="main">
+
+      <!-- ── Connections page ── -->
+      <div id="connections-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Connections</h1>
+          <p>Connect with your care team to start sharing reports and messages.</p>
+        </div>
+        <div class="connections-layout">
+
+          <!-- Incoming requests (high-priority — first) -->
+          <div>
+            <div class="connections-section-header">
+              <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.6a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 3h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 10.6a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                Incoming requests
+                <span class="section-count" id="incoming-count">0</span>
+              </h2>
+            </div>
+            <div class="connection-list" id="incoming-list"></div>
+          </div>
+
+          <!-- Connected -->
+          <div>
+            <div class="connections-section-header">
+              <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                Connected
+                <span class="section-count" id="connected-count">0</span>
+              </h2>
+            </div>
+            <div class="connection-list" id="connected-list"></div>
+          </div>
+
+          <!-- Outgoing requests -->
+          <div>
+            <div class="connections-section-header">
+              <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Sent requests
+                <span class="section-count" id="outgoing-count">0</span>
+              </h2>
+            </div>
+            <div class="connection-list" id="outgoing-list"></div>
+          </div>
+
+          <!-- Send a new request -->
+          <div>
+            <div class="connections-section-header">
+              <h2>Send a request</h2>
+            </div>
+            <div class="send-request-form">
+              <div class="error-banner" id="send-request-error" style="display:none"></div>
+              <form id="send-request-form">
+                <div class="form-row">
+                  <input type="email" id="connect-placeholder" placeholder="Enter email" required autocomplete="off">
+                  <button type="submit" id="connect-submit-btn" class="btn btn-primary">Connect</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ── Dashboard page ── -->
+      <div id="dashboard-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Conversations</h1>
+          <p>Your active message threads with connected patients and doctors.</p>
+        </div>
+        <div class="dashboard-layout">
+          <div class="conversations-list" id="conversations-list"></div>
+        </div>
+      </div>
+
+      <!-- ── Conversation view ── -->
+      <div id="conv-page" class="page" style="flex-direction:column">
+        <div class="conv-header">
+          <button class="conv-header-back" id="conv-back-btn" aria-label="Back to conversations">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          </button>
+          <div class="avatar" id="conv-avatar">?</div>
+          <div>
+            <div class="t-md" id="conv-other-name">…</div>
+            <div class="t-xs" id="conv-other-role">…</div>
+          </div>
+        </div>
+
+        <div class="conv-thread" id="conv-thread"></div>
+
+        <div class="conv-composer">
+          <div class="upload-panel">
+            <button class="upload-trigger-btn" id="upload-toggle-btn">
+              + Attach report (PDF)
+            </button>
+            <div class="upload-form" id="upload-form">
+              <div class="error-banner" id="upload-error" style="display:none"></div>
+              <input type="file" id="report-file-input" accept=".pdf,application/pdf">
+              <div class="upload-form-row">
+                <div class="field">
+                  <label for="report-display-name">Report name (optional)</label>
+                  <input type="text" id="report-display-name" placeholder="e.g. Bloodwork March 2026" maxlength="200">
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="upload-submit-btn">Upload</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="upload-cancel-btn">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-inner">
+            <textarea id="msg-textarea" placeholder="Type a message… (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+            <button class="btn btn-primary" id="msg-send-btn" aria-label="Send message">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Report detail page ── -->
+      <div id="report-page" class="page">
+        <div class="report-layout" id="report-layout">
+          <!-- Dynamically rendered -->
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Doctor-Patient Portal — Frontend App
+   Plain JS (no framework). All state in memory.
+   ============================================================ */
+
+const API = 'http://localhost:8000';
+
+/* ── Auth helpers ── */
+const auth = {
+  token: () => localStorage.getItem('token'),
+  user:  () => { try { return JSON.parse(localStorage.getItem('user')); } catch { return null; } },
+  save(token, user) {
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+  },
+  clear() { localStorage.removeItem('token'); localStorage.removeItem('user'); }
+};
+
+/* ── Fetch wrapper ── */
+async function apiFetch(path, opts = {}) {
+  const token = auth.token();
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (!(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(`${API}${path}`, { ...opts, headers });
+
+  if (res.status === 401) {
+    auth.clear();
+    showPage('auth');
+    throw new Error('Session expired. Please log in again.');
+  }
+  return res;
+}
+
+function errMsg(data) {
+  if (!data || !data.detail) return 'An unexpected error occurred.';
+  if (typeof data.detail === 'string') return data.detail;
+  if (Array.isArray(data.detail)) return data.detail.map(e => e.msg).join('; ');
+  return String(data.detail);
+}
+
+/* ── Toast ── */
+function toast(msg, type = '') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast${type ? ' toast-' + type : ''}`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+/* ── Time formatting ── */
+function relTime(utcStr) {
+  // Treat as UTC (no offset suffix per contract)
+  const d = new Date(utcStr + (utcStr.endsWith('Z') ? '' : 'Z'));
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 5)   return 'just now';
+  if (diff < 60)  return `${Math.floor(diff)}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function fmtTime(utcStr) {
+  const d = new Date(utcStr + (utcStr.endsWith('Z') ? '' : 'Z'));
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/* ── Avatars ── */
+function initials(name) {
+  if (!name) return '?';
+  return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+}
+
+/* ── Page routing ── */
+let currentPage = null;
+
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+
+  const page = document.getElementById(`${id}-page`);
+  if (page) page.classList.add('active');
+
+  const link = document.querySelector(`.nav-link[data-page="${id}"]`);
+  if (link) link.classList.add('active');
+
+  const shell = document.getElementById('app-shell');
+  if (id === 'auth') {
+    shell.style.display = 'none';
+    document.getElementById('auth-page').style.display = 'flex';
+  } else {
+    shell.style.display = 'flex';
+    document.getElementById('auth-page').style.display = 'none';
+  }
+  currentPage = id;
+}
+
+/* ============================================================
+   AUTH
+   ============================================================ */
+function initAuth() {
+  const tabs = document.querySelectorAll('.auth-tab');
+  const loginForm = document.getElementById('login-form');
+  const signupForm = document.getElementById('signup-form');
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.tab;
+      loginForm.style.display  = mode === 'login'  ? 'block' : 'none';
+      signupForm.style.display = mode === 'signup' ? 'block' : 'none';
+    });
+  });
+
+  /* Login */
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = loginForm.querySelector('button[type="submit"]');
+    const errEl = loginForm.querySelector('.error-banner');
+    errEl.style.display = 'none';
+    btn.classList.add('btn-loading');
+
+    try {
+      const res = await fetch(`${API}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email:    loginForm.querySelector('[name="email"]').value.trim(),
+          password: loginForm.querySelector('[name="password"]').value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
+      auth.save(data.access_token, data.user);
+      onLogin();
+    } catch (err) {
+      errEl.textContent = 'Could not reach the server. Is it running?';
+      errEl.style.display = 'block';
+    } finally { btn.classList.remove('btn-loading'); }
+  });
+
+  /* Signup */
+  signupForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = signupForm.querySelector('button[type="submit"]');
+    const errEl = signupForm.querySelector('.error-banner');
+    errEl.style.display = 'none';
+    const role = signupForm.querySelector('[name="role"]:checked')?.value;
+    if (!role) { errEl.textContent = 'Please choose a role.'; errEl.style.display = 'block'; return; }
+
+    btn.classList.add('btn-loading');
+    try {
+      const res = await fetch(`${API}/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:     signupForm.querySelector('[name="name"]').value.trim(),
+          email:    signupForm.querySelector('[name="email"]').value.trim(),
+          password: signupForm.querySelector('[name="password"]').value,
+          role
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
+      auth.save(data.access_token, data.user);
+      onLogin();
+    } catch (err) {
+      errEl.textContent = 'Could not reach the server. Is it running?';
+      errEl.style.display = 'block';
+    } finally { btn.classList.remove('btn-loading'); }
+  });
+}
+
+function onLogin() {
+  const user = auth.user();
+  document.getElementById('sidebar-name').textContent = user.name;
+  document.getElementById('sidebar-role').textContent = user.role === 'doctor' ? 'Doctor' : 'Patient';
+  updatePendingBadge();
+  showPage('connections');
+  loadConnections();
+}
+
+/* ============================================================
+   CONNECTIONS
+   ============================================================ */
+let connectionsCache = [];
+
+async function loadConnections() {
+  try {
+    const res = await apiFetch('/connections');
+    const data = await res.json();
+    if (!res.ok) { toast(errMsg(data), 'error'); return; }
+    connectionsCache = data;
+    renderConnections(data);
+    updatePendingBadge();
+  } catch (err) { toast('Failed to load connections.', 'error'); }
+}
+
+function updatePendingBadge() {
+  const me = auth.user();
+  if (!me) return;
+  const pending = connectionsCache.filter(c => c.status === 'pending' && c.requested_by_id !== me.id);
+  const badge = document.getElementById('conn-badge');
+  if (pending.length) { badge.textContent = pending.length; badge.style.display = 'flex'; }
+  else badge.style.display = 'none';
+}
+
+function renderConnections(connections) {
+  const me = auth.user();
+  const accepted  = connections.filter(c => c.status === 'accepted');
+  const incoming  = connections.filter(c => c.status === 'pending' && c.requested_by_id !== me.id);
+  const outgoing  = connections.filter(c => c.status === 'pending' && c.requested_by_id === me.id);
+
+  const isDoctor = me.role === 'doctor';
+
+  /* Connected */
+  const connectedEl = document.getElementById('connected-list');
+  document.getElementById('connected-count').textContent = accepted.length;
+  connectedEl.innerHTML = '';
+  if (accepted.length === 0) {
+    connectedEl.innerHTML = emptyState(
+      isDoctor ? '🩺' : '👤',
+      isDoctor ? 'No patients connected yet.' : 'No doctors connected yet.',
+      isDoctor ? 'Accept a patient request below to get started.' : 'Send a connection request to your doctor using their email address.'
+    );
+  } else {
+    accepted.forEach(c => {
+      const other = isDoctor ? c.patient : c.doctor;
+      connectedEl.appendChild(connectionCard(other, 'accepted', c));
+    });
+  }
+
+  /* Incoming */
+  const incomingEl = document.getElementById('incoming-list');
+  document.getElementById('incoming-count').textContent = incoming.length;
+  incomingEl.innerHTML = '';
+  if (incoming.length === 0) {
+    incomingEl.innerHTML = emptyState('📬', 'No pending requests.', '');
+  } else {
+    incoming.forEach(c => {
+      const other = isDoctor ? c.patient : c.doctor;
+      incomingEl.appendChild(connectionCard(other, 'incoming', c));
+    });
+  }
+
+  /* Outgoing */
+  const outgoingEl = document.getElementById('outgoing-list');
+  document.getElementById('outgoing-count').textContent = outgoing.length;
+  outgoingEl.innerHTML = '';
+  if (outgoing.length === 0) {
+    outgoingEl.innerHTML = emptyState('📤', 'No outgoing requests.', '');
+  } else {
+    outgoing.forEach(c => {
+      const other = isDoctor ? c.patient : c.doctor;
+      outgoingEl.appendChild(connectionCard(other, 'outgoing', c));
+    });
+  }
+
+  /* Update send form label */
+  const roleLabel = isDoctor ? 'patient' : 'doctor';
+  document.getElementById('connect-placeholder').placeholder = `Enter your ${roleLabel}'s email`;
+  document.getElementById('connect-submit-btn').textContent = isDoctor ? 'Add patient' : 'Connect with doctor';
+}
+
+function emptyState(icon, msg, hint) {
+  return `<div class="empty-state">
+    <div class="empty-icon">${icon}</div>
+    <p>${msg}</p>
+    ${hint ? `<p class="empty-hint">${hint}</p>` : ''}
+  </div>`;
+}
+
+function connectionCard(user, type, conn) {
+  const div = document.createElement('div');
+  div.className = `connection-card ${type}`;
+  div.innerHTML = `
+    <div class="avatar">${initials(user.name)}</div>
+    <div class="connection-info">
+      <div class="connection-name">${escHtml(user.name)}</div>
+      <div class="connection-meta">
+        <span class="role-badge ${user.role}">${user.role}</span>
+        ${type === 'outgoing' ? ' · Waiting for response' : ''}
+        ${type === 'accepted' ? ` · Connected ${relTime(conn.responded_at || conn.created_at)}` : ''}
+        ${type === 'incoming' ? ` · Requested ${relTime(conn.created_at)}` : ''}
+      </div>
+    </div>
+    <div class="connection-actions">
+      ${type === 'incoming' ? `
+        <button class="btn btn-success btn-sm accept-btn" data-id="${conn.id}">Accept</button>
+        <button class="btn btn-danger btn-sm reject-btn" data-id="${conn.id}">Decline</button>
+      ` : ''}
+      ${type === 'accepted' ? `<button class="btn btn-secondary btn-sm open-conv-btn" data-user-id="${user.id}" data-user-role="${user.role}">Open chat</button>` : ''}
+    </div>`;
+
+  div.querySelectorAll('.accept-btn').forEach(b => b.addEventListener('click', () => respondConnection(conn.id, 'accepted', b)));
+  div.querySelectorAll('.reject-btn').forEach(b => b.addEventListener('click', () => respondConnection(conn.id, 'rejected', b)));
+  div.querySelectorAll('.open-conv-btn').forEach(b => b.addEventListener('click', async () => {
+    const me = auth.user();
+    const patientId = me.role === 'patient' ? me.id : user.id;
+    const doctorId  = me.role === 'doctor'  ? me.id : user.id;
+    await openConversation(patientId, doctorId, user);
+  }));
+  return div;
+}
+
+async function respondConnection(id, status, btn) {
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(`/connections/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (!res.ok) { toast(errMsg(data), 'error'); return; }
+    toast(status === 'accepted' ? 'Connection accepted.' : 'Request declined.', 'success');
+    await loadConnections();
+  } catch { toast('Failed to update connection.', 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function initConnectionsPage() {
+  const form = document.getElementById('send-request-form');
+  const errEl = document.getElementById('send-request-error');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errEl.style.display = 'none';
+    const emailInput = document.getElementById('connect-placeholder');
+    const email = emailInput.value.trim();
+    const btn = document.getElementById('connect-submit-btn');
+    btn.disabled = true;
+    try {
+      const res = await apiFetch('/connections', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = res.status === 404 ? `No account found with email "${email}".` :
+                    res.status === 400 ? errMsg(data) :
+                    errMsg(data);
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+        return;
+      }
+      emailInput.value = '';
+      toast('Connection request sent.', 'success');
+      await loadConnections();
+    } catch { errEl.textContent = 'Could not send request. Check server.'; errEl.style.display = 'block'; }
+    finally { btn.disabled = false; }
+  });
+}
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+async function loadDashboard() {
+  const list = document.getElementById('conversations-list');
+  list.innerHTML = '<div class="skeleton skeleton-line w80"></div><div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch('/conversations');
+    const data = await res.json();
+    if (!res.ok) { toast(errMsg(data), 'error'); return; }
+    renderDashboard(data);
+  } catch { toast('Failed to load conversations.', 'error'); }
+}
+
+function renderDashboard(convs) {
+  const me = auth.user();
+  const list = document.getElementById('conversations-list');
+  list.innerHTML = '';
+
+  if (convs.length === 0) {
+    // Show accepted connections as "start a conversation"
+    const accepted = connectionsCache.filter(c => c.status === 'accepted');
+    if (accepted.length === 0) {
+      list.innerHTML = emptyState('💬', 'No conversations yet.',
+        'Connect with your ' + (me.role === 'doctor' ? 'patients' : 'doctor') + ' first in the Connections tab.');
+    } else {
+      list.innerHTML = `<p class="t-sm" style="color:var(--text-mid);margin-bottom:12px">Start a conversation with one of your connections:</p>`;
+      accepted.forEach(c => {
+        const other = me.role === 'doctor' ? c.patient : c.doctor;
+        const card = document.createElement('div');
+        card.className = 'conv-card';
+        card.innerHTML = `
+          <div class="avatar avatar-lg">${initials(other.name)}</div>
+          <div class="conv-card-info">
+            <div class="conv-card-name">${escHtml(other.name)}</div>
+            <div class="conv-card-preview" style="color:var(--navy)">Start conversation →</div>
+          </div>
+          <span class="role-badge ${other.role}">${other.role}</span>`;
+        card.addEventListener('click', async () => {
+          const patientId = me.role === 'patient' ? me.id : other.id;
+          const doctorId  = me.role === 'doctor'  ? me.id : other.id;
+          await openConversation(patientId, doctorId, other);
+        });
+        list.appendChild(card);
+      });
+    }
+    return;
+  }
+
+  convs.forEach(conv => {
+    const other = me.id === conv.patient_id ? conv.doctor : conv.patient;
+    const card = document.createElement('div');
+    card.className = 'conv-card';
+    card.innerHTML = `
+      <div class="avatar avatar-lg">${initials(other.name)}</div>
+      <div class="conv-card-info">
+        <div class="conv-card-name">${escHtml(other.name)}</div>
+        <div class="conv-card-preview">Tap to open</div>
+      </div>
+      <span class="role-badge ${other.role}">${other.role}</span>`;
+    card.addEventListener('click', () => openConvById(conv, other));
+    list.appendChild(card);
+  });
+}
+
+/* ============================================================
+   CONVERSATION VIEW
+   ============================================================ */
+let convState = null; // { conv, other, msgLastId, reportLastId, pollTimer }
+
+async function openConversation(patientId, doctorId, other) {
+  const btn = event?.target;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch('/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ patient_id: patientId, doctor_id: doctorId })
+    });
+    const data = await res.json();
+    if (!res.ok) { toast(errMsg(data), 'error'); return; }
+    openConvById(data, other);
+  } catch { toast('Could not open conversation.', 'error'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function openConvById(conv, other) {
+  stopConvPolling();
+  convState = { conv, other, msgLastId: 0, pollTimer: null };
+
+  document.getElementById('conv-other-name').textContent = other.name;
+  document.getElementById('conv-other-role').textContent = other.role;
+
+  const thread = document.getElementById('conv-thread');
+  thread.innerHTML = '<div class="skeleton skeleton-line w60" style="margin:20px auto"></div>';
+
+  showPage('conv');
+
+  await loadConvThread();
+  startConvPolling();
+  scrollToBottom(thread);
+}
+
+async function loadConvThread() {
+  if (!convState) return;
+  const { conv } = convState;
+
+  // Load messages and reports in parallel
+  const [msgRes, repRes] = await Promise.all([
+    apiFetch(`/conversations/${conv.id}/messages`),
+    apiFetch(`/conversations/${conv.id}/reports`)
+  ]);
+  const messages = msgRes.ok ? await msgRes.json() : [];
+  const reports  = repRes.ok ? await repRes.json() : [];
+
+  if (messages.length) convState.msgLastId = messages[messages.length - 1].id;
+
+  // Merge and sort by timestamp
+  const items = [
+    ...messages.map(m => ({ ...m, _type: 'msg' })),
+    ...reports.map(r  => ({ ...r, _type: 'rep', timestamp: r.timestamp }))
+  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  const thread = document.getElementById('conv-thread');
+  thread.innerHTML = '';
+  items.forEach(item => {
+    if (item._type === 'msg') thread.appendChild(renderMessage(item, conv));
+    else thread.appendChild(renderReportInline(item));
+  });
+  scrollToBottom(thread);
+}
+
+function renderMessage(msg, conv) {
+  const me = auth.user();
+  const isMine = msg.sender_id === me.id;
+  const senderName = isMine ? 'You' : (me.id === conv.patient_id ? conv.doctor.name : conv.patient.name);
+
+  const row = document.createElement('div');
+  row.className = `msg-row${isMine ? ' mine' : ''}`;
+  row.dataset.msgId = msg.id;
+  row.innerHTML = `
+    ${!isMine ? `<div class="avatar" title="${escHtml(senderName)}">${initials(senderName)}</div>` : ''}
+    <div>
+      <div class="msg-bubble">${escHtml(msg.text)}</div>
+      <div class="msg-meta">${isMine ? '' : escHtml(senderName) + ' · '}${fmtTime(msg.timestamp)}</div>
+    </div>`;
+  return row;
+}
+
+function renderReportInline(report) {
+  const statusColor = {
+    uploaded: 'var(--text-light)',
+    processing: 'var(--amber)',
+    awaiting_review: 'var(--navy)',
+    reviewed: 'var(--green)'
+  }[report.status] || 'var(--text-light)';
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding: 4px 0;';
+  wrap.innerHTML = `
+    <div class="report-inline" data-report-id="${report.id}">
+      <div class="report-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+      </div>
+      <div class="report-inline-info">
+        <div class="report-inline-name">${escHtml(report.display_name || 'Report')}</div>
+        <div class="report-inline-meta" style="color:${statusColor}">${fmtStatus(report.status)}</div>
+      </div>
+      <div class="report-inline-status">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    </div>`;
+  wrap.querySelector('.report-inline').addEventListener('click', () => openReportDetail(report.id));
+  return wrap;
+}
+
+function fmtStatus(s) {
+  return { uploaded: 'Uploaded', processing: 'Processing…', awaiting_review: 'Awaiting review', reviewed: 'Reviewed' }[s] || s;
+}
+
+/* Polling */
+function startConvPolling() {
+  if (!convState) return;
+  convState.pollTimer = setInterval(pollMessages, 3000);
+}
+function stopConvPolling() {
+  if (convState?.pollTimer) clearInterval(convState.pollTimer);
+}
+
+async function pollMessages() {
+  if (!convState) return;
+  try {
+    const res = await apiFetch(`/conversations/${convState.conv.id}/messages?after_id=${convState.msgLastId}`);
+    const newMsgs = await res.json();
+    if (!res.ok || !newMsgs.length) return;
+    convState.msgLastId = newMsgs[newMsgs.length - 1].id;
+    const thread = document.getElementById('conv-thread');
+    const wasBottom = thread.scrollHeight - thread.scrollTop <= thread.clientHeight + 80;
+    newMsgs.forEach(msg => thread.appendChild(renderMessage(msg, convState.conv)));
+    if (wasBottom) scrollToBottom(thread);
+  } catch {}
+}
+
+function scrollToBottom(el) {
+  setTimeout(() => { el.scrollTop = el.scrollHeight; }, 30);
+}
+
+/* Composer */
+function initComposer() {
+  const textarea = document.getElementById('msg-textarea');
+  const btn = document.getElementById('msg-send-btn');
+
+  async function sendMsg() {
+    const text = textarea.value.trim();
+    if (!text || !convState) return;
+    btn.disabled = true;
+    textarea.disabled = true;
+    try {
+      const res = await apiFetch(`/conversations/${convState.conv.id}/messages`, {
+        method: 'POST', body: JSON.stringify({ text })
+      });
+      const data = await res.json();
+      if (!res.ok) { toast(errMsg(data), 'error'); return; }
+      textarea.value = '';
+      textarea.style.height = '';
+      const thread = document.getElementById('conv-thread');
+      thread.appendChild(renderMessage(data, convState.conv));
+      scrollToBottom(thread);
+      convState.msgLastId = data.id;
+    } catch { toast('Failed to send message.', 'error'); }
+    finally { btn.disabled = false; textarea.disabled = false; textarea.focus(); }
+  }
+
+  btn.addEventListener('click', sendMsg);
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
+  });
+  textarea.addEventListener('input', () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+  });
+}
+
+/* Upload */
+function initUpload() {
+  const toggleBtn = document.getElementById('upload-toggle-btn');
+  const uploadForm = document.getElementById('upload-form');
+  const cancelBtn  = document.getElementById('upload-cancel-btn');
+  const submitBtn  = document.getElementById('upload-submit-btn');
+  const fileInput  = document.getElementById('report-file-input');
+  const errEl      = document.getElementById('upload-error');
+
+  toggleBtn.addEventListener('click', () => { uploadForm.classList.toggle('open'); errEl.style.display = 'none'; });
+  cancelBtn.addEventListener('click', () => { uploadForm.classList.remove('open'); errEl.style.display = 'none'; });
+
+  submitBtn.addEventListener('click', async () => {
+    errEl.style.display = 'none';
+    const file = fileInput.files[0];
+    if (!file) { errEl.textContent = 'Please choose a PDF file.'; errEl.style.display = 'block'; return; }
+    if (!file.type.includes('pdf') && !file.name.endsWith('.pdf')) {
+      errEl.textContent = 'Only PDF files are accepted.'; errEl.style.display = 'block'; return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      errEl.textContent = 'File is too large (max 20 MB).'; errEl.style.display = 'block'; return;
+    }
+
+    const displayName = document.getElementById('report-display-name').value.trim();
+    const fd = new FormData();
+    fd.append('file', file);
+    if (displayName) fd.append('display_name', displayName);
+
+    submitBtn.classList.add('btn-loading');
+    submitBtn.disabled = true;
+    try {
+      const res = await apiFetch(`/conversations/${convState.conv.id}/reports`, {
+        method: 'POST', body: fd
+      });
+      const data = await res.json();
+      if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
+      uploadForm.classList.remove('open');
+      fileInput.value = '';
+      document.getElementById('report-display-name').value = '';
+      const thread = document.getElementById('conv-thread');
+      thread.appendChild(renderReportInline(data));
+      scrollToBottom(thread);
+      toast('Report uploaded.', 'success');
+    } catch { errEl.textContent = 'Upload failed. Please try again.'; errEl.style.display = 'block'; }
+    finally { submitBtn.classList.remove('btn-loading'); submitBtn.disabled = false; }
+  });
+}
+
+/* ============================================================
+   REPORT DETAIL
+   ============================================================ */
+let reportState = null; // { report, commentLastId, pollTimer }
+
+async function openReportDetail(reportId) {
+  stopConvPolling();
+  stopCommentPolling();
+
+  showPage('report');
+  const layout = document.getElementById('report-layout');
+  layout.innerHTML = '<div class="skeleton skeleton-line w80" style="margin:20px 0"></div>';
+
+  try {
+    const res = await apiFetch(`/reports/${reportId}`);
+    const report = await res.json();
+    if (!res.ok) { toast(errMsg(report), 'error'); return; }
+    reportState = { report, commentLastId: 0, pollTimer: null };
+    renderReportDetail(report);
+    loadPdfPreview(report);
+    loadComments(reportId);
+    startCommentPolling(reportId);
+    // Resume conv polling when returning
+  } catch { toast('Failed to load report.', 'error'); }
+}
+
+function renderReportDetail(report) {
+  const me = auth.user();
+  const isDoctor = me.role === 'doctor';
+  const layout = document.getElementById('report-layout');
+
+  layout.innerHTML = `
+    <!-- Header -->
+    <div class="report-header">
+      <div class="report-header-info">
+        <h1>${escHtml(report.display_name || 'Report')}</h1>
+        <div class="report-header-meta">Uploaded ${relTime(report.timestamp)}</div>
+      </div>
+      <div class="report-header-actions">
+        ${isDoctor && report.status !== 'reviewed' ? `<button class="btn btn-primary btn-sm" id="mark-reviewed-btn">Mark reviewed</button>` : ''}
+        <button class="btn btn-secondary btn-sm" id="back-to-conv-btn">← Back to chat</button>
+      </div>
+    </div>
+
+    <!-- Status stepper -->
+    ${renderStepper(report.status)}
+
+    <!-- PDF section -->
+    <div class="pdf-section">
+      <div class="pdf-section-header">
+        <h2>Report file</h2>
+        <button class="btn btn-ghost btn-sm" id="download-btn">Download PDF</button>
+      </div>
+      <div class="pdf-preview" id="pdf-preview-area">
+        <div class="pdf-loading">Loading preview…</div>
+      </div>
+    </div>
+
+    <!-- AI Summary section -->
+    <div class="ai-summary-section" style="position:relative" id="ai-summary-section">
+      <div class="ai-loading-overlay" id="ai-loading-overlay">
+        <div class="ai-spinner"></div>
+        <div class="ai-loading-text">Generating AI summary…</div>
+      </div>
+      <div class="ai-summary-header">
+        <h2><span class="ai-badge">AI</span> Summary</h2>
+        <div class="ai-summary-actions" id="ai-summary-actions"></div>
+      </div>
+      <div class="ai-summary-body" id="ai-summary-body">
+        ${renderSummaryBody(report.ai_summary, isDoctor)}
+      </div>
+    </div>
+
+    <!-- Comments -->
+    <div class="comments-section" id="comments-section">
+      <div class="comments-header"><h2>Notes on this report</h2></div>
+      <div class="comments-thread" id="comments-thread"><div class="t-xs" style="padding:8px 0">Loading…</div></div>
+      <div class="comments-composer">
+        <textarea id="comment-textarea" placeholder="Add a note…" rows="1"></textarea>
+        <button class="btn btn-primary btn-sm" id="comment-send-btn">Send</button>
+      </div>
+    </div>`;
+
+  /* Wire up back button */
+  layout.querySelector('#back-to-conv-btn').addEventListener('click', () => {
+    stopCommentPolling();
+    showPage('conv');
+    startConvPolling();
+  });
+
+  /* Mark reviewed */
+  const markBtn = layout.querySelector('#mark-reviewed-btn');
+  if (markBtn) {
+    markBtn.addEventListener('click', async () => {
+      markBtn.disabled = true;
+      try {
+        const res = await apiFetch(`/reports/${report.id}/status`, {
+          method: 'PATCH', body: JSON.stringify({ status: 'reviewed' })
+        });
+        const data = await res.json();
+        if (!res.ok) { toast(errMsg(data), 'error'); return; }
+        reportState.report = data;
+        toast('Report marked as reviewed.', 'success');
+        renderReportDetail(data);
+        loadPdfPreview(data);
+        loadComments(data.id);
+        startCommentPolling(data.id);
+      } catch { toast('Failed to update status.', 'error'); }
+      finally { markBtn.disabled = false; }
+    });
+  }
+
+  /* Download button */
+  layout.querySelector('#download-btn').addEventListener('click', () => downloadPdf(report, false));
+
+  /* AI summary actions */
+  renderSummaryActions(report, isDoctor);
+
+  /* Comment composer */
+  initCommentComposer(report.id);
+}
+
+function renderStepper(currentStatus) {
+  const steps = ['uploaded', 'processing', 'awaiting_review', 'reviewed'];
+  const labels = { uploaded: 'Uploaded', processing: 'Processing', awaiting_review: 'Awaiting review', reviewed: 'Reviewed' };
+  const currentIdx = steps.indexOf(currentStatus);
+  let html = '<div class="status-stepper">';
+  steps.forEach((s, i) => {
+    const isDone    = i < currentIdx;
+    const isCurrent = i === currentIdx;
+    const cls = isDone ? 'done' : isCurrent ? 'current' : '';
+    if (i > 0) html += `<div class="step-connector ${isDone ? 'done' : ''}"></div>`;
+    html += `<div class="step ${cls}">
+      <div class="step-dot">${isDone ? '✓' : i + 1}</div>
+      <div class="step-label">${labels[s]}</div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+function renderSummaryBody(summary, isDoctor) {
+  if (!summary) {
+    return `<div class="t-sm" style="color:var(--text-light);padding:8px 0">
+      No AI summary generated yet. ${isDoctor ? 'Use the button above to generate one.' : 'Your doctor can generate an AI summary.'}
+    </div>`;
+  }
+  const kf = Array.isArray(summary.key_findings) ? summary.key_findings : [];
+  const fv = Array.isArray(summary.flagged_values) ? summary.flagged_values : [];
+
+  return `
+    <div class="ai-field">
+      <div class="ai-field-label">Overview</div>
+      <div class="ai-field-content" data-field="summary">${escHtml(summary.summary || '')}</div>
+      ${isDoctor ? `<div class="ai-field-edit"><textarea rows="3" data-field="summary">${escHtml(summary.summary || '')}</textarea></div>` : ''}
+    </div>
+    <div class="ai-field">
+      <div class="ai-field-label">Key findings</div>
+      <div class="ai-field-content" data-field="key_findings">
+        <ul>${kf.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>
+      </div>
+      ${isDoctor ? `<div class="ai-field-edit"><textarea rows="4" data-field="key_findings" placeholder="One finding per line">${escHtml(kf.join('\n'))}</textarea></div>` : ''}
+    </div>
+    ${fv.length > 0 ? `
+    <div class="ai-field">
+      <div class="ai-field-label">⚠ Values requiring attention</div>
+      <div class="ai-field-content" data-field="flagged_values">
+        <ul class="flagged-list">${fv.map(f => `<li class="flagged-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          ${escHtml(f)}</li>`).join('')}
+        </ul>
+      </div>
+      ${isDoctor ? `<div class="ai-field-edit"><textarea rows="3" data-field="flagged_values" placeholder="One value per line">${escHtml(fv.join('\n'))}</textarea></div>` : ''}
+    </div>` : fv.length === 0 && summary ? `<div class="ai-field">
+      <div class="ai-field-label">⚠ Values requiring attention</div>
+      <div class="ai-field-content" style="color:var(--green)">No flagged values.</div>
+      ${isDoctor ? `<div class="ai-field-edit"><textarea rows="2" data-field="flagged_values" placeholder="One value per line"></textarea></div>` : ''}
+    </div>` : ''}
+    <div class="ai-field">
+      <div class="ai-field-label">Recommendation</div>
+      <div class="ai-field-content" data-field="recommendation">${escHtml(summary.recommendation || '')}</div>
+      ${isDoctor ? `<div class="ai-field-edit"><textarea rows="3" data-field="recommendation">${escHtml(summary.recommendation || '')}</textarea></div>` : ''}
+    </div>`;
+}
+
+function renderSummaryActions(report, isDoctor) {
+  const actionsEl = document.getElementById('ai-summary-actions');
+  if (!actionsEl) return;
+  actionsEl.innerHTML = '';
+  if (!isDoctor) return;
+
+  const hasSummary = !!report.ai_summary;
+
+  if (hasSummary) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-ghost btn-sm';
+    editBtn.id = 'edit-summary-btn';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => toggleEditMode(editBtn, report.id));
+    actionsEl.appendChild(editBtn);
+
+    const regenBtn = document.createElement('button');
+    regenBtn.className = 'btn btn-secondary btn-sm';
+    regenBtn.textContent = 'Regenerate';
+    regenBtn.addEventListener('click', () => generateSummary(report.id, report));
+    actionsEl.appendChild(regenBtn);
+  } else {
+    const genBtn = document.createElement('button');
+    genBtn.className = 'btn btn-primary btn-sm';
+    genBtn.id = 'generate-summary-btn';
+    genBtn.textContent = 'Generate AI summary';
+    genBtn.addEventListener('click', () => generateSummary(report.id, report));
+    actionsEl.appendChild(genBtn);
+  }
+}
+
+function toggleEditMode(editBtn, reportId) {
+  const body = document.getElementById('ai-summary-body');
+  const isEditing = body.classList.toggle('edit-mode');
+  editBtn.textContent = isEditing ? 'Save changes' : 'Edit';
+
+  if (!isEditing) {
+    // Save
+    saveSummaryEdits(reportId);
+  }
+}
+
+async function saveSummaryEdits(reportId) {
+  const body = document.getElementById('ai-summary-body');
+  const payload = {};
+
+  body.querySelectorAll('.ai-field-edit textarea').forEach(ta => {
+    const field = ta.dataset.field;
+    const val = ta.value.trim();
+    if (field === 'key_findings' || field === 'flagged_values') {
+      payload[field] = val ? val.split('\n').map(s => s.trim()).filter(Boolean) : [];
+    } else {
+      payload[field] = val;
+    }
+  });
+
+  try {
+    const res = await apiFetch(`/reports/${reportId}/ai-summary`, {
+      method: 'PATCH', body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) { toast(errMsg(data), 'error'); return; }
+    toast('Summary updated.', 'success');
+    reportState.report.ai_summary = data;
+    // Re-render summary body
+    document.getElementById('ai-summary-body').innerHTML = renderSummaryBody(data, true);
+    renderSummaryActions(reportState.report, true);
+  } catch { toast('Failed to save.', 'error'); }
+}
+
+async function generateSummary(reportId, report) {
+  const overlay = document.getElementById('ai-loading-overlay');
+  if (overlay) overlay.classList.add('show');
+  const btn = document.getElementById('generate-summary-btn') || document.querySelector('#ai-summary-actions button');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await apiFetch(`/reports/${reportId}/ai-summary`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      const errEl = document.getElementById('ai-summary-body');
+      errEl.innerHTML = `<div class="error-banner">${escHtml(errMsg(data))}</div>`;
+      return;
+    }
+    reportState.report.ai_summary = data;
+    document.getElementById('ai-summary-body').innerHTML = renderSummaryBody(data, true);
+    renderSummaryActions(reportState.report, true);
+    toast('AI summary generated.', 'success');
+  } catch { toast('Failed to generate summary.', 'error'); }
+  finally {
+    if (overlay) overlay.classList.remove('show');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadPdfPreview(report) {
+  const area = document.getElementById('pdf-preview-area');
+  if (!area) return;
+  try {
+    const res = await apiFetch(report.pdf_url);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    area.innerHTML = `<iframe src="${objUrl}" title="PDF preview"></iframe>`;
+
+    // Wire download btn
+    const dlBtn = document.getElementById('download-btn');
+    if (dlBtn) {
+      dlBtn.addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.href = objUrl;
+        a.download = (report.display_name || 'report') + '.pdf';
+        a.click();
+      }, { once: true });
+    }
+  } catch {
+    area.innerHTML = `<div class="pdf-loading" style="color:var(--red)">Could not load PDF preview.</div>`;
+  }
+}
+
+async function downloadPdf(report, fromEvent) {
+  try {
+    const res = await apiFetch(report.pdf_url);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = (report.display_name || 'report') + '.pdf';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch { toast('Download failed.', 'error'); }
+}
+
+/* Comments */
+async function loadComments(reportId) {
+  const thread = document.getElementById('comments-thread');
+  if (!thread) return;
+  try {
+    const res = await apiFetch(`/reports/${reportId}/comments`);
+    const data = await res.json();
+    if (!res.ok) return;
+    thread.innerHTML = '';
+    if (data.length === 0) {
+      thread.innerHTML = `<div class="t-xs" style="padding:4px 0;color:var(--text-light)">No notes yet. Add the first one below.</div>`;
+    } else {
+      data.forEach(c => thread.appendChild(renderComment(c)));
+    }
+    if (data.length) reportState.commentLastId = data[data.length - 1].id;
+  } catch {}
+}
+
+function renderComment(c) {
+  const me = auth.user();
+  const isMe = c.sender_id === me.id;
+  const conv = convState?.conv;
+  let name = isMe ? me.name : (conv ? (c.sender_id === conv.patient_id ? conv.patient.name : conv.doctor.name) : '…');
+
+  const div = document.createElement('div');
+  div.className = 'comment-item';
+  div.dataset.commentId = c.id;
+  div.innerHTML = `
+    <div class="avatar" style="background:${isMe ? 'var(--sky-mid)' : '#E8E0FF'};color:${isMe ? 'var(--navy)' : '#6B3FA0'}">${initials(name)}</div>
+    <div class="comment-body">
+      <div class="comment-author">${escHtml(name)}</div>
+      <div class="comment-text">${escHtml(c.text)}</div>
+      <div class="comment-time">${relTime(c.timestamp)}</div>
+    </div>`;
+  return div;
+}
+
+function startCommentPolling(reportId) {
+  stopCommentPolling();
+  reportState.pollTimer = setInterval(() => pollComments(reportId), 3000);
+}
+
+function stopCommentPolling() {
+  if (reportState?.pollTimer) clearInterval(reportState.pollTimer);
+}
+
+async function pollComments(reportId) {
+  if (!reportState) return;
+  try {
+    const res = await apiFetch(`/reports/${reportId}/comments?after_id=${reportState.commentLastId}`);
+    const data = await res.json();
+    if (!res.ok || !data.length) return;
+    reportState.commentLastId = data[data.length - 1].id;
+    const thread = document.getElementById('comments-thread');
+    if (!thread) return;
+    // Clear empty state
+    if (thread.querySelector('.t-xs')) thread.innerHTML = '';
+    data.forEach(c => thread.appendChild(renderComment(c)));
+    thread.scrollTop = thread.scrollHeight;
+  } catch {}
+}
+
+function initCommentComposer(reportId) {
+  const textarea = document.getElementById('comment-textarea');
+  const btn = document.getElementById('comment-send-btn');
+  if (!textarea || !btn) return;
+
+  async function send() {
+    const text = textarea.value.trim();
+    if (!text) return;
+    btn.disabled = true; textarea.disabled = true;
+    try {
+      const res = await apiFetch(`/reports/${reportId}/comments`, {
+        method: 'POST', body: JSON.stringify({ text })
+      });
+      const data = await res.json();
+      if (!res.ok) { toast(errMsg(data), 'error'); return; }
+      textarea.value = '';
+      const thread = document.getElementById('comments-thread');
+      if (thread?.querySelector('.t-xs')) thread.innerHTML = '';
+      if (thread) thread.appendChild(renderComment(data));
+      reportState.commentLastId = data.id;
+      if (thread) thread.scrollTop = thread.scrollHeight;
+    } catch { toast('Failed to send.', 'error'); }
+    finally { btn.disabled = false; textarea.disabled = false; textarea.focus(); }
+  }
+
+  btn.addEventListener('click', send);
+  textarea.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+}
+
+/* ============================================================
+   SIDEBAR / NAV
+   ============================================================ */
+function initNav() {
+  document.querySelectorAll('.nav-link[data-page]').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const page = link.dataset.page;
+      if (page === 'connections') {
+        showPage('connections');
+        loadConnections();
+      } else if (page === 'dashboard') {
+        showPage('dashboard');
+        loadDashboard();
+      }
+    });
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    stopConvPolling();
+    stopCommentPolling();
+    auth.clear();
+    connectionsCache = [];
+    convState = null;
+    reportState = null;
+    showPage('auth');
+  });
+}
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  initAuth();
+  initNav();
+  initComposer();
+  initUpload();
+  initConnectionsPage();
+
+  // Conv back button
+  document.getElementById('conv-back-btn').addEventListener('click', () => {
+    stopConvPolling();
+    showPage('dashboard');
+    loadDashboard();
+  });
+
+  if (auth.token() && auth.user()) {
+    onLogin();
+  } else {
+    showPage('auth');
+  }
+});
+
+</script>
+</body>
+</html>
