@@ -114,6 +114,54 @@ class ClinicalTrialsClient:
 
         return records
 
+    def search_relaxed(
+        self,
+        query: str,
+        page_size: int = 20,
+        max_pages: int = 1,
+        statuses: Optional[list[str]] = None,
+        yield_floor: Optional[int] = None,
+        min_words: int = 3,
+        max_rounds: int = 6,
+    ) -> list[EvidenceRecord]:
+        """search() with automatic recovery from the SAME class of
+        collapse found in PubMed's Automatic Term Mapping: ClinicalTrials.
+        gov's `query.term` (Essie syntax) also implicitly ANDs every term,
+        so a specific multi-word query can return 0 hits while a shorter
+        prefix of the exact same query returns plenty (confirmed live,
+        2026-08-30: "andexanet alfa dosing regimen apixaban reversal FDA
+        approved" -> 0 hits; "andexanet alfa dosing" -> 9).
+
+        Unlike PubMed, ClinicalTrials.gov exposes no query-translation to
+        target which term is unmapped, so relaxation here is a simpler,
+        general strategy: progressively drop TRAILING words (Strategist
+        queries front-load the core drug/condition and append more
+        specific qualifiers, so the tail is where over-specification
+        tends to live) and keep whichever version yields the most
+        records, merging in newly-found studies rather than replacing.
+        `yield_floor` defaults to page_size for the same reason as
+        pubmed.py's esearch_relaxed: "fewer than requested" is the
+        collapse signature.
+        """
+        floor = page_size if yield_floor is None else yield_floor
+        best = self.search(query, page_size=page_size, max_pages=max_pages, statuses=statuses)
+        if len(best) >= floor:
+            return best
+
+        words = query.split()
+        for _round in range(max_rounds):
+            if len(words) <= min_words:
+                break
+            words = words[:-1]
+            candidate = " ".join(words)
+            relaxed = self.search(candidate, page_size=page_size, max_pages=max_pages, statuses=statuses)
+            if len(relaxed) > len(best):
+                seen_ids = {r.native_id for r in best}
+                best = best + [r for r in relaxed if r.native_id not in seen_ids]
+            if len(best) >= floor:
+                break
+        return best
+
     # ------------------------------------------------------------------
     # Parsing
     # ------------------------------------------------------------------

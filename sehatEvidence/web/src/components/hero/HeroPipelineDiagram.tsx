@@ -7,7 +7,7 @@ interface Stage {
 }
 
 const STAGES: Stage[] = [
-  { icon: Target, label: "Strategist", caption: "3–5 targeted queries" },
+  { icon: Target, label: "Strategist", caption: "As many queries as it takes" },
   { icon: FileSearch, label: "Retrieval", caption: "PubMed · Europe PMC · CT.gov" },
   { icon: Gavel, label: "Appraiser", caption: "OCEBM / GRADE scoring" },
   { icon: PenLine, label: "Synthesizer", caption: "Forced [S#] citations" },

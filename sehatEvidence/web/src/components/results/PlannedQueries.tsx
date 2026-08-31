@@ -4,9 +4,11 @@ import { useState } from "react";
 /** Strategist's planned search queries, shown for a successful (non-
  * abstained) answer too -- AbstainPanel shows its own copy inline for
  * the abstain case. Previously vanished entirely once a run finished. */
-export function PlannedQueries({ queries }: { queries: string[] }) {
+export function PlannedQueries({ queries }: { queries?: string[] }) {
   const [open, setOpen] = useState(false);
-  if (queries.length === 0) return null;
+  // Defensive: a report served from history/cache can predate this field
+  // (this app caches forever with no TTL, core/store.py) -- never crash.
+  if (!queries || queries.length === 0) return null;
   return (
     <section className="mb-6">
       <button

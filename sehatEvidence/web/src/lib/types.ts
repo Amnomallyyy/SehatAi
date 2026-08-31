@@ -105,6 +105,13 @@ export interface Report {
    * before the Verifier ever saw them (uncited / unknown-citation
    * sentences the LLM wrote). Distinct from the verification funnel. */
   synthesizer_parse_deletions: SynthesizerParseDeletion[];
+  /** NEW: the Synthesizer's own self-reported statements ([GAP]-tagged
+   * sentences) that a specific facet of the question isn't addressed by
+   * the evidence set. No citation, not a claim, never Verifier-checked --
+   * self-reported by the model, not independently verified. A partial
+   * answer can have both a non-empty answer_text and non-empty entries
+   * here. Always [] for a total abstention. */
+  unanswered_aspects: string[];
   /** NEW: present when served via /api/ask or /api/ask/stream (not on
    * GET /api/history/{id}, where it's implied by `source`). */
   cached?: boolean;
@@ -122,6 +129,18 @@ interface StageEventBase {
 export interface StrategistStartEvent extends StageEventBase {
   stage: "strategist";
   status: "start";
+}
+/** NEW: fired once per proposer draft (agents/strategist.py's on_round) --
+ * the proposer<->critic loop is unbounded by design (a dense, multi-part
+ * question can take several rounds before the critic is satisfied), so
+ * without this the panel would sit on "start" for the whole loop, the same
+ * gap the Appraiser/Verifier's own on_progress hooks close for their
+ * loops. */
+export interface StrategistProgressEvent extends StageEventBase {
+  stage: "strategist";
+  status: "progress";
+  round: number;
+  query_count: number;
 }
 export interface StrategistDoneEvent extends StageEventBase {
   stage: "strategist";
@@ -143,6 +162,16 @@ export interface RetrievalDoneEvent extends StageEventBase {
 export interface AppraiserStartEvent extends StageEventBase {
   stage: "appraiser";
   status: "start";
+}
+/** NEW: fired once per LLM batch (agents/appraiser.py's on_progress) so the
+ * panel can show real mid-stage movement instead of sitting on "start" for
+ * the whole batch loop -- this is the exact gap that made a slow appraisal
+ * look identical to a hung one. */
+export interface AppraiserProgressEvent extends StageEventBase {
+  stage: "appraiser";
+  status: "progress";
+  batch: number;
+  batch_count: number;
 }
 export interface AppraiserDoneEvent extends StageEventBase {
   stage: "appraiser";
@@ -166,6 +195,14 @@ export interface SynthesizerDoneEvent extends StageEventBase {
 export interface VerifierStartEvent extends StageEventBase {
   stage: "verifier";
   status: "start";
+}
+/** NEW: fired once per claim as Stage C (entailment) checks it -- same
+ * rationale as AppraiserProgressEvent, for the Verifier's own slow loop. */
+export interface VerifierProgressEvent extends StageEventBase {
+  stage: "verifier";
+  status: "progress";
+  claim: number;
+  claim_count: number;
 }
 export interface VerifierDoneEvent extends StageEventBase {
   stage: "verifier";
@@ -191,14 +228,17 @@ export interface CompleteEvent extends StageEventBase {
 
 export type StageEvent =
   | StrategistStartEvent
+  | StrategistProgressEvent
   | StrategistDoneEvent
   | RetrievalStartEvent
   | RetrievalDoneEvent
   | AppraiserStartEvent
+  | AppraiserProgressEvent
   | AppraiserDoneEvent
   | SynthesizerStartEvent
   | SynthesizerDoneEvent
   | VerifierStartEvent
+  | VerifierProgressEvent
   | VerifierDoneEvent
   | RedTeamStartEvent
   | RedTeamDoneEvent

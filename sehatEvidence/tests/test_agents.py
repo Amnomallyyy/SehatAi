@@ -572,7 +572,8 @@ def t15_future_date_band():
 
 
 def t16_batching():
-    # B4: 21 records -> >= 2 LLM calls, each prompt holds <= 20 citation_keys,
+    # B4: 21 records -> >= 3 LLM calls (batch size 10, halved from 20 -- see
+    # _LLM_BATCH_SIZE's comment), each prompt holds <= 10 citation_keys,
     # every input key appears in exactly one prompt, all records scored.
     records = [
         make_record(str(i), design=StudyDesign.RCT, pub_date=recent(0))
@@ -586,7 +587,7 @@ def t16_batching():
     out = Appraiser(llm=llm).appraise(records, _THERAPY_Q)
 
     assert len(out) == 21, f"all 21 records must be scored, got {len(out)}"
-    assert len(llm.calls) >= 2, f"expected >= 2 LLM calls, got {len(llm.calls)}"
+    assert len(llm.calls) >= 3, f"expected >= 3 LLM calls, got {len(llm.calls)}"
 
     seen: dict[str, int] = {}
     for call in llm.calls:
@@ -595,7 +596,7 @@ def t16_batching():
             for ln in call["prompt"].splitlines()
             if ln.startswith("- citation_key:")
         ]
-        assert len(keys) <= 20, f"prompt holds {len(keys)} citation_keys, max is 20"
+        assert len(keys) <= 10, f"prompt holds {len(keys)} citation_keys, max is 10"
         assert len(keys) == len(set(keys)), "no duplicate keys within one prompt"
         for k in keys:
             assert k not in seen, f"{k} appears in more than one prompt"
@@ -605,7 +606,7 @@ def t16_batching():
         f"every input key must appear in exactly one prompt: "
         f"missing={expected - set(seen)}, extra={set(seen) - expected}"
     )
-    print("PASS 16: 21 records -> disjoint LLM batches of <= 20 keys; all scored")
+    print("PASS 16: 21 records -> disjoint LLM batches of <= 10 keys; all scored")
 
 
 def t17_sort_tiebreaks():
@@ -843,6 +844,64 @@ def t25_evidence_recalibration():
     print("PASS 25: preprint cap exactly 65; case-control diagnosis +5 -> 60")
 
 
+def t26_on_progress_callback():
+    # 21 records -> 3 batches (batch size 10, B4's own split); on_progress
+    # must fire once per batch with 1-based (batch_index, batch_count), in
+    # order.
+    records = [
+        make_record(str(i), design=StudyDesign.RCT, pub_date=recent(0))
+        for i in range(1, 22)
+    ]
+    rankings = [
+        {"citation_key": r.citation_key(), "relevance": 80, "rationale": "partial"}
+        for r in records
+    ]
+    llm = ScriptedLLM([{"rankings": rankings}])
+    calls: list[tuple[int, int]] = []
+    Appraiser(llm=llm).appraise(
+        records, _THERAPY_Q, on_progress=lambda i, n: calls.append((i, n))
+    )
+    assert calls == [(1, 3), (2, 3), (3, 3)], calls
+
+    # A broken callback must never break appraisal itself (fail-open, same
+    # rule as pipeline._emit).
+    def boom(i, n):
+        raise RuntimeError("simulated callback failure")
+
+    out = Appraiser(llm=llm).appraise(records, _THERAPY_Q, on_progress=boom)
+    assert len(out) == 21, "a raising on_progress must not stop appraisal"
+    print("PASS 26: on_progress fires once per batch with (index, count); fails open")
+
+
+def t27_raw_relevance_is_preserved():
+    # Same bound-clamped case as t06: H=20, R=100 -> blended/capped B=45,
+    # but AppraisedRecord.relevance must carry the RAW, un-blended R=100 --
+    # this is the field pipeline._topical_score() needs to tell a
+    # well-supported case report from an off-topic review.
+    llm = ScriptedLLM(
+        [{"rankings": [{"citation_key": "MED/1", "relevance": 100, "rationale": "direct"}]}]
+    )
+    out = Appraiser(llm=llm).appraise(
+        [make_record("1", design=StudyDesign.CASE_REPORT, pub_date=None)], _THERAPY_Q
+    )
+    assert out[0].score == 45, f"blended score unaffected by this change: {out[0].score}"
+    assert out[0].relevance == 100, f"relevance must be the raw LLM value, not blended: {out[0].relevance}"
+
+    # A record the LLM's batch never covered (llm_skipped) -> relevance None.
+    llm2 = ScriptedLLM([{"rankings": []}])
+    out2 = Appraiser(llm=llm2).appraise(
+        [make_record("2", design=StudyDesign.RCT, pub_date=recent(0))], _THERAPY_Q
+    )
+    assert out2[0].relevance is None, out2[0].relevance
+
+    # Dead LLM -> heuristic-only -> relevance None for every record.
+    out3 = Appraiser(llm=FailingLLM()).appraise(
+        [make_record("3", design=StudyDesign.RCT, pub_date=recent(0))], _THERAPY_Q
+    )
+    assert out3[0].relevance is None, out3[0].relevance
+    print("PASS 27: AppraisedRecord.relevance carries the raw LLM score; None when skipped/unavailable")
+
+
 def run():
     t01_empty_input()
     t02_hierarchy()
@@ -869,6 +928,8 @@ def run():
     t23_half_up_rounding()
     t24_llm_failure_memory()
     t25_evidence_recalibration()
+    t26_on_progress_callback()
+    t27_raw_relevance_is_preserved()
     print("\nAll appraiser tests passed.")
 
 

@@ -9,11 +9,14 @@ in-memory SQLite database (":memory:") -- fast, and every test starts
 from a fresh connection so nothing leaks between cases.
 """
 
+import json
+import sqlite3
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import core.store as store_module
 from core.store import (
     RUN_ID_PATTERN,
     clear_all,
@@ -144,6 +147,69 @@ def t07_source_tagging_mock_vs_live():
     print("PASS 07: mock and live runs are tagged distinctly, never conflated")
 
 
+def t08_cacheable_flag_controls_find_cached():
+    """Regression test for the "stuck history question" bug: a transient
+    LLM-outage abstention (cacheable=False) must be real, visible history
+    but must NEVER be replayed by find_cached() -- otherwise every later
+    ask of the exact same question silently gets the same "no answer"
+    forever, indistinguishable from "this question is broken"."""
+    conn = connect(":memory:")
+    key = normalize_question("Transient Q")
+    stuck_report = dict(SAMPLE_REPORT, abstained=True, abstain_reasons=["LLM unavailable during synthesis"])
+    stuck_id = record_run(
+        conn, question="Transient Q", cache_key=key, report=stuck_report,
+        abstained=True, source="live", cacheable=False,
+    )
+    assert find_cached(conn, key) is None, "a non-cacheable row must never be served as a cache hit"
+    runs, total = list_runs(conn)
+    assert total == 1 and runs[0]["id"] == stuck_id, "the stuck row still shows up in plain history"
+
+    good_id = record_run(
+        conn, question="Transient Q", cache_key=key, report=SAMPLE_REPORT,
+        abstained=False, source="live", cacheable=True,
+    )
+    hit = find_cached(conn, key)
+    assert hit is not None and hit["id"] == good_id, "a later cacheable row must be served"
+    print("PASS 08: cacheable=False rows are real history but never served by find_cached; default stays True")
+
+
+def t09_migration_backfills_preexisting_transient_failure_rows():
+    """Simulate a real pre-existing DB (created before the `cacheable`
+    column existed) that already has a stuck transient-LLM-failure row --
+    the EXACT shape of the bug found live in this project's own
+    evidenceboard.db -- and confirm connect()'s one-time migration
+    retroactively un-sticks it without touching any other row."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY, question TEXT NOT NULL, cache_key TEXT NOT NULL,
+            report_json TEXT NOT NULL, abstained INTEGER NOT NULL,
+            created_at TEXT NOT NULL, source TEXT NOT NULL
+        );
+        """
+    )
+    stuck_report = dict(SAMPLE_REPORT, abstained=True, abstain_reasons=["LLM unavailable during synthesis"])
+    conn.execute(
+        "INSERT INTO runs (id, question, cache_key, report_json, abstained, created_at, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("a" * 32, "Stuck Q", "stuck q", json.dumps(stuck_report), 1, "2026-08-30T00:00:00+00:00", "live"),
+    )
+    conn.execute(
+        "INSERT INTO runs (id, question, cache_key, report_json, abstained, created_at, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("b" * 32, "Fine Q", "fine q", json.dumps(SAMPLE_REPORT), 0, "2026-08-30T00:00:00+00:00", "live"),
+    )
+    conn.commit()
+
+    store_module._migrate_cacheable_column(conn)  # what connect() runs internally
+
+    assert find_cached(conn, "stuck q") is None, "pre-existing stuck row must be un-cacheable after migration"
+    assert find_cached(conn, "fine q") is not None, "an unrelated pre-existing row must stay cacheable"
+    print("PASS 09: connect()'s migration retroactively un-sticks a pre-existing transient-failure row")
+
+
 def run() -> None:
     t01_normalize_question()
     t02_record_and_find_cached()
@@ -152,6 +218,8 @@ def run() -> None:
     t05_get_run_and_delete()
     t06_clear_all()
     t07_source_tagging_mock_vs_live()
+    t08_cacheable_flag_controls_find_cached()
+    t09_migration_backfills_preexisting_transient_failure_rows()
     print("All store tests passed.")
 
 

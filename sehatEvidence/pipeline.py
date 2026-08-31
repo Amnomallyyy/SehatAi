@@ -5,7 +5,9 @@ Wires the five agents and the retrieval layer into ONE deterministic
 sequence and returns a single JSON-ready report dict that the API layer
 (api/server.py) can serve verbatim:
 
-    Strategist  -> 3-5 database-ready queries (agents/strategist.py)
+    Strategist  -> self-scoped, critic-reviewed database-ready queries
+                   (agents/strategist.py; proposer<->critic loop decides
+                   query count, no fixed k)
     retrieval   -> the FROZEN evidence pool (retrieval/retrieve.py)
     Appraiser   -> ranked, capped pool, retracted records excluded
                    (agents/appraiser.py; OCEBM 2011 / SORT / GRADE rubric)
@@ -75,8 +77,13 @@ MOCK_RESPONSE_PATH = pathlib.Path(__file__).parent / "demo" / "mock_response.jso
 MIN_POOL_RECORDS = 2
 #: ... and neither can a pool without at least this many on-topic records.
 MIN_HIGH_RELEVANCE_RECORDS = 2
-#: Appraiser score at or above which a record counts as "high relevance"
-#: (the Appraiser's own 60-89 anchor: same condition/intervention).
+#: Score at or above which a record counts as "high relevance" (the
+#: Appraiser's own 60-89 anchor: same condition/intervention). This is
+#: judged against topical_relevance (see _topical_score()), NOT the
+#: blended relevance_score -- the blend is design-dominated, so a
+#: perfectly on-topic case report/series can structurally never clear 60
+#: on it (base score 25, bounded blend window), which used to abstain a
+#: well-covered rare-disease question before synthesis ever ran.
 HIGH_RELEVANCE_SCORE = 60
 
 # --- abstention reasons (single source of truth for the UI copy) -------------
@@ -187,11 +194,23 @@ def _build_evidence_items(appraised: list[AppraisedRecord]) -> list[dict]:
                 "is_retracted": r.is_retracted,
                 "retraction_source": r.retraction_source,
                 "relevance_score": ap.score,
+                "topical_relevance": ap.relevance,
                 "rationale": ap.rationale,
                 "abstract": r.abstract,
             }
         )
     return items
+
+
+def _topical_score(item: dict) -> int:
+    """The raw LLM topical relevance when available, else the blended
+    (design-dominated) score. Falls back cleanly to the pre-existing
+    behavior whenever the LLM was unavailable and no topical judgment
+    exists for this record at all."""
+    r = item.get("topical_relevance")
+    if isinstance(r, int) and not isinstance(r, bool):
+        return r
+    return item.get("relevance_score") or 0
 
 
 class EvidencePipeline:
@@ -290,7 +309,13 @@ class EvidencePipeline:
         _emit(on_event, stage="strategist", status="start")
         before = _agent_llm_calls(self.strategist)
         try:
-            queries = self.strategist.plan_queries(question)
+            queries = self.strategist.plan_queries(
+                question,
+                on_round=lambda i, qs: _emit(
+                    on_event, stage="strategist", status="progress",
+                    round=i, query_count=len(qs),
+                ),
+            )
         except LLMError as exc:
             print(f"[pipeline] strategist unavailable ({exc}); using raw question")
             queries = [question]
@@ -325,7 +350,13 @@ class EvidencePipeline:
         # "citation unresolvable".
         _emit(on_event, stage="appraiser", status="start")
         before = _agent_llm_calls(self.appraiser)
-        appraised = self.appraiser.appraise(pool, question)
+        appraised = self.appraiser.appraise(
+            pool,
+            question,
+            on_progress=lambda i, n: _emit(
+                on_event, stage="appraiser", status="progress", batch=i, batch_count=n
+            ),
+        )
         print(f"[pipeline] appraised {len(appraised)} records")
 
         evidence_items = _build_evidence_items(appraised)
@@ -337,9 +368,7 @@ class EvidencePipeline:
         )
 
         high_relevance = [
-            item
-            for item in evidence_items
-            if (item["relevance_score"] or 0) >= HIGH_RELEVANCE_SCORE
+            item for item in evidence_items if _topical_score(item) >= HIGH_RELEVANCE_SCORE
         ]
         if len(high_relevance) < MIN_HIGH_RELEVANCE_RECORDS:
             _emit(on_event, stage="complete", status="abstained", reason=ABSTAIN_LOW_RELEVANCE)
@@ -373,13 +402,20 @@ class EvidencePipeline:
             return self._abstain(
                 question, ABSTAIN_SYNTH_INSUFFICIENT, evidence_items,
                 queries=queries, parse_deletions=synthesis.parse_deletions,
+                unanswered_aspects=synthesis.unanswered_aspects,
             )
 
         # --- Stage 5: verification (the only stage that may delete) -------
         _emit(on_event, stage="verifier", status="start")
         before = _agent_llm_calls(self.verifier)
         report: VerificationReport = self.verifier.verify(
-            question, synthesis, evidence_items, queries
+            question,
+            synthesis,
+            evidence_items,
+            queries,
+            on_progress=lambda i, n: _emit(
+                on_event, stage="verifier", status="progress", claim=i, claim_count=n
+            ),
         )
         funnel = report.funnel or _empty_funnel()
         print(
@@ -426,6 +462,7 @@ class EvidencePipeline:
             "synthesizer_parse_deletions": [
                 {"text": d.text, "reason": d.reason} for d in synthesis.parse_deletions
             ],
+            "unanswered_aspects": list(synthesis.unanswered_aspects),
         }
         print("[pipeline] complete")
         return result
@@ -477,6 +514,7 @@ class EvidencePipeline:
         evidence_items: list[dict],
         queries: Optional[list[str]] = None,
         parse_deletions: Optional[list] = None,
+        unanswered_aspects: Optional[list[str]] = None,
     ) -> dict:
         """Build the abstention report: same shape, no answer, one reason.
 
@@ -502,6 +540,7 @@ class EvidencePipeline:
             "synthesizer_parse_deletions": [
                 {"text": d.text, "reason": d.reason} for d in (parse_deletions or [])
             ],
+            "unanswered_aspects": list(unanswered_aspects or []),
         }
 
     def _load_mock(self, question: str) -> dict:
@@ -530,6 +569,34 @@ class EvidencePipeline:
         return data
 
 
+def _build_supersession_pubmed_client(settings: Settings) -> Optional[Any]:
+    """A PubMedClient for the Verifier's STANDING/supersession check, or
+    None when NCBI credentials aren't configured.
+
+    BUG FIXED HERE: build_default_pipeline() previously never passed a
+    `pubmed=` client to Verifier() at all, so despite ENABLE_SUPERSESSION
+    defaulting to true, every production run hit the Verifier's own
+    "supersession enabled but no pubmed client injected; skipping
+    supersession" fallback -- the supersession half of the advertised
+    three-check STANDING gate (README's "3. STANDING") never actually ran.
+    retrieval/retrieve.py already requires NCBI_TOOL_NAME/NCBI_EMAIL for
+    retrieval itself to work at all, so a working deployment has them; this
+    still fails open (returns None, same as before) rather than crashing
+    pipeline construction if they are somehow missing.
+    """
+    from retrieval.pubmed import PubMedClient
+
+    try:
+        return PubMedClient(
+            tool_name=settings.ncbi_tool_name,
+            email=settings.ncbi_email,
+            api_key=settings.ncbi_api_key,
+        )
+    except ValueError as exc:
+        print(f"[pipeline] supersession PubMed client unavailable ({exc}); skipping supersession")
+        return None
+
+
 def build_default_pipeline(settings: Optional[Settings] = None) -> EvidencePipeline:
     """Production wiring: five agents over ONE key-rotating LLM client.
 
@@ -552,12 +619,22 @@ def build_default_pipeline(settings: Optional[Settings] = None) -> EvidencePipel
         )
     else:
         sensitive_llm = llm
+    pubmed = (
+        _build_supersession_pubmed_client(settings)
+        if settings.enable_supersession
+        else None
+    )
     return EvidencePipeline(
         strategist=Strategist(llm=llm),
         gather_fn=gather_evidence,
         appraiser=Appraiser(pool_cap=settings.pool_cap, llm=llm),
         synthesizer=Synthesizer(llm=llm),
         red_team=RedTeam(llm=llm),
-        verifier=Verifier(llm=sensitive_llm, enable_supersession=settings.enable_supersession),
+        verifier=Verifier(
+            llm=sensitive_llm,
+            pubmed=pubmed,
+            enable_supersession=settings.enable_supersession,
+            enable_citation_repair=settings.enable_citation_repair,
+        ),
         settings=settings,
     )

@@ -58,7 +58,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import Settings, get_settings  # noqa: E402
 from core import store  # noqa: E402
-from pipeline import EvidencePipeline, build_default_pipeline  # noqa: E402
+from pipeline import (  # noqa: E402
+    ABSTAIN_LLM_DEAD,
+    ABSTAIN_LLM_SYNTHESIS,
+    EvidencePipeline,
+    build_default_pipeline,
+)
 
 __all__ = ["EvidenceHandler", "main", "run_server"]
 
@@ -322,6 +327,26 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             return None
         return store.find_cached(self.db, cache_key)
 
+    @staticmethod
+    def _is_transient_failure(report: dict) -> bool:
+        """True iff this report abstained because the LLM backend itself
+        was unreachable (ABSTAIN_LLM_SYNTHESIS / ABSTAIN_LLM_DEAD), not
+        because of anything about the evidence or the question.
+
+        BUG FIXED HERE: such a report used to be cached exactly like a
+        real answer -- so a question that happened to hit an LLM outage
+        got permanently stuck replaying "no answer" on every later ask,
+        indistinguishable from "this question doesn't work" (see
+        core/store.py's module docstring for the full story; confirmed
+        against a real stuck row in this project's own history). A report
+        this flags gets recorded with cacheable=False: still real,
+        visible history, just never served back by find_cached().
+        """
+        if not report.get("abstained"):
+            return False
+        reasons = report.get("abstain_reasons") or []
+        return ABSTAIN_LLM_SYNTHESIS in reasons or ABSTAIN_LLM_DEAD in reasons
+
     def _record(self, *, question: str, cache_key: str, report: dict, source: str) -> Optional[str]:
         if self.db is None:
             return None
@@ -329,6 +354,7 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             return store.record_run(
                 self.db, question=question, cache_key=cache_key,
                 report=report, abstained=bool(report.get("abstained")), source=source,
+                cacheable=not self._is_transient_failure(report),
             )
         except Exception as exc:  # history is a convenience, never a hard dependency
             print(f"[server] failed to record history ({exc}); continuing")

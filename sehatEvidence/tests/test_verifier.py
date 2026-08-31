@@ -141,6 +141,13 @@ class FakePubMed:
             raise self.esearch_exc
         return list(self.esearch_ids)
 
+    def esearch_relaxed(self, query, retmax=20, **kwargs):
+        from retrieval.pubmed import RelaxationTrace
+
+        ids = self.esearch(query, retmax=retmax)
+        trace = RelaxationTrace(original_term=query, final_term=query, floor=retmax, cleared_floor=True)
+        return ids, trace
+
     def efetch(self, pmids):
         self.efetch_calls.append(list(pmids))
         return list(self.efetch_records)
@@ -257,6 +264,7 @@ def t01_happy_path():
         "claims_generated": 1,
         "claims_deleted": 0,
         "claims_kept": 1,
+        "claims_repaired": 0,
         "by_reason": {},
     }
     assert report.answer_text == claim.text
@@ -728,7 +736,9 @@ def t16_synthesizer_abstained_shortcut():
     assert report.abstained is True
     assert report.abstain_reasons == ["synthesizer abstained: insufficient evidence"]
     assert report.claims == []
-    assert report.funnel == {"claims_generated": 0, "claims_deleted": 0, "claims_kept": 0, "by_reason": {}}
+    assert report.funnel == {
+        "claims_generated": 0, "claims_deleted": 0, "claims_kept": 0, "claims_repaired": 0, "by_reason": {},
+    }
     assert report.answer_text == ""
     assert "[verifier]" in out
 
@@ -738,6 +748,204 @@ def t16_synthesizer_abstained_shortcut():
     )
     assert report2.abstained and report2.claims == []
     print("PASS 16: synthesizer abstained -> shortcut, zero LLM calls, empty funnel")
+
+
+def t17_on_progress_callback():
+    # Two claims: one citing a resolvable record (S1), one citing a record
+    # whose pmid never appears in the esummary response (S2) -- existence
+    # fails for the second, so Stage C skips its judge call entirely.
+    # on_progress must still fire once per row (skipped included), 1-based,
+    # in order, with the correct final count.
+    s2 = make_evidence(
+        sid="S2", citation_key="MED/99999999", native_id="99999999",
+        title="Unrelated study",
+    )
+    sentence = FakeSentence(0, "Two things are true.", ["S1", "S2"])
+    claims = [
+        {"sentence_index": 0, "claim": "Drug X 200 mg reduced mortality at 30 days.", "citations": ["S1"]},
+        {"sentence_index": 0, "claim": "An unrelated finding also held.", "citations": ["S2"]},
+    ]
+    llm = FakeLLM([decomp(*claims), judge("SUPPORTS", 0.9)])
+    session = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678")})  # 99999999 absent
+    calls: list[tuple[int, int]] = []
+    report = make_verifier(llm, session).verify(
+        QUESTION, FakeSynthesis([sentence]), [_S1, s2], [QUERY],
+        on_progress=lambda i, n: calls.append((i, n)),
+    )
+
+    assert [c.checks.existence for c in report.claims] == ["pass", "fail"]
+    assert [c.checks.entailment for c in report.claims] == ["supports", "skipped"]
+    assert calls == [(1, 2), (2, 2)], calls
+
+    # A broken callback must never break verification itself (fail-open).
+    def boom(i, n):
+        raise RuntimeError("simulated callback failure")
+
+    llm2 = FakeLLM([decomp(*claims), judge("SUPPORTS", 0.9)])
+    session2 = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678")})
+    report2 = make_verifier(llm2, session2).verify(
+        QUESTION, FakeSynthesis([sentence]), [_S1, s2], [QUERY], on_progress=boom
+    )
+    assert len(report2.claims) == 2, "a raising on_progress must not stop verification"
+    print("PASS 17: on_progress fires once per row (skipped included), (index, count); fails open")
+
+
+def t18_judge_sees_all_cited_records():
+    # A claim citing THREE records: the old max_records=2 cap meant only
+    # S1/S2's evidence ever reached the judge -- a claim actually grounded
+    # in S3 alone would have been judged blind to it. All three must now
+    # appear in the entailment prompt.
+    s2 = make_evidence(sid="S2", citation_key="MED/22222222", native_id="22222222", title="Second study")
+    s3 = make_evidence(sid="S3", citation_key="MED/33333333", native_id="33333333", title="Third study")
+    claim = {"sentence_index": 0, "claim": "Drug X 200 mg reduced mortality at 30 days.", "citations": ["S1", "S2", "S3"]}
+    sentence = FakeSentence(0, claim["claim"], ["S1", "S2", "S3"])
+    llm = FakeLLM([decomp(claim), judge("SUPPORTS", 0.9)])
+    session = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678", "22222222", "33333333")})
+    make_verifier(llm, session).verify(QUESTION, FakeSynthesis([sentence]), [_S1, s2, s3], [QUERY])
+
+    entail_prompt = llm.calls[1]["prompt"]
+    assert "EVIDENCE (title + abstract of S1, MED/12345678):" in entail_prompt
+    assert "EVIDENCE (title + abstract of S2, MED/22222222):" in entail_prompt
+    assert "EVIDENCE (title + abstract of S3, MED/33333333):" in entail_prompt
+    print("PASS 18: entailment judge sees every cited record, not just the first two")
+
+
+def t19_self_contained_decomposition_instruction():
+    # Prompt-contract regression guard (matches t12_prompt_contents' own
+    # style elsewhere in this suite): a referentially incomplete claim
+    # ("this reduced mortality") is unverifiable by construction and gets
+    # judged NOT_ENOUGH_INFO -- that's a decomposer defect, not judge
+    # strictness, so the fix belongs in the decompose prompt.
+    from agents.verifier import _DECOMPOSE_SYSTEM
+
+    assert "self-contained" in _DECOMPOSE_SYSTEM.lower(), _DECOMPOSE_SYSTEM
+    assert "resolve" in _DECOMPOSE_SYSTEM.lower() and "pronoun" in _DECOMPOSE_SYSTEM.lower()
+    print("PASS 19: decomposition system prompt requires self-contained, reference-resolved claims")
+
+
+def t20_judge_allows_hedged_numbers_and_composition():
+    # Prompt-contract regression guard for the two _JUDGE_SYSTEM edits: the
+    # exact-match clause is gone (it fought the Synthesizer's own
+    # hedging instruction) and a composition carve-out exists, while the
+    # outside-knowledge ban stays verbatim (the anti-hallucination
+    # guarantee this project is built on).
+    from agents.verifier import _JUDGE_SYSTEM
+
+    assert "must match exactly" not in _JUDGE_SYSTEM, _JUDGE_SYSTEM
+    assert "Do not use medical knowledge not in the evidence" in _JUDGE_SYSTEM
+    assert "combine" in _JUDGE_SYSTEM.lower(), _JUDGE_SYSTEM
+    assert "hedged" in _JUDGE_SYSTEM.lower(), _JUDGE_SYSTEM
+    print("PASS 20: judge prompt drops exact-number-match, keeps the outside-knowledge ban, allows composition")
+
+
+def t21_citation_repair_rescues_misattributed_claim():
+    # The claim actually describes S2's finding, but the Synthesizer cited
+    # S1 -- existence resolves fine (S1 is a real pool record), but S1's
+    # abstract doesn't support this particular claim. This is a
+    # misattribution, not a genuine evidence gap: S2 is right there in the
+    # pool, just never cited by this claim.
+    s2 = make_evidence(
+        sid="S2", citation_key="MED/22222222", native_id="22222222",
+        title="Ibuprofen reduces postoperative pain scores",
+        abstract=(
+            "In a randomized trial, ibuprofen 400 mg reduced postoperative "
+            "pain scores at 24 hours compared to placebo."
+        ),
+    )
+    claim_text = "Ibuprofen 400 mg reduced postoperative pain scores at 24 hours."
+    sentence = FakeSentence(0, claim_text, ["S1"])
+    claim = {"sentence_index": 0, "claim": claim_text, "citations": ["S1"]}
+    llm = FakeLLM([decomp(claim), judge("NOT_ENOUGH_INFO", 0.0), judge("SUPPORTS", 0.9)])
+    session = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678", "22222222")})
+    report = make_verifier(llm, session).verify(
+        QUESTION, FakeSynthesis([sentence]), [_S1, s2], [QUERY]
+    )
+
+    claim_out = report.claims[0]
+    assert claim_out.status == "flagged", claim_out.status
+    assert claim_out.deletion_reason is None, claim_out.deletion_reason
+    assert claim_out.citations[0]["sid"] == "S2", claim_out.citations
+    assert "citation corrected during verification" in claim_out.flags, claim_out.flags
+    assert report.funnel["claims_repaired"] == 1, report.funnel
+    print("PASS 21: citation-repair reattributes a misfiled claim to the record that actually supports it")
+
+
+def t22_citation_repair_never_rescues_refutes_or_missing():
+    # REFUTES: repair must not even be attempted -- only a genuine
+    # "unsupported by cited evidence" NEI deletion is eligible.
+    llm = FakeLLM([decomp(_CLAIM), judge("REFUTES", 0.9)])
+    session = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678")})
+    report = make_verifier(llm, session).verify(QUESTION, FakeSynthesis([_SENT]), [_S1], [QUERY])
+    assert report.claims[0].status == "deleted"
+    assert report.claims[0].deletion_reason == "contradicted by its own citation"
+    assert len(llm.calls) == 2, f"no extra repair attempt for a REFUTES deletion: {len(llm.calls)} calls"
+
+    # existence-fail: repair must not be attempted either.
+    llm2 = FakeLLM([decomp(_CLAIM)])
+    session2 = FakeSession(routes={ESUMMARY_URL: FakeResponse(200, {"result": {"uids": []}})})
+    report2 = make_verifier(llm2, session2).verify(QUESTION, FakeSynthesis([_SENT]), [_S1], [QUERY])
+    assert report2.claims[0].status == "deleted"
+    assert report2.claims[0].checks.existence == "fail"
+    assert len(llm2.calls) == 1, f"no extra repair attempt for an existence-fail deletion: {len(llm2.calls)} calls"
+    print("PASS 22: REFUTES and existence-fail deletions are never repair-attempted")
+
+
+def t23_answer_text_is_punctuated_prose():
+    # Regression test: agents/synthesizer.py's _parse() deliberately strips
+    # every sentence's trailing terminator before it becomes Claim.text
+    # (see Sentence's docstring) -- realistic fixtures here mirror that
+    # (NO trailing '.'), unlike this file's other fixtures (_SENT/_CLAIM),
+    # which happen to keep one. Confirmed live, 2026-08-31: with no
+    # terminator re-added, a real multi-claim answer_text rendered in
+    # web/AnswerPanel.tsx as one unreadable, unpunctuated run-on sentence.
+    sentence_a = FakeSentence(0, "Drug X reduced mortality at 30 days", ["S1"])
+    sentence_b = FakeSentence(1, "Drug X increased bleeding risk", ["S1"])
+    claim_a = {"sentence_index": 0, "claim": "Drug X reduced mortality at 30 days", "citations": ["S1"]}
+    claim_b = {"sentence_index": 1, "claim": "Drug X increased bleeding risk!", "citations": ["S1"]}
+    llm = FakeLLM([decomp(claim_a, claim_b), judge("SUPPORTS", 0.9), judge("SUPPORTS", 0.9)])
+    session = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678")})
+    report = make_verifier(llm, session).verify(
+        QUESTION, FakeSynthesis([sentence_a, sentence_b]), [_S1], [QUERY]
+    )
+    assert not report.abstained, report.abstain_reasons
+    # Individual Claim.text is untouched (the Claims list renders each one
+    # separately and must not gain punctuation the model never wrote) --
+    # only the joined answer_text paragraph gains terminators.
+    assert report.claims[0].text == "Drug X reduced mortality at 30 days"
+    assert report.claims[1].text == "Drug X increased bleeding risk!"
+    assert report.answer_text == (
+        "Drug X reduced mortality at 30 days. Drug X increased bleeding risk!"
+    ), report.answer_text
+    print("PASS 23: answer_text terminates each claim ('.' unless already punctuated) without altering claims[].text")
+
+
+def t24_answer_text_capitalizes_mid_sentence_fragments():
+    # Regression test found live, 2026-08-31, on a real ESRD/DOAC question:
+    # a claim decomposed from the MIDDLE of a longer sentence (SAFE-style
+    # decomposition routinely does this) starts lower-case in the model's
+    # own wording -- once t23's punctuation fix added a real '.' before
+    # it, that read as a sentence-case error in the Answer panel ("...also
+    # observed in meta-analyses. the effect of DOACs on ischemic stroke
+    # ..."). An already-capitalized start (a drug name, an acronym) must
+    # be left untouched -- this is a start-of-string fix, not a general
+    # case-normalizer.
+    sentence_a = FakeSentence(0, "the effect of DOACs on stroke risk was inconsistent", ["S1"])
+    sentence_b = FakeSentence(1, "DOACs reduced bleeding risk", ["S1"])
+    claim_a = {"sentence_index": 0, "claim": "the effect of DOACs on stroke risk was inconsistent", "citations": ["S1"]}
+    claim_b = {"sentence_index": 1, "claim": "DOACs reduced bleeding risk", "citations": ["S1"]}
+    llm = FakeLLM([decomp(claim_a, claim_b), judge("SUPPORTS", 0.9), judge("SUPPORTS", 0.9)])
+    session = FakeSession(routes={ESUMMARY_URL: esummary_ok("12345678")})
+    report = make_verifier(llm, session).verify(
+        QUESTION, FakeSynthesis([sentence_a, sentence_b]), [_S1], [QUERY]
+    )
+    assert not report.abstained, report.abstain_reasons
+    # claims[].text is untouched either way (unchanged from t23's contract).
+    assert report.claims[0].text == "the effect of DOACs on stroke risk was inconsistent"
+    assert report.claims[1].text == "DOACs reduced bleeding risk"
+    assert report.answer_text == (
+        "The effect of DOACs on stroke risk was inconsistent. DOACs reduced bleeding risk."
+    ), report.answer_text
+    print("PASS 24: answer_text capitalizes a lower-case claim start without touching an already-capitalized acronym")
 
 
 def run():
@@ -757,6 +965,14 @@ def run():
     t14_supersession()
     t15_decomposition_fallback()
     t16_synthesizer_abstained_shortcut()
+    t17_on_progress_callback()
+    t18_judge_sees_all_cited_records()
+    t19_self_contained_decomposition_instruction()
+    t20_judge_allows_hedged_numbers_and_composition()
+    t21_citation_repair_rescues_misattributed_claim()
+    t22_citation_repair_never_rescues_refutes_or_missing()
+    t23_answer_text_is_punctuated_prose()
+    t24_answer_text_capitalizes_mid_sentence_fragments()
     print("\nAll verifier tests passed.")
 
 

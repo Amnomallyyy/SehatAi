@@ -17,6 +17,7 @@ class LLMclient():
                  api_key: Optional[str] = None,
                  model: Optional[str] = None,
                  time_out: Optional[int] = 60,
+                 max_tokens: Optional[int] = None,
                  ):
         # 1. Set the URL. .rstrip("/") just removes any accidental trailing slashes so our URLs don't break later.
         self.base_url = (base_url or os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")).rstrip("/")
@@ -34,6 +35,12 @@ class LLMclient():
 
         # 5. Open a reusable web session. This makes multiple requests faster.
         self.session = requests.Session()
+
+        # 6. Cap on the model's own reply length. Previously never sent at
+        # all, so the endpoint's own (unadvertised, possibly small) default
+        # applied -- which can silently truncate a long synthesis or a
+        # multi-claim decomposition JSON mid-object with no visible error.
+        self.max_tokens = max_tokens
 
     def complete(self, prompt: str, system: Optional[str] = None, temperature: float = 0.2) -> str:
         messages = []
@@ -110,6 +117,8 @@ class LLMclient():
             "messages": messages,
             "temperature": temperature,
         }
+        if self.max_tokens:
+            payload["max_tokens"] = self.max_tokens
 
         # 2. The Try Block: Attempting the risky internet connection
         try:
@@ -134,6 +143,25 @@ class LLMclient():
 
         # 1. Convert the raw response into a Python dictionary
         data = resp.json()
+
+        # 1b. A response cut off by the token budget is NOT the same as a
+        # clean completion -- it can leave a caller holding a half-written
+        # answer (or, for a reasoning model whose chain-of-thought lands in
+        # this same `content` field, a response that never got past
+        # "thinking" to write the actual answer at all). Surface this in
+        # the logs; the caller still gets whatever text came back, since a
+        # truncated response is sometimes still partially usable and the
+        # existing deterministic parsers (citation-tag parsing, JSON
+        # parsing) already reject what they can't use.
+        try:
+            finish_reason = data["choices"][0].get("finish_reason")
+        except (KeyError, IndexError):
+            finish_reason = None
+        if finish_reason == "length":
+            print(
+                f"[core.llm] response truncated by max_tokens ({self.max_tokens}); "
+                "the model may not have finished reasoning before hitting the limit"
+            )
 
         # 2. Try to extract the text
         try:

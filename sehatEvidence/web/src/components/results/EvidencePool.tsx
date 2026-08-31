@@ -14,7 +14,13 @@ const SOURCE_LABELS: Record<EvidenceSource, string> = {
 /** Container for the ranked evidence list -- previously always shown in
  * one fixed best-first order with no way to filter/sort by source,
  * preprint status, retraction, or score (audit gap). */
-export function EvidencePool({ evidence }: { evidence: Evidence[] }) {
+export function EvidencePool({
+  evidence,
+  quotesBySid = {},
+}: {
+  evidence: Evidence[];
+  quotesBySid?: Record<string, string[]>;
+}) {
   const [sourceFilter, setSourceFilter] = useState<EvidenceSource | "all">("all");
   const [retractedOnly, setRetractedOnly] = useState(false);
   const [sort, setSort] = useState<SortKey>("score");
@@ -78,7 +84,7 @@ export function EvidencePool({ evidence }: { evidence: Evidence[] }) {
       </div>
       <ol className="m-0 flex list-none flex-col gap-2 p-0">
         {visible.map((e) => (
-          <EvidenceRow key={e.sid} evidence={e} />
+          <EvidenceRow key={e.sid} evidence={e} quotes={quotesBySid[e.sid] ?? []} />
         ))}
       </ol>
     </section>

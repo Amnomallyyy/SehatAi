@@ -126,10 +126,12 @@ class FakeStrategist:
         self.error = error
         self.calls: list = []
 
-    def plan_queries(self, question: str, k: int = 3) -> list:
-        self.calls.append((question, k))
+    def plan_queries(self, question: str, on_round=None) -> list:
+        self.calls.append(question)
         if self.error is not None:
             raise self.error
+        if on_round is not None:
+            on_round(1, list(self.queries))
         return list(self.queries)
 
 
@@ -150,20 +152,29 @@ class FakeGather:
 
 class FakeAppraiser:
     """Scripted scores, best-first, retracted records excluded (as the real
-    Appraiser does). Records beyond the script get 50."""
+    Appraiser does). Records beyond the script get 50.
 
-    def __init__(self, scores: list) -> None:
+    `relevances`, when given, scripts the RAW (un-blended) topical
+    relevance per record the same way `scores` scripts the blended score --
+    defaults to None per record (matching a real LLM-unavailable run),
+    since most tests only care about the blended score."""
+
+    def __init__(self, scores: list, relevances: list = None) -> None:
         self.scores = list(scores)
+        self.relevances = list(relevances) if relevances is not None else []
         self.calls: list = []
 
-    def appraise(self, records: list, question: str) -> list:
+    def appraise(self, records: list, question: str, on_progress=None) -> list:
         self.calls.append((list(records), question))
+        if on_progress is not None:
+            on_progress(1, 1)
         live = [r for r in records if not r.is_retracted]
         out = [
             AppraisedRecord(
                 record=record,
                 score=self.scores[i] if i < len(self.scores) else 50,
                 rationale=f"scripted rationale for {record.citation_key()}",
+                relevance=self.relevances[i] if i < len(self.relevances) else None,
             )
             for i, record in enumerate(live)
         ]
@@ -194,9 +205,11 @@ class FakeVerifier:
         self.calls: list = []
 
     def verify(
-        self, question: str, synthesis, evidence: list, queries: list
+        self, question: str, synthesis, evidence: list, queries: list, on_progress=None
     ) -> VerificationReport:
         self.calls.append((question, synthesis, evidence, queries))
+        if on_progress is not None:
+            on_progress(1, 1)
         return self.report
 
 
@@ -233,7 +246,7 @@ class DeadLLM:
 class BoomStrategist:
     """Any use is a test failure (mock mode must call nothing)."""
 
-    def plan_queries(self, question: str, k: int = 3) -> list:
+    def plan_queries(self, question: str, on_round=None) -> list:
         raise AssertionError("strategist must not run in mock mode")
 
 
@@ -244,13 +257,13 @@ def boom_gather(queries: list) -> list:
 class BoomAgent:
     """Any method call is a test failure."""
 
-    def appraise(self, records, question):
+    def appraise(self, records, question, on_progress=None):
         raise AssertionError("appraiser must not run")
 
     def synthesize(self, question, evidence):
         raise AssertionError("synthesizer must not run")
 
-    def verify(self, question, synthesis, evidence, queries):
+    def verify(self, question, synthesis, evidence, queries, on_progress=None):
         raise AssertionError("verifier must not run")
 
     def audit(self, question, kept_claims):
@@ -274,6 +287,7 @@ def happy_synthesis() -> SynthesisResult:
         ],
         abstained=False,
         parse_deletions=[],
+        unanswered_aspects=[],
     )
 
 
@@ -401,6 +415,7 @@ def assert_report_shape(report: dict) -> None:
         "disclaimer",
         "queries",
         "synthesizer_parse_deletions",
+        "unanswered_aspects",
     }
     assert set(report) == expected, f"report keys: {sorted(report)}"
     assert report["disclaimer"] == DISCLAIMER, "disclaimer must be verbatim"
@@ -552,6 +567,7 @@ def test_synthesizer_abstains() -> None:
             sentences=[],
             abstained=True,
             parse_deletions=[],
+            unanswered_aspects=[],
         )
     )
     verifier = BoomAgent()
@@ -568,6 +584,48 @@ def test_synthesizer_abstains() -> None:
     assert "[pipeline] abstained:" in log
 
     print("PASS 2: INSUFFICIENT_EVIDENCE -- abstains, no claims, pool still shown")
+
+
+def test_unanswered_aspects_flow_through_report() -> None:
+    """A partial answer (some cited sentences, some [GAP] statements) must
+    surface unanswered_aspects in the final report on BOTH the normal
+    answer path and the path where the Verifier itself ends up abstaining
+    (e.g. its own empty-sentences shortcut) -- "here's exactly what's
+    missing" is most useful precisely when the rest of the answer
+    collapses."""
+    gaps = ["The exact per-patient dosing regimen is not stated in the evidence set"]
+
+    # (a) normal answer path: synthesis succeeds, verifier keeps claims.
+    synthesis = SynthesisResult(
+        raw_text="Drug X reduces mortality [S1].",
+        sentences=[Sentence(0, "Drug X reduces mortality", ["S1"])],
+        abstained=False,
+        parse_deletions=[],
+        unanswered_aspects=list(gaps),
+    )
+    pipe = build_pipeline(
+        synthesizer=FakeSynthesizer(synthesis), verifier=FakeVerifier(happy_report())
+    )
+    report, _log = run_captured(pipe, QUESTION)
+    assert report["unanswered_aspects"] == gaps, report["unanswered_aspects"]
+
+    # (b) the Verifier itself abstains (e.g. nothing survived its own
+    # shortcut) -- the gaps the Synthesizer found must still come through.
+    abstained_report = VerificationReport(
+        claims=[],
+        funnel={"claims_generated": 0, "claims_deleted": 0, "claims_kept": 0, "by_reason": {}},
+        abstained=True,
+        abstain_reasons=["synthesizer abstained: insufficient evidence"], answer_text="",
+    )
+    pipe2 = build_pipeline(
+        synthesizer=FakeSynthesizer(synthesis), verifier=FakeVerifier(abstained_report),
+        red_team=BoomAgent(),
+    )
+    report2, _log2 = run_captured(pipe2, QUESTION)
+    assert report2["abstained"] is True
+    assert report2["unanswered_aspects"] == gaps, report2["unanswered_aspects"]
+
+    print("PASS 2b: unanswered_aspects reach the report on both the answer path and a verifier-side abstention")
 
 
 # --- t03 dead LLM, real agents ---------------------------------------------------
@@ -689,6 +747,38 @@ def test_few_high_relevance() -> None:
     assert_abstained(report, ABSTAIN_LOW_RELEVANCE)
 
     print("PASS 6: fewer than 2 records at relevance >= 60 -- abstains")
+
+
+def test_topical_relevance_rescues_low_blended_score() -> None:
+    """Regression test for the anti-MDA5-style failure: an all-case-report
+    literature can never clear a blended score of 60 (case report base
+    score 25, +/-25 blend bound -- see agents/appraiser.py), so the OLD
+    gate (relevance_score >= 60) guaranteed abstention before synthesis
+    ever ran, no matter how on-topic the evidence actually was. The fix
+    (pipeline._topical_score()) must use the raw LLM relevance instead
+    whenever it's available."""
+    appraiser = FakeAppraiser([45, 45, 40, 30, 20], relevances=[95, 90, 85, 40, 20])
+    synthesizer = FakeSynthesizer(happy_synthesis())
+    pipe = build_pipeline(appraiser=appraiser, synthesizer=synthesizer)
+
+    report, _log = run_captured(pipe, QUESTION)
+    assert report["abstained"] is False, (
+        f"a well-covered case-report-only question must not abstain before synthesis: "
+        f"{report['abstain_reasons']}"
+    )
+    assert synthesizer.calls, "synthesis must actually run"
+    assert [item["relevance_score"] for item in report["evidence"][:2]] == [45, 45]
+    assert [item["topical_relevance"] for item in report["evidence"][:2]] == [95, 90]
+
+    # And the inverse must still hold: when the LLM was unavailable
+    # (relevance is None for every record), the gate falls back to the
+    # blended score exactly as before -- this is not a free pass.
+    appraiser2 = FakeAppraiser([45, 45, 40, 30, 20])  # no relevances scripted -> all None
+    pipe2 = build_pipeline(appraiser=appraiser2, verifier=BoomAgent())
+    report2, _log2 = run_captured(pipe2, QUESTION)
+    assert_abstained(report2, ABSTAIN_LOW_RELEVANCE)
+
+    print("PASS 6b: raw topical_relevance rescues a well-covered low-blended-score pool; falls back cleanly when absent")
 
 
 # --- t07 verifier abstains --------------------------------------------------------
@@ -843,6 +933,50 @@ def test_factory_is_importable() -> None:
     print("PASS 11: build_default_pipeline -- shared failover client, pool cap wired")
 
 
+def test_build_default_pipeline_wires_supersession_pubmed_client() -> None:
+    """Regression test: build_default_pipeline() used to never pass a
+    `pubmed=` client to Verifier() at all, so despite ENABLE_SUPERSESSION
+    defaulting to True, every production run silently hit the Verifier's
+    own "no pubmed client injected; skipping supersession" fallback -- the
+    supersession half of the advertised three-check STANDING gate never
+    ran. NCBI credentials are given directly (not via env/.env) so this
+    stays deterministic regardless of the local environment."""
+    settings = Settings(
+        llm_api_keys=["k1"],
+        ncbi_tool_name="evidenceboard-test",
+        ncbi_email="test@example.com",
+        enable_supersession=True,
+    )
+    pipe = build_default_pipeline(settings=settings)
+    assert pipe.verifier.enable_supersession is True
+    assert pipe.verifier.pubmed is not None, "supersession enabled but no PubMed client wired"
+
+    disabled = Settings(llm_api_keys=["k1"], enable_supersession=False)
+    pipe2 = build_default_pipeline(settings=disabled)
+    assert pipe2.verifier.pubmed is None, "supersession disabled must not construct a client"
+
+    print("PASS 11b: build_default_pipeline wires a real PubMed client into the Verifier for supersession")
+
+
+def test_supersession_pubmed_client_fails_open_without_ncbi_creds() -> None:
+    """The helper must fail open (return None), never raise, when NCBI
+    credentials are unavailable -- isolated from the real environment
+    (this repo's own .env sets NCBI_TOOL_NAME/NCBI_EMAIL) by clearing both
+    for the duration of the call and restoring them afterward either way."""
+    import os
+
+    settings = Settings(llm_api_keys=["k1"], ncbi_tool_name=None, ncbi_email=None)
+    saved = {k: os.environ.pop(k, None) for k in ("NCBI_TOOL_NAME", "NCBI_EMAIL")}
+    try:
+        client = pipeline_module._build_supersession_pubmed_client(settings)
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+    assert client is None, "missing NCBI creds must fail open, not raise"
+    print("PASS 11c: missing NCBI credentials fail open to no supersession client, never raise")
+
+
 def test_retraction_source_reaches_evidence_dict() -> None:
     """Regression test for the _build_evidence_items() bug: retraction_source
     was silently dropped before reaching the evidence dict, so
@@ -869,19 +1003,55 @@ def test_retraction_source_reaches_evidence_dict() -> None:
     print("PASS 12: retraction_source reaches the evidence dict (pipeline._build_evidence_items fix)")
 
 
+def test_appraiser_and_verifier_progress_events_are_emitted() -> None:
+    """Regression test for the on_progress wiring added to stream mid-stage
+    granularity: pipeline.py must forward FakeStrategist/FakeAppraiser/
+    FakeVerifier's on_round/on_progress callback through _emit as real
+    {"type":"stage", "status":"progress"} events, not just start/done."""
+    pipe = build_pipeline()
+    events: list[dict] = []
+    pipe.run(QUESTION, on_event=events.append)
+
+    strategist_progress = [
+        e for e in events if e.get("stage") == "strategist" and e.get("status") == "progress"
+    ]
+    appraiser_progress = [
+        e for e in events if e.get("stage") == "appraiser" and e.get("status") == "progress"
+    ]
+    verifier_progress = [
+        e for e in events if e.get("stage") == "verifier" and e.get("status") == "progress"
+    ]
+    assert strategist_progress == [
+        {"stage": "strategist", "status": "progress", "round": 1, "query_count": len(QUERIES)}
+    ], strategist_progress
+    assert appraiser_progress == [
+        {"stage": "appraiser", "status": "progress", "batch": 1, "batch_count": 1}
+    ], appraiser_progress
+    assert verifier_progress == [
+        {"stage": "verifier", "status": "progress", "claim": 1, "claim_count": 1}
+    ], verifier_progress
+
+    print("PASS 13: strategist/appraiser/verifier on_round/on_progress callbacks reach on_event as real 'progress' stage events")
+
+
 def run() -> None:
     test_happy_path()
     test_synthesizer_abstains()
+    test_unanswered_aspects_flow_through_report()
     test_llm_totally_dead()
     test_mock_mode()
     test_pool_below_minimum()
     test_few_high_relevance()
+    test_topical_relevance_rescues_low_blended_score()
     test_verifier_abstains()
     test_red_team_fail_open()
     test_top_level_llm_net()
     test_strategist_fail_open()
     test_factory_is_importable()
+    test_build_default_pipeline_wires_supersession_pubmed_client()
+    test_supersession_pubmed_client_fails_open_without_ncbi_creds()
     test_retraction_source_reaches_evidence_dict()
+    test_appraiser_and_verifier_progress_events_are_emitted()
     print("All pipeline tests passed.")
 
 

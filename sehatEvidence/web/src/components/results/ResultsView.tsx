@@ -8,6 +8,7 @@ import { EvidencePool } from "./EvidencePool";
 import { FunnelChart } from "./FunnelChart";
 import { ParseDeletionsNote } from "./ParseDeletionsNote";
 import { PlannedQueries } from "./PlannedQueries";
+import { UnansweredAspectsNote } from "./UnansweredAspectsNote";
 
 type ClaimTab = "kept" | "flagged" | "deleted";
 
@@ -23,6 +24,17 @@ export function ResultsView({ report }: { report: Report }) {
   const flagged = report.claims.filter((c) => c.status === "flagged");
   const deleted = report.claims.filter((c) => c.status === "deleted");
   const [tab, setTab] = useState<ClaimTab>(flagged.length > 0 ? "flagged" : "kept");
+
+  // Maps an evidence sid to every verbatim quote a claim actually cited it
+  // for -- lets the evidence pool highlight the exact supporting sentence
+  // inside an abstract instead of leaving the reader to hunt through it.
+  const quotesBySid: Record<string, string[]> = {};
+  for (const claim of report.claims) {
+    if (!claim.evidence_quote) continue;
+    for (const citation of claim.citations) {
+      (quotesBySid[citation.sid] ??= []).push(claim.evidence_quote);
+    }
+  }
 
   const tabs: { id: ClaimTab; label: string; items: typeof kept }[] = [
     { id: "kept", label: "Kept", items: kept },
@@ -45,6 +57,8 @@ export function ResultsView({ report }: { report: Report }) {
       <FunnelChart funnel={report.funnel} />
 
       <ParseDeletionsNote deletions={report.synthesizer_parse_deletions} />
+
+      <UnansweredAspectsNote aspects={report.unanswered_aspects} />
 
       {report.claims.length > 0 && (
         <section className="mb-8">
@@ -71,7 +85,7 @@ export function ResultsView({ report }: { report: Report }) {
         </section>
       )}
 
-      <EvidencePool evidence={report.evidence} />
+      <EvidencePool evidence={report.evidence} quotesBySid={quotesBySid} />
     </div>
   );
 }

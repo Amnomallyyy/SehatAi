@@ -32,7 +32,9 @@ _ENV_VARS = (
     "NCBI_API_KEY",
     "POOL_CAP",
     "ENABLE_SUPERSESSION",
+    "ENABLE_CITATION_REPAIR",
     "LLM_TIMEOUT",
+    "LLM_MAX_TOKENS",
     "SERVER_HOST",
     "SERVER_PORT",
 )
@@ -122,13 +124,15 @@ def t01_defaults():
     assert s.llm_model == "meta/llama-3.3-70b-instruct", s.llm_model
     assert s.llm_api_keys == [], f"no keys configured -> []: {s.llm_api_keys!r}"
     assert s.has_llm_keys is False, "has_llm_keys must be False without keys"
-    assert s.pool_cap == 30, f"POOL_CAP default must be 30: {s.pool_cap}"
+    assert s.pool_cap == 50, f"POOL_CAP default must be 50: {s.pool_cap}"
     assert s.enable_supersession is True, s.enable_supersession
-    assert s.llm_timeout == 60, f"LLM_TIMEOUT default must be 60: {s.llm_timeout}"
+    assert s.enable_citation_repair is True, s.enable_citation_repair
+    assert s.llm_timeout == 300, f"LLM_TIMEOUT default must be 300: {s.llm_timeout}"
+    assert s.llm_max_tokens == 16000, f"LLM_MAX_TOKENS default must be 16000: {s.llm_max_tokens}"
     assert s.server_host == "127.0.0.1", s.server_host
     assert s.server_port == 8000, f"SERVER_PORT default must be 8000: {s.server_port}"
     assert s.ncbi_tool_name is None and s.ncbi_email is None and s.ncbi_api_key is None
-    print("PASS 01: from_env() defaults (NIM URL, llama-3.3-70b, no keys, 30/60/True, 127.0.0.1:8000)")
+    print("PASS 01: from_env() defaults (NIM URL, llama-3.3-70b, no keys, 50/300/16000/True, 127.0.0.1:8000)")
 
 
 def t02_key_parsing():
@@ -167,6 +171,7 @@ def t03_build_llm_clients():
         llm_model="meta/llama-3.3-70b-instruct",
         llm_api_keys=["nvapi-fake-1", "nvapi-fake-2"],
         llm_timeout=42,
+        llm_max_tokens=2048,
     )
     clients = build_llm_clients(settings)
     assert len(clients) == 2, f"expected one client per key, got {len(clients)}"
@@ -177,10 +182,11 @@ def t03_build_llm_clients():
         assert client.model == settings.llm_model, client.model
         assert client.api_key == f"nvapi-fake-{i}", "each client must carry its own key"
         assert client.timeout == 42, client.timeout
+        assert client.max_tokens == 2048, client.max_tokens
     assert build_llm_clients(Settings(llm_api_keys=[])) == [], (
         "empty keys must yield []"
     )
-    print("PASS 03: build_llm_clients -- one client per key, shared url/model/timeout; [] when keyless")
+    print("PASS 03: build_llm_clients -- one client per key, shared url/model/timeout/max_tokens; [] when keyless")
 
 
 def t04_failover_rotation():
@@ -283,8 +289,8 @@ def t07_robust_parsing():
     # junk int values fall back to the documented defaults
     with _EnvPatch(POOL_CAP="junk", LLM_TIMEOUT="junk", SERVER_PORT="junk"):
         s = Settings.from_env()
-    assert s.pool_cap == 30, f"junk POOL_CAP must fall back to 30: {s.pool_cap}"
-    assert s.llm_timeout == 60, s.llm_timeout
+    assert s.pool_cap == 50, f"junk POOL_CAP must fall back to 50: {s.pool_cap}"
+    assert s.llm_timeout == 300, s.llm_timeout
     assert s.server_port == 8000, s.server_port
 
     # boolean flag words, case-insensitive

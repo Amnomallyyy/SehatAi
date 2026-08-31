@@ -18,7 +18,7 @@ export const STAGE_ORDER: Exclude<StageId, "complete">[] = [
 ];
 
 export const STAGE_META: Record<Exclude<StageId, "complete">, StageMeta> = {
-  strategist: { label: "Strategist", placeholder: "Planning 3–5 targeted search queries" },
+  strategist: { label: "Strategist", placeholder: "Planning as many targeted search queries as the question needs" },
   retrieval: { label: "Retrieval", placeholder: "Querying PubMed, Europe PMC, ClinicalTrials.gov · checking retractions" },
   appraiser: { label: "Appraiser", placeholder: "Scoring evidence by design, recency & relevance" },
   synthesizer: { label: "Synthesizer", placeholder: "Drafting a fully-cited answer" },
@@ -44,6 +44,11 @@ export function formatStageDetail(stageId: Exclude<StageId, "complete">, event: 
   if (!event || event.status === "start") return STAGE_META[stageId].placeholder;
   switch (stageId) {
     case "strategist": {
+      if (event.status === "progress") {
+        const e = event as Extract<StageEvent, { stage: "strategist"; status: "progress" }>;
+        const n = num(e.query_count);
+        return `round ${num(e.round)}: ${n} quer${n === 1 ? "y" : "ies"} drafted, under review`;
+      }
       const e = event as Extract<StageEvent, { stage: "strategist"; status: "done" }>;
       const n = e.queries?.length ?? 0;
       return `${n} quer${n === 1 ? "y" : "ies"} planned: ${joinTrunc(e.queries, 2)}`;
@@ -54,6 +59,10 @@ export function formatStageDetail(stageId: Exclude<StageId, "complete">, event: 
       return `${n} record${n === 1 ? "" : "s"} retrieved${e.retracted ? ` · ${e.retracted} retracted excluded` : ""}`;
     }
     case "appraiser": {
+      if (event.status === "progress") {
+        const e = event as Extract<StageEvent, { stage: "appraiser"; status: "progress" }>;
+        return `scoring batch ${num(e.batch)}/${num(e.batch_count)}`;
+      }
       const e = event as Extract<StageEvent, { stage: "appraiser"; status: "done" }>;
       const n = num(e.appraised);
       return `${n} record${n === 1 ? "" : "s"} scored${typeof e.top_score === "number" ? ` · top score ${e.top_score}` : ""}`;
@@ -65,6 +74,10 @@ export function formatStageDetail(stageId: Exclude<StageId, "complete">, event: 
       return `${n} cited sentence${n === 1 ? "" : "s"} drafted`;
     }
     case "verifier": {
+      if (event.status === "progress") {
+        const e = event as Extract<StageEvent, { stage: "verifier"; status: "progress" }>;
+        return `checking claim ${num(e.claim)}/${num(e.claim_count)}`;
+      }
       const e = event as Extract<StageEvent, { stage: "verifier"; status: "done" }>;
       const f = e.funnel ?? { claims_generated: 0, claims_deleted: 0, claims_kept: 0, by_reason: {} };
       return `${num(f.claims_generated)} generated → ${num(f.claims_deleted)} deleted → ${num(f.claims_kept)} kept`;
@@ -86,7 +99,8 @@ function llmCallsOf(event: StageEvent | undefined): number | null {
 }
 
 export function StageRow({ stageId, event }: { stageId: Exclude<StageId, "complete">; event: StageEvent | undefined }) {
-  const status = event?.status === "done" ? "done" : event?.status === "start" ? "active" : "pending";
+  const status =
+    event?.status === "done" ? "done" : event?.status === "start" || event?.status === "progress" ? "active" : "pending";
   const index = STAGE_ORDER.indexOf(stageId);
   const meta = STAGE_META[stageId];
   const llmCalls = llmCallsOf(event);

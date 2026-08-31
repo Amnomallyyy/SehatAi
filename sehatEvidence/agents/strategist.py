@@ -2,7 +2,7 @@
 agents/strategist.py -- Query Strategist, first stage of the EvidenceBoard
 pipeline.
 
-Turns a physician's plain clinical question into 3-5 database-ready search
+Turns a physician's plain clinical question into database-ready search
 queries for the retrieval layer. Retrieval is a FIXED, DETERMINISTIC fan-out
 that is deliberately NOT agent-controlled (see retrieval/retrieve.py's
 architecture note: the Verifier's frozen-pool citation check, benchmark
@@ -10,23 +10,33 @@ reproducibility and bounded API cost all depend on the evidence pool being
 predictable) -- so all search breadth is created up front HERE, through query
 diversity, never through extra retrieval calls.
 
+Query COUNT is not fixed. A first LLM call proposes as many queries as it
+judges the question actually needs; a second, independent LLM call critiques
+that proposal for coverage (missing facets or redundant near-duplicates); if
+the critic flags a problem, the proposer revises and the critic reviews
+again. This proposer<->critic loop is deliberately UNBOUNDED by design (a
+prior fixed-k=3 design under-covered dense, multi-part clinical questions,
+which is what this replaced) -- the two models keep talking until the critic
+is satisfied, rather than the pipeline imposing any round limit or query
+count. Every external call in the loop still fails open: an unreachable or
+malformed response at any point is treated as "accept the last good draft
+as-is," never as a reason to raise.
+
 Query contract (PubMed / Europe PMC / ClinicalTrials.gov keyword-phrase best
 practice): plain MeSH-friendly phrases of 4-12 words, no boolean operators,
 no [MeSH]-style field tags, no quotes, no truncation wildcards. Whatever the
-LLM returns is validated defensively against that same contract and any
-shortfall is topped up from a deterministic keyword heuristic, so
-plan_queries() fail-opens and never raises.
+LLM returns is validated defensively against that same contract; if the LLM
+is unreachable at all (not merely dissatisfied), a deterministic keyword
+heuristic fills in instead, so plan_queries() fail-opens and never raises.
 """
 
 from __future__ import annotations
 
 import re
 import string
-from typing import Optional
+from typing import Callable, Optional
 
 from core.llm import LLMClient
-
-DEFAULT_K = 3
 
 _MIN_WORDS = 4
 _MAX_WORDS = 12
@@ -36,17 +46,40 @@ _BOOLEAN_RE = re.compile(r"\b(?:and|or|not)\b", re.IGNORECASE)
 # Any bracket risks being parsed as a database field tag, e.g. "aspirin[MeSH]".
 _FIELD_TAG_RE = re.compile(r"[\[\]]")
 
-_SYSTEM_PROMPT = (
+_PROPOSER_SYSTEM_PROMPT = (
     "You write literature-search queries for PubMed, Europe PMC and "
     "ClinicalTrials.gov. You will receive a clinical question from a "
-    "physician. Produce database-ready queries: condition + "
-    "intervention/exposure terms, plain keywords, MeSH-friendly phrasing "
-    "(e.g. 'semaglutide obesity cardiovascular outcomes'). NO boolean "
-    "operators (AND/OR/NOT), no field tags like [MeSH], no quotes, no "
-    "truncation wildcards, 4-12 words each. Cover: (1) the core "
-    "intervention-outcome query, (2) a broader condition query capturing "
-    "reviews/guidelines, (3) a harms/adverse-events or population variant. "
-    "Respond ONLY with JSON."
+    "physician. Decide for yourself how many distinct queries are needed "
+    "to cover every clinically relevant facet of the question -- there is "
+    "no fixed number: a simple question may need only one or two queries; "
+    "a dense, multi-part question (e.g. one asking about mechanism, "
+    "treatment AND a prognostic biomarker) needs one query per distinct "
+    "facet. Typical facets when they apply: (1) the core "
+    "intervention-outcome question, (2) a broader condition query "
+    "capturing reviews/guidelines, (3) a harms/adverse-events or "
+    "population variant, (4) any other named mechanism, biomarker or "
+    "sub-question the physician explicitly asked about. Each query: plain "
+    "keywords, MeSH-friendly phrasing (e.g. 'semaglutide obesity "
+    "cardiovascular outcomes'), NO boolean operators (AND/OR/NOT), no "
+    "field tags like [MeSH], no quotes, no truncation wildcards, 4-12 "
+    "words. Respond ONLY with JSON: {\"queries\": [\"...\", ...]}."
+)
+
+_CRITIC_SYSTEM_PROMPT = (
+    "You are a second, independent reviewer auditing a literature-search "
+    "query plan before it is run against PubMed, Europe PMC and "
+    "ClinicalTrials.gov. You will receive the physician's original "
+    "clinical question and the queries another AI proposed for it. Judge "
+    "COVERAGE, not wording: would running exactly these queries retrieve "
+    "literature sufficient to answer every distinct clinically relevant "
+    "part of the question? Flag it as insufficient if a material facet of "
+    "the question (a named mechanism, a named outcome, a harms angle, a "
+    "distinct sub-question) has no query covering it. Also flag it as "
+    "insufficient the other direction if two or more queries are "
+    "near-duplicates covering the same ground -- more queries is not "
+    "automatically better. Respond ONLY with JSON: {\"sufficient\": "
+    "true|false, \"feedback\": \"<if false: one or two sentences on "
+    "exactly what to add, drop or merge; if true: empty string>\"}."
 )
 
 # Stop words stripped before heuristic term extraction. The boolean words
@@ -61,6 +94,18 @@ _STOP_WORDS = frozenset(
 # "evidence"; the tail of the chain covers dedup collisions (a query that
 # already contains one of the padding words).
 _PADDING_CHAIN = ("clinical", "study", "evidence", "trial", "review", "patients")
+
+
+def _notify(on_round: Optional[Callable[[int, list[str]], None]], round_index: int, queries: list[str]) -> None:
+    """Fire ``on_round(round_index, queries)`` if present; a broken callback
+    must never break query planning (same fail-open rule as pipeline._emit
+    and the Appraiser/Verifier's own on_progress callbacks)."""
+    if on_round is None:
+        return
+    try:
+        on_round(round_index, queries)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+        print(f"[strategist] on_round callback failed ({exc}); ignoring")
 
 
 def _clean_and_validate_queries(raw: list) -> list[str]:
@@ -141,16 +186,18 @@ def _pad_to_minimum_words(query: str) -> str:
     return " ".join(words)
 
 
-def _heuristic_queries(question: str, k: int) -> list[str]:
+def _heuristic_queries(question: str) -> list[str]:
     """
-    Deterministic fallback queries, used when the LLM is unreachable or
-    returned fewer than k usable queries. Emits up to k template queries
-    built from the question's significant terms, each padded to the word
-    floor and run through the SAME shared validator as LLM queries.
+    Deterministic fallback queries, used ONLY when the LLM is completely
+    unreachable (a critic can't review a proposal that was never made).
+    Emits every one of its 5 template queries that survives validation,
+    built from the question's significant terms and padded to the word
+    floor -- there is no count cap here beyond "how many templates exist",
+    matching the no-fixed-count design of the LLM path.
 
-    Templates cover the same ground the system prompt asks the LLM to cover:
-    a synthesis query (systematic review), a trial query, a harms query, a
-    guideline query, and a bare keyword phrase.
+    Templates cover the same ground the proposer's system prompt asks the
+    LLM to cover: a synthesis query (systematic review), a trial query, a
+    harms query, a guideline query, and a bare keyword phrase.
     """
     terms = _significant_terms(question)
     if not terms:
@@ -176,17 +223,21 @@ def _heuristic_queries(question: str, k: int) -> list[str]:
     # as LLM queries (this also dedupes and drops anything still invalid).
     return _clean_and_validate_queries(
         [_pad_to_minimum_words(t) for t in templates]
-    )[:k]
+    )
 
 
 class Strategist:
     """
     First pipeline stage: clinical question in, database-ready queries out.
 
-    Makes exactly ONE LLM call per plan; the response is validated
-    defensively and any shortfall is topped up from the deterministic
-    heuristic. plan_queries() fail-opens: it never raises, and returns
-    between 0 queries (blank question) and min(5, max(1, k)) queries.
+    Query count is decided by the models, not the pipeline: a proposer call
+    drafts as many queries as it judges the question needs, then a critic
+    call reviews that draft for coverage. If the critic finds a gap or
+    redundancy, the proposer revises and the critic reviews again -- this
+    loop is UNBOUNDED by design (see the module docstring). plan_queries()
+    still fail-opens and never raises: an unreachable proposer degrades to
+    the deterministic heuristic, and an unreachable critic (at any point in
+    the loop) means the last proposed draft is accepted as-is.
     """
 
     def __init__(self, llm: Optional[LLMClient] = None):
@@ -199,57 +250,113 @@ class Strategist:
         """
         self.llm = llm or LLMClient()
 
-    def plan_queries(self, question: str, k: int = DEFAULT_K) -> list[str]:
-        """
-        Turn a plain clinical question into up to k (clamped to [1, 5])
-        database-ready queries.
-
-        Behavior: blank/whitespace question -> [] with no LLM call; otherwise
-        exactly one LLM call whose response is validated against the query
-        contract; if fewer than k usable queries survive, deterministic
-        heuristic fillers top the plan up to k -- the LLM is never re-asked.
-        """
-        question = (question or "").strip()
-        if not question:
-            return []
-        k = max(1, min(5, int(k)))
-
-        prompt = (
-            f'Clinical question: "{question}"\n\n'
-            f'Return a JSON object: "queries": ["...", "..."] '
-            f"with exactly {k} queries (max 5)."
-        )
+    def _propose(self, prompt: str) -> Optional[list[str]]:
+        """One LLM call in the proposer role (initial draft or a revision
+        after critic feedback -- same role either way). Returns validated
+        queries, or None if the call failed or the response was unusable."""
         try:
             response = self.llm.complete_json(
-                prompt, system=_SYSTEM_PROMPT, temperature=0.1
+                prompt, system=_PROPOSER_SYSTEM_PROMPT, temperature=0.1
             )
         except Exception as exc:  # LLMError and anything else: fail open
-            print(
-                f"[strategist] LLM query planning failed ({exc}); "
-                f"using heuristic queries"
-            )
-            return _heuristic_queries(question, k)
-
+            print(f"[strategist] query proposal failed ({exc})")
+            return None
         if not isinstance(response, dict) or not isinstance(
             response.get("queries"), list
         ):
             print(
-                f"[strategist] LLM response had unexpected shape "
-                f"({type(response).__name__}); using heuristic queries"
+                f"[strategist] proposal response had unexpected shape "
+                f"({type(response).__name__})"
             )
-            return _heuristic_queries(question, k)
-
+            return None
         valid = _clean_and_validate_queries(response["queries"])
-        if len(valid) >= k:
-            return valid[:k]
+        return valid or None
 
-        # Fewer than k usable queries: top up deterministically. NEVER call
-        # the LLM again -- one call per plan, by design.
-        seen = {q.lower() for q in valid}
-        for filler in _heuristic_queries(question, k):
-            if len(valid) >= k:
-                break
-            if filler.lower() not in seen:
-                seen.add(filler.lower())
-                valid.append(filler)
-        return valid[:k]
+    def _critique(self, question: str, queries: list[str]) -> Optional[dict]:
+        """One LLM call in the critic role. Returns {"sufficient": bool,
+        "feedback": str}, or None if the call failed or the response was
+        unusable -- callers treat None as "no further review possible,
+        accept the draft as-is", never as a reason to retry the critic."""
+        prompt = (
+            f'Clinical question: "{question}"\n\n'
+            "Proposed queries:\n" + "\n".join(f"- {q}" for q in queries)
+        )
+        try:
+            response = self.llm.complete_json(
+                prompt, system=_CRITIC_SYSTEM_PROMPT, temperature=0.1
+            )
+        except Exception as exc:
+            print(f"[strategist] critic unavailable ({exc}); accepting proposal as-is")
+            return None
+        if not isinstance(response, dict) or not isinstance(
+            response.get("sufficient"), bool
+        ):
+            print(
+                f"[strategist] critic response had unexpected shape "
+                f"({type(response).__name__}); accepting proposal as-is"
+            )
+            return None
+        return {
+            "sufficient": response["sufficient"],
+            "feedback": str(response.get("feedback") or ""),
+        }
+
+    def plan_queries(
+        self,
+        question: str,
+        on_round: Optional[Callable[[int, list[str]], None]] = None,
+    ) -> list[str]:
+        """
+        Turn a plain clinical question into database-ready queries, with
+        the model(s) -- not this function -- deciding how many.
+
+        Behavior: blank/whitespace question -> [] with no LLM call.
+        Otherwise: one proposer call drafts the queries; if the proposer is
+        unreachable or returns nothing usable, the deterministic heuristic
+        fills in (no critique -- there is nothing to critique without a
+        reachable model) and that heuristic list is returned. Otherwise the
+        critic reviews the draft; the proposer<->critic loop continues
+        until the critic reports the draft sufficient, the critic itself
+        becomes unavailable (draft accepted as-is), or a revision comes
+        back empty/unreachable (the last known-good draft is kept).
+
+        on_round, when given, is called as (round_index, queries) (1-based)
+        after each proposer draft resolves -- BEFORE that draft is sent to
+        the critic. The loop is still unbounded by design (see the module
+        docstring); this exists only so a caller (pipeline.py's on_event)
+        can stream real mid-stage progress instead of the UI sitting on
+        "start" for however many rounds a dense question needs -- the same
+        gap the Appraiser/Verifier's own on_progress hooks close for their
+        loops. A broken callback never breaks query planning.
+        """
+        question = (question or "").strip()
+        if not question:
+            return []
+
+        queries = self._propose(f'Clinical question: "{question}"')
+        if queries is None:
+            print("[strategist] proposer unusable; using heuristic queries")
+            return _heuristic_queries(question)
+
+        round_index = 1
+        _notify(on_round, round_index, queries)
+
+        while True:
+            verdict = self._critique(question, queries)
+            if verdict is None or verdict["sufficient"]:
+                return queries
+
+            print(f"[strategist] critic flagged the draft: {verdict['feedback']}")
+            revised = self._propose(
+                f'Clinical question: "{question}"\n\n'
+                "Your previous queries:\n"
+                + "\n".join(f"- {q}" for q in queries)
+                + f"\n\nA reviewer found this insufficient: {verdict['feedback']}\n"
+                "Propose a revised, complete query list that addresses this feedback."
+            )
+            if revised is None:
+                print("[strategist] revision unavailable; keeping the last accepted queries")
+                return queries
+            queries = revised
+            round_index += 1
+            _notify(on_round, round_index, queries)

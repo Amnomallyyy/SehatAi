@@ -32,11 +32,24 @@ was removed and why.
 
 Abstention
 ----------
-When the evidence cannot answer the question the model must respond with
-exactly INSUFFICIENT_EVIDENCE. Only that exact token (case-sensitive,
-after whitespace-strip) marks abstention; the token appearing mid-prose
-is ordinary text. An empty evidence pool abstains without calling the
-LLM at all -- with nothing to cite, the only honest output is abstention.
+When the evidence cannot answer the question AT ALL the model must
+respond with exactly INSUFFICIENT_EVIDENCE. Only that exact token
+(case-sensitive, after whitespace-strip) marks abstention; the token
+appearing mid-prose is ordinary text. An empty evidence pool abstains
+without calling the LLM at all -- with nothing to cite, the only honest
+output is abstention.
+
+Partial answers ([GAP])
+------------------------
+A compound question can have some parts the evidence supports and some
+it doesn't -- forcing an all-or-nothing choice between a full answer and
+total abstention throws away the parts that WERE well-supported. A
+sentence tagged [GAP] instead of [S#] is the model's own self-reported
+statement that one specific facet isn't addressed by the evidence set.
+It carries no citation, makes no claim, is never sent to the Verifier,
+and is surfaced separately as SynthesisResult.unanswered_aspects rather
+than as part of the answer. This is a transparency mechanism, not a
+verification one -- see _parse()'s docstring for the exact rules.
 
 "Whats coming" hint
 -------------------
@@ -71,6 +84,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from config import MAX_ABSTRACT_CHARS, MAX_EVIDENCE_PROMPT_CHARS
 from core.llm import LLMClient, LLMError
 
 # Exact abstention token. Only this string, case-sensitive, after
@@ -85,12 +99,24 @@ _ONGOING_TRIAL_STATUSES = {
     "ACTIVE_NOT_RECRUITING",
 }
 
-# [S1]-style citation tags anywhere in a sentence.
-_CITATION_TAG_RE = re.compile(r"\[(S\d+)\]")
+# [S1]-style citation tags anywhere in a sentence. A bracket group may hold
+# one id ([S1]) or several, comma-separated ([S1, S2, S4]) -- confirmed
+# live, 2026-08-30: the model sometimes writes multi-citations as one
+# grouped bracket instead of separate [S1][S2][S4] tags, and a parser that
+# only recognized the latter deleted every sentence of an otherwise
+# correct, well-cited answer as "uncited". Both forms are accepted; a
+# sentence citing [S1][S3, S7] yields tags ["S1", "S3", "S7"].
+_CITATION_GROUP_RE = re.compile(r"\[\s*(S\d+(?:\s*,\s*S\d+)*)\s*\]")
+_CITATION_ID_RE = re.compile(r"S\d+")
 # Tag removal for the display text: eat the whitespace run before the tag
 # so "reduced HbA1c [S1]." becomes "reduced HbA1c." and then (below) the
 # bare claim text.
-_TAG_STRIP_RE = re.compile(r"\s*\[S\d+\]")
+_TAG_STRIP_RE = re.compile(r"\s*\[\s*S\d+(?:\s*,\s*S\d+)*\s*\]")
+# [GAP]-tagged sentences are the model's own "the evidence doesn't cover
+# this part" statement -- not a citation, not a claim (see SynthesisResult
+# .unanswered_aspects / _LLM_SYSTEM's [GAP] instruction).
+_GAP_TAG_RE = re.compile(r"\[GAP\]")
+_GAP_STRIP_RE = re.compile(r"\s*\[GAP\]")
 # Trailing sentence terminators are presentation, not claim content.
 _TRAILING_PUNCT_RE = re.compile(r"[.!?]+$")
 # Sentence split: after . ! ? followed by whitespace. A trailing fragment
@@ -99,14 +125,30 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 _LLM_SYSTEM = (
     "You are a clinical evidence synthesizer for physicians. Answer using "
-    "ONLY facts present in the evidence set. Write 3-8 sentences. EVERY "
-    "sentence MUST end with one or more evidence tags in square brackets "
-    "naming the evidence you used, e.g. 'Semaglutide reduced HbA1c by 1.5 "
-    "percentage points versus placebo [S1].' Do not write any sentence "
-    "without a tag. Only use tags that exist in the evidence set. Use "
-    "precise, hedged clinical language (no absolutes like 'always'/'never'/"
-    "'cures'). If the evidence cannot answer the question, respond with "
-    "exactly: INSUFFICIENT_EVIDENCE"
+    "ONLY facts present in the evidence set. Write 6-14 sentences (this "
+    "range covers cited answer sentences only, see the GAP rule below). "
+    "EVERY sentence MUST end with one or more evidence tags in square "
+    "brackets naming the evidence you used, e.g. 'Semaglutide reduced "
+    "HbA1c by 1.5 percentage points versus placebo [S1].' When citing "
+    "several sources in one sentence, either style is fine: separate "
+    "brackets [S1][S2] or one bracket with a comma-separated list "
+    "[S1, S2]. Do not write any sentence without a tag. Only use tags "
+    "that exist in the "
+    "evidence set. Use precise, hedged clinical language (no absolutes "
+    "like 'always'/'never'/'cures'). If the evidence cannot answer the "
+    "question AT ALL, respond with exactly: INSUFFICIENT_EVIDENCE\n\n"
+    "The question may have several distinct parts. If one specific part "
+    "is not addressed by the evidence set, write ONE separate, "
+    "self-contained sentence describing exactly what is missing, ending "
+    "with [GAP] instead of an evidence tag, placed exactly where an "
+    "[S#] tag would go (before the final punctuation) -- e.g. 'The "
+    "exact weight-based dosing regimen for this reversal agent is not "
+    "stated in the evidence set [GAP].' Never mix [GAP] and an [S#] tag in the same "
+    "sentence. Use [GAP] sparingly, only for a genuinely distinct part "
+    "the evidence does not cover -- keep answering, with citations, "
+    "everything else you can support. [GAP] sentences do not count "
+    "toward the sentence range above and never replace a citable answer "
+    "you could otherwise give."
 )
 
 
@@ -156,46 +198,72 @@ class SynthesisResult:
     abstained: True iff the LLM emitted exactly INSUFFICIENT_EVIDENCE (or
     the evidence pool was empty and the LLM was never called).
     parse_deletions: sentences deleted at parse time, with reasons.
+    unanswered_aspects: [GAP]-tagged sentences -- the model's own
+    self-reported statements that a specific facet of the question isn't
+    addressed by the evidence set. These carry no citation and are NOT
+    claims: they never reach the Verifier and never appear as part of
+    the answer text. Always [] when abstained is True (the exact
+    INSUFFICIENT_EVIDENCE token short-circuits before per-sentence
+    parsing) or when the evidence pool was empty.
     """
 
     raw_text: str
     sentences: list[Sentence]
     abstained: bool
     parse_deletions: list[ParseDeletion]
+    unanswered_aspects: list[str]
 
 
 class Synthesizer:
     """Generates the citation-forced draft answer from appraised evidence.
 
-    The prompt shows only the top `max_evidence` items by relevance_score
-    (stable sort; abstracts truncated to `max_abstract_chars`), but
-    citation validation accepts sids from the WHOLE evidence input -- a
-    citation the pipeline can still resolve is kept, a citation to
-    evidence that does not exist is deleted. The parser is fully
-    deterministic; the only LLM call is the synthesis itself.
+    The prompt shows a budget-aware selection of the evidence pool (see
+    _select_evidence): every item whose raw topical relevance clears
+    `topical_floor` is guaranteed a place regardless of its blended,
+    design-dominated relevance_score, then remaining items fill in
+    best-score-first until `prompt_char_budget` is exhausted (and
+    `max_evidence`, if set). This exists because case reports/series
+    structurally cannot clear a high blended score (bounded blend, see
+    agents/appraiser.py) even when perfectly on-topic -- a plain top-N-by-
+    blended-score cut silently excludes exactly the evidence a rare-disease
+    question depends on. Citation validation accepts sids from the WHOLE
+    evidence input regardless of what was shown -- a citation the pipeline
+    can still resolve is kept, a citation to evidence that does not exist
+    is deleted. The parser is fully deterministic; the only LLM call is
+    the synthesis itself.
     """
 
     def __init__(
         self,
         llm: Optional[LLMClient] = None,
-        max_evidence: int = 10,
-        max_abstract_chars: int = 1500,
+        max_evidence: Optional[int] = None,
+        max_abstract_chars: int = MAX_ABSTRACT_CHARS,
+        prompt_char_budget: int = MAX_EVIDENCE_PROMPT_CHARS,
+        topical_floor: int = 60,
     ) -> None:
         """
         llm: injected LLM client (duck-typed -- anything exposing
         complete(); the pipeline injects a FailoverLLMClient). None -> a
         default LLMClient, which does no network I/O at construction.
-        max_evidence: how many of the highest-relevance evidence items the
-        prompt may show.
+        max_evidence: hard cap on how many evidence items the prompt may
+        show. None (default) means no count cap -- prompt_char_budget is
+        the real limit.
         max_abstract_chars: per-item abstract truncation length in the
         prompt.
+        prompt_char_budget: total character budget for the evidence
+        section of the prompt (guaranteed items are never dropped for
+        this, only the "fill" pass is budget-limited).
+        topical_floor: raw topical_relevance at or above which an item is
+        guaranteed a place ahead of the budget/count fill pass.
         """
         self.llm = llm or LLMClient()
         # Clamp defensively (appraiser precedent): max_evidence <= 0 would
         # show the model an empty evidence set; a non-positive abstract
         # cap would truncate every abstract to a bare ellipsis.
-        self.max_evidence = max(1, int(max_evidence))
+        self.max_evidence = max(1, int(max_evidence)) if max_evidence is not None else None
         self.max_abstract_chars = max(1, int(max_abstract_chars))
+        self.prompt_char_budget = max(1, int(prompt_char_budget))
+        self.topical_floor = int(topical_floor)
 
     def synthesize(self, question: str, evidence: list[dict]) -> SynthesisResult:
         """
@@ -219,12 +287,11 @@ class Synthesizer:
         if not evidence:
             print("[synthesizer] empty evidence pool; abstaining")
             return SynthesisResult(
-                raw_text="", sentences=[], abstained=True, parse_deletions=[]
+                raw_text="", sentences=[], abstained=True, parse_deletions=[],
+                unanswered_aspects=[],
             )
 
-        selected = sorted(
-            evidence, key=lambda item: -(item.get("relevance_score") or 0)
-        )[: self.max_evidence]
+        selected = self._select_evidence(evidence)
         print(
             f"[synthesizer] synthesizing from {len(selected)} of "
             f"{len(evidence)} evidence items (highest relevance first)"
@@ -261,6 +328,61 @@ class Synthesizer:
                 "parse time"
             )
         return result
+
+    # --- evidence selection --------------------------------------------------
+
+    @staticmethod
+    def _blended_score(item: dict) -> int:
+        return item.get("relevance_score") or 0
+
+    @staticmethod
+    def _topical(item: dict) -> Optional[int]:
+        r = item.get("topical_relevance")
+        return r if isinstance(r, int) and not isinstance(r, bool) else None
+
+    def _item_chars(self, item: dict) -> int:
+        """Approximate prompt cost of one evidence block: the abstract
+        (capped the same way _format_item caps it) plus a small constant
+        for the header/title line."""
+        abstract_len = min(len(str(item.get("abstract") or "")), self.max_abstract_chars)
+        return abstract_len + 200
+
+    def _select_evidence(self, evidence: list[dict]) -> list[dict]:
+        """Two-pass, budget-aware selection.
+
+        Pass 1 (guarantee): every item whose topical_relevance >=
+        topical_floor is admitted first, best-blended-score-first, and is
+        NEVER dropped for budget reasons -- this is what stops an on-topic
+        case report from being squeezed out by an off-topic but
+        higher-blended-score review.
+        Pass 2 (fill): remaining items, best-blended-score-first, added
+        until prompt_char_budget is exhausted or max_evidence (if set) is
+        reached.
+        Output order: blended relevance_score descending overall, so the
+        "best evidence first" contract callers rely on still holds.
+        """
+        ranked = sorted(evidence, key=lambda item: -self._blended_score(item))
+        guaranteed = [
+            item for item in ranked
+            if (self._topical(item) or 0) >= self.topical_floor
+        ]
+        guaranteed_ids = {id(item) for item in guaranteed}
+        rest = [item for item in ranked if id(item) not in guaranteed_ids]
+
+        selected = list(guaranteed)
+        used_chars = sum(self._item_chars(item) for item in guaranteed)
+
+        for item in rest:
+            if self.max_evidence is not None and len(selected) >= self.max_evidence:
+                break
+            cost = self._item_chars(item)
+            if selected and used_chars + cost > self.prompt_char_budget:
+                break
+            used_chars += cost
+            selected.append(item)
+
+        selected.sort(key=lambda item: -self._blended_score(item))
+        return selected
 
     # --- prompt assembly ----------------------------------------------------
 
@@ -351,8 +473,14 @@ class Synthesizer:
         * stripped text == INSUFFICIENT_EVIDENCE exactly -> abstention.
         * per sentence (split after . ! ? plus whitespace; a trailing
           fragment without terminal punctuation is a final sentence):
-            - no [S#] tag -> ParseDeletion "uncited claim";
-            - any tag not in valid_sids (sids of the whole evidence
+            - a [GAP] tag present -> unanswered_aspects (not a claim: no
+              citation required, never sent to the Verifier). A sentence
+              carrying BOTH [GAP] and an [S#] tag (malformed/mixed
+              output) is also treated as a gap statement -- the prompt
+              instructs the model never to mix them, so this is a
+              defensive fallback, not the expected path;
+            - no [S#] tag (and no [GAP]) -> ParseDeletion "uncited claim";
+            - any [S#] tag not in valid_sids (sids of the whole evidence
               input, case-sensitive "S1".."Sn") -> ParseDeletion
               "citation to unknown evidence";
             - otherwise -> Sentence (tags stripped from the text,
@@ -370,17 +498,28 @@ class Synthesizer:
                 sentences=[],
                 abstained=True,
                 parse_deletions=[],
+                unanswered_aspects=[],
             )
 
         sentences: list[Sentence] = []
         deletions: list[ParseDeletion] = []
+        unanswered_aspects: list[str] = []
 
         for piece in _SENTENCE_SPLIT_RE.split(text):
             sentence = piece.strip()
             if not sentence:
                 continue  # empty fragment: nothing to keep or report
 
-            tags = _CITATION_TAG_RE.findall(sentence)
+            if _GAP_TAG_RE.search(sentence):
+                gap_text = _GAP_STRIP_RE.sub("", sentence)
+                gap_text = _TAG_STRIP_RE.sub("", gap_text).strip()  # strip any stray [S#] too
+                gap_text = _TRAILING_PUNCT_RE.sub("", gap_text).strip()
+                if gap_text:
+                    unanswered_aspects.append(gap_text)
+                continue  # never a claim: no citation required, no Verifier
+
+            tag_groups = _CITATION_GROUP_RE.findall(sentence)
+            tags = [tid for group in tag_groups for tid in _CITATION_ID_RE.findall(group)]
             display = _TAG_STRIP_RE.sub("", sentence).strip()
             display = _TRAILING_PUNCT_RE.sub("", display).strip()
 
@@ -422,4 +561,5 @@ class Synthesizer:
             sentences=sentences,
             abstained=False,
             parse_deletions=deletions,
+            unanswered_aspects=unanswered_aspects,
         )

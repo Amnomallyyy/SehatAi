@@ -46,12 +46,14 @@ never imported here, so this module stays offline-safe to import.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
+from config import MAX_ABSTRACT_CHARS, MAX_EVIDENCE_PROMPT_CHARS
 from core.llm import LLMClient, LLMError
 
 # --- authoritative registries (existence checks) -----------------------------
@@ -83,8 +85,13 @@ _DECOMPOSE_SYSTEM = (
     "You decompose cited clinical sentences into atomic claims for "
     "fact-checking. One predicate per claim (split dosages, durations, "
     "populations, effect sizes into separate claims). Copy wording from the "
-    "sentence; do not add facts. Keep every claim attached to the sentence's "
-    "citations. Return ONLY JSON: "
+    "sentence; do not add facts. Each claim must be SELF-CONTAINED and "
+    "independently checkable: resolve pronouns and elliptical references "
+    "('this', 'the drug', 'the combination') into the explicit noun the "
+    "sentence itself uses -- resolving a reference is not adding a fact, "
+    "and a claim left referentially incomplete cannot be verified against "
+    "evidence shown without the sentence it came from. Keep every claim "
+    "attached to the sentence's citations. Return ONLY JSON: "
     '{"claims": [{"sentence_index": <int>, "claim": "...", "citations": '
     '["S1", ...]}]} — at most {max_claims} claims total.'
 )
@@ -96,8 +103,16 @@ _JUDGE_SYSTEM = (
     "REFUTES — the evidence alone indicates the claim is false. "
     "NOT_ENOUGH_INFO — the evidence neither confirms nor contradicts the "
     "claim. Decide ONLY from the evidence provided. Do not use medical "
-    "knowledge not in the evidence. Numbers, populations, and timeframes "
-    "must match exactly. Return ONLY valid JSON: "
+    "knowledge not in the evidence: you may NOT introduce any fact, "
+    "mechanism, drug property, or generalization to a different "
+    "population, dose, comparator or outcome that the evidence does not "
+    "state, but you MAY combine two or more facts the evidence itself "
+    "states to reach the verdict -- a careful reader does that too. A "
+    "number, population or timeframe in the claim must be CONSISTENT with "
+    "the evidence: identical to it, or a correctly-rounded or explicitly-"
+    "hedged restatement of it. A figure the evidence does not state at "
+    "all, or one that contradicts what it states, is NOT supported. "
+    "Return ONLY valid JSON: "
     '{"verdict": "SUPPORTS"|"REFUTES"|"NOT_ENOUGH_INFO", '
     '"confidence": 0.0-1.0, "evidence_quote": "<shortest verbatim span that '
     'justifies the verdict, or empty>", "reason": "<one sentence>"}'
@@ -142,7 +157,7 @@ class VerificationReport:
                              #  "claims_kept", "by_reason": {reason: count}}
     abstained: bool
     abstain_reasons: list[str]
-    answer_text: str         # kept+flagged texts joined with " "
+    answer_text: str         # kept+flagged texts, each terminated, joined with " " (see _terminated)
 
 
 @dataclass
@@ -163,8 +178,65 @@ def _empty_funnel() -> dict:
         "claims_generated": 0,
         "claims_deleted": 0,
         "claims_kept": 0,
+        "claims_repaired": 0,
         "by_reason": {},
     }
+
+
+def _terminated(text: str) -> str:
+    """`text` capitalized at the start and given a trailing '.' if it
+    doesn't already end in one of '.', '!', '?' (blank text is returned
+    as-is).
+
+    BUG FIXED HERE: agents/synthesizer.py's _parse() deliberately strips
+    each sentence's trailing terminator before it ever becomes a Claim.text
+    ("text: sentence text WITHOUT the citation tags and trailing
+    terminator, stripped" -- see Sentence's own docstring), because the
+    Claims UI renders each claim as its own list item. But `_assemble()`
+    below ALSO joins those same claim texts with a bare space into
+    `answer_text` for the single-paragraph "Answer" panel
+    (web/AnswerPanel.tsx) -- confirmed live, 2026-08-31: with no
+    terminator re-added, a real multi-claim answer rendered as one
+    unpunctuated run-on ("...cardiovascular mortality OR 0.44 95% CI
+    0.34-0.57 in patients with type 2 diabetes RR 1.13..."), unreadable
+    regardless of how good the underlying claims were. A second live run
+    the same day surfaced the sibling half of the same problem once
+    punctuation was fixed: a claim decomposed from the MIDDLE of a longer
+    sentence (SAFE-style decomposition, see _DECOMPOSE_SYSTEM) starts
+    lower-case in the model's own wording ("the effect of DOACs on
+    ischemic stroke..."), which then read as a sentence-case error once
+    joined after a real period. Only the first character is touched --
+    this is NOT a general case-normalizer, so an already-capitalized start
+    (a drug name, an acronym like "DOACs") is left exactly as written.
+    """
+    text = text.strip()
+    if text and text[0].isalpha() and text[0].islower():
+        text = text[0].upper() + text[1:]
+    if not text or text[-1] in ".!?":
+        return text
+    return text + "."
+
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _lexical_overlap_candidates(claim_text: str, ev_by_sid: dict, exclude: set) -> list[str]:
+    """Deterministic, LLM-free ranking of pool records NOT already cited by
+    this claim, by word overlap between the claim text and the record's
+    title+abstract -- most-overlapping first. Used only to pick which
+    records are even WORTH an entailment re-check; the judge itself still
+    has to independently say SUPPORTS before anything is un-deleted."""
+    claim_words = set(_WORD_RE.findall(claim_text.lower()))
+    scored: list[tuple[int, str]] = []
+    for sid, rec in ev_by_sid.items():
+        if sid in exclude:
+            continue
+        haystack = f"{rec.get('title') or ''} {rec.get('abstract') or ''}".lower()
+        overlap = len(claim_words & set(_WORD_RE.findall(haystack)))
+        if overlap > 0:
+            scored.append((overlap, sid))
+    scored.sort(key=lambda t: -t[0])
+    return [sid for _, sid in scored]
 
 
 def _normalize_sentences(synthesis: Any) -> list[dict]:
@@ -189,10 +261,13 @@ def _normalize_sentences(synthesis: Any) -> list[dict]:
 
 
 def _evidence_blocks(
-    sids: list[str], ev_by_sid: dict, max_records: int = 2
+    sids: list[str], ev_by_sid: dict, max_records: Optional[int] = None
 ) -> list[tuple[str, str, str, str]]:
-    """(sid, citation_key, title, abstract) tuples for the judge, capped at
-    max_records records per claim."""
+    """(sid, citation_key, title, abstract) tuples for the judge -- ALL
+    cited records by default (max_records=None), not just the first two:
+    a claim citing S1-S3 used to have the judge see only S1/S2, so a claim
+    actually grounded in S3 alone was judged NOT_ENOUGH_INFO and deleted.
+    Claims typically cite 1-3 sids, so this costs almost nothing."""
     blocks = []
     for sid in sids[:max_records]:
         rec = ev_by_sid.get(sid)
@@ -214,9 +289,16 @@ def _judge_prompt(claim_text: str, blocks: list[tuple[str, str, str, str]]) -> s
     for sid, key, title, abstract in blocks:
         parts.append(f"EVIDENCE (title + abstract of {sid}, {key}):")
         parts.append(title or "(no title)")
-        parts.append(abstract[:2000])
+        parts.append(abstract[:MAX_ABSTRACT_CHARS])
         parts.append("")
-    return "\n".join(parts).rstrip()
+    prompt = "\n".join(parts).rstrip()
+    if len(prompt) > MAX_EVIDENCE_PROMPT_CHARS:
+        # Defensive guard against a pathological many-citation claim now
+        # that max_records is unbounded -- a claim citing this many
+        # records is already unusual; truncate rather than send an
+        # oversized prompt to the endpoint.
+        prompt = prompt[:MAX_EVIDENCE_PROMPT_CHARS].rstrip() + "\n...[truncated]"
+    return prompt
 
 
 def _parse_verdict(response: Any) -> Optional[EntailmentVerdict]:
@@ -260,15 +342,26 @@ class Verifier:
         session: Optional[requests.Session] = None,
         registry_timeout: int = 15,
         min_support_confidence: float = 0.70,
-        max_claims: int = 12,
+        max_claims: Optional[int] = None,
+        enable_citation_repair: bool = True,
     ) -> None:
         self.llm = llm or LLMClient()
         self.pubmed = pubmed
         self.enable_supersession = enable_supersession
+        self.enable_citation_repair = enable_citation_repair
         self.session = session or requests.Session()
         self.registry_timeout = registry_timeout
         self.min_support_confidence = min_support_confidence
-        self.max_claims = max(1, int(max_claims))
+        # None (default): computed per verify() call as max(12, 4 *
+        # len(sentences)) -- a fixed 12-claim ceiling truncated
+        # decomposition once the Synthesizer started writing up to 14
+        # sentences, and a truncated claim still counts in the collapse-
+        # abstention ratio, which could manufacture the very
+        # "post-verification collapse" failure this was meant to prevent.
+        # Pass an int explicitly to keep a fixed cap regardless of answer
+        # length (e.g. for tests).
+        self.max_claims = max(1, int(max_claims)) if max_claims is not None else None
+        self._effective_max_claims = self.max_claims or 12
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -280,12 +373,18 @@ class Verifier:
         synthesis: Any,
         evidence: list[dict],
         queries: list[str],
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> VerificationReport:
         """Verify a synthesis against its evidence pool.
 
         Returns a VerificationReport containing ALL claims (kept, flagged and
         deleted) plus the verifier-stage funnel. Synthesizer parse deletions
         are NOT part of this funnel -- the pipeline merges them separately.
+
+        on_progress, when given, is called as (claim_index, claim_count)
+        (both 1-based/1-total) after each claim's Stage C entailment check
+        resolves -- lets a caller stream mid-stage progress instead of only
+        start/done.
         """
         ev_by_sid: dict[str, dict] = {}
         for item in evidence or []:
@@ -303,6 +402,10 @@ class Verifier:
                 abstain_reasons=[_ABSTAIN_SYNTH],
                 answer_text="",
             )
+
+        self._effective_max_claims = (
+            self.max_claims if self.max_claims is not None else max(12, 4 * len(sentences))
+        )
 
         valid_sids = set(ev_by_sid)
         rows = [
@@ -346,28 +449,47 @@ class Verifier:
                 )
 
         # Stage C -- entailment (one judge call per surviving claim).
-        for row in rows:
-            if row["existence"] == "fail":
-                continue  # checks recorded as "skipped"
-            blocks = _evidence_blocks(row["sids"], ev_by_sid)
-            verdict = self._judge_entailment(row["claim_id"], row["text"], blocks)
-            row["verdict"] = verdict.verdict
-            row["confidence"] = verdict.confidence
-            row["quote"] = verdict.evidence_quote
-            if verdict.verdict == "SUPPORTS":
-                row["entailment"] = "supports"
-                if verdict.confidence < self.min_support_confidence:
-                    row["flags"].append("weakly supported")
-                    row["flag_details"].append(
-                        {"source": "verifier", "label": "weakly supported", "note": None}
-                    )
-                    row["status"] = "flagged"
-            elif verdict.verdict == "REFUTES":
-                row["entailment"] = "refutes"
-                self._delete(row, "contradicted by its own citation")
-            else:
-                row["entailment"] = "nei"
-                self._delete(row, "unsupported by cited evidence")
+        claim_count = len(rows)
+        for claim_index, row in enumerate(rows, start=1):
+            if row["existence"] != "fail":
+                blocks = _evidence_blocks(row["sids"], ev_by_sid)
+                verdict = self._judge_entailment(row["claim_id"], row["text"], blocks)
+                row["verdict"] = verdict.verdict
+                row["confidence"] = verdict.confidence
+                row["quote"] = verdict.evidence_quote
+                if verdict.verdict == "SUPPORTS":
+                    row["entailment"] = "supports"
+                    if verdict.confidence < self.min_support_confidence:
+                        row["flags"].append("weakly supported")
+                        row["flag_details"].append(
+                            {"source": "verifier", "label": "weakly supported", "note": None}
+                        )
+                        row["status"] = "flagged"
+                elif verdict.verdict == "REFUTES":
+                    row["entailment"] = "refutes"
+                    self._delete(row, "contradicted by its own citation")
+                else:
+                    row["entailment"] = "nei"
+                    self._delete(row, "unsupported by cited evidence")
+            # checks for an "existence"-failed row stay recorded as "skipped"
+            if on_progress is not None:
+                try:
+                    on_progress(claim_index, claim_count)
+                except Exception as exc:
+                    print(f"[verifier] on_progress callback failed ({exc}); ignoring")
+
+        # Stage C2 -- citation-attribution repair (NEI-only, fail-open).
+        # Coverage fixes (full abstracts, the whole evidence pool) don't
+        # help a claim the Synthesizer simply attached to the wrong
+        # record -- this is the mirror image of the supersession check
+        # below (which searches for evidence to KILL a surviving claim);
+        # this searches for evidence to correctly ATTRIBUTE a deleted one.
+        claims_repaired = 0
+        if self.enable_citation_repair:
+            try:
+                claims_repaired = self._repair_citations(rows, ev_by_sid)
+            except Exception as exc:
+                print(f"[verifier] citation repair skipped ({exc})")
 
         # Stage D -- standing: retraction, erratum/EoC flag, supersession.
         for row in rows:
@@ -407,7 +529,7 @@ class Verifier:
                 self._run_supersession(rows, question, queries, evidence)
 
         # Stage E -- funnel, abstention, assembly.
-        report = self._assemble(rows, ev_by_sid)
+        report = self._assemble(rows, ev_by_sid, claims_repaired)
         print(
             f"[verifier] {report.funnel['claims_generated']} claims generated "
             f"-> {report.funnel['claims_deleted']} deleted "
@@ -433,7 +555,7 @@ class Verifier:
         prompt = self._build_decomposition_prompt(sentences)
         # .replace (not .format): the template embeds literal JSON whose
         # braces would otherwise be interpreted as format fields.
-        system = _DECOMPOSE_SYSTEM.replace("{max_claims}", str(self.max_claims))
+        system = _DECOMPOSE_SYSTEM.replace("{max_claims}", str(self._effective_max_claims))
         last_error = "invalid decomposition output"
         for attempt in range(2):
             try:
@@ -465,7 +587,7 @@ class Verifier:
             lines.append(f"    citations: {cits}")
         lines.append("")
         lines.append(
-            f"Decompose these sentences into at most {self.max_claims} atomic "
+            f"Decompose these sentences into at most {self._effective_max_claims} atomic "
             "claims, keeping each claim attached to its sentence's citations."
         )
         return "\n".join(lines)
@@ -516,7 +638,7 @@ class Verifier:
                     "sids": sids,
                 }
             )
-            if len(out) >= self.max_claims:
+            if len(out) >= self._effective_max_claims:
                 break
         return out
 
@@ -536,7 +658,7 @@ class Verifier:
                     "sids": sids,
                 }
             )
-            if len(out) >= self.max_claims:
+            if len(out) >= self._effective_max_claims:
                 break
         return out
 
@@ -725,6 +847,62 @@ class Verifier:
         )
 
     # ------------------------------------------------------------------
+    # Stage C2 -- citation-attribution repair (NEI-only, fail-open)
+    # ------------------------------------------------------------------
+
+    def _repair_citations(
+        self, rows: list[dict], ev_by_sid: dict, max_candidates: int = 5
+    ) -> int:
+        """For each row deleted with reason exactly "unsupported by cited
+        evidence" (never REFUTES, never existence-fail, never retraction --
+        those are real failures, not misattributions), rank the pool
+        records the claim does NOT already cite by deterministic lexical
+        overlap (no LLM), and re-run the SAME entailment judge at the SAME
+        confidence threshold against each of the top candidates in turn.
+
+        On the first SUPPORTS: un-deletes the row (status -> "flagged",
+        never silently "kept"), replaces its cited sid(s) with the record
+        that actually supports it, and appends a permanent, visible flag
+        recording the correction. This never resurrects a claim nothing
+        supports -- the same strict judge has to independently say
+        SUPPORTS against a specific record. Returns the number repaired.
+        """
+        repaired = 0
+        for row in rows:
+            if row["status"] != "deleted" or row["deletion_reason"] != "unsupported by cited evidence":
+                continue
+            candidates = _lexical_overlap_candidates(
+                row["text"], ev_by_sid, exclude=set(row["sids"])
+            )
+            for sid in candidates[:max_candidates]:
+                blocks = _evidence_blocks([sid], ev_by_sid)
+                verdict = self._judge_entailment(row["claim_id"], row["text"], blocks)
+                if verdict.verdict == "SUPPORTS" and verdict.confidence >= self.min_support_confidence:
+                    original_sids = list(row["sids"])
+                    row["sids"] = [sid]
+                    row["status"] = "flagged"
+                    row["deletion_reason"] = None
+                    row["entailment"] = "supports"
+                    row["verdict"] = verdict.verdict
+                    row["confidence"] = verdict.confidence
+                    row["quote"] = verdict.evidence_quote
+                    row["flags"].append("citation corrected during verification")
+                    row["flag_details"].append(
+                        {
+                            "source": "verifier",
+                            "label": "citation corrected during verification",
+                            "note": f"originally cited {', '.join(original_sids) or 'unknown'}",
+                        }
+                    )
+                    print(
+                        f"[verifier] repaired {row['claim_id']}: reattributed "
+                        f"from {original_sids} to {sid}"
+                    )
+                    repaired += 1
+                    break
+        return repaired
+
+    # ------------------------------------------------------------------
     # Stage D -- supersession heuristic (fail-open)
     # ------------------------------------------------------------------
 
@@ -772,7 +950,11 @@ class Verifier:
                 f'({base}) AND (systematic[sb] OR meta-analysis[pt]) '
                 f'AND ("{year - 5}":"{year}"[dp])'
             )
-            pmids = self.pubmed.esearch(term, retmax=5) or []
+            # Relaxed, not plain esearch: this term embeds the same kind of
+            # bare, ATM-unmappable tokens the Strategist's own queries can
+            # (via `base`) -- a collapsed supersession query used to just
+            # silently find nothing, with no visible symptom at all.
+            pmids, _trace = self.pubmed.esearch_relaxed(term, retmax=5)
             pool_ids = {
                 str(item.get("native_id") or "")
                 for item in (evidence or [])
@@ -808,7 +990,9 @@ class Verifier:
             row["deletion_reason"] = reason
             print(f"[verifier] {row['claim_id']} already deleted; reason -> {reason}")
 
-    def _assemble(self, rows: list[dict], ev_by_sid: dict) -> VerificationReport:
+    def _assemble(
+        self, rows: list[dict], ev_by_sid: dict, claims_repaired: int = 0
+    ) -> VerificationReport:
         claims: list[Claim] = []
         for row in rows:
             citations = []
@@ -855,6 +1039,7 @@ class Verifier:
             "claims_generated": len(claims),
             "claims_deleted": len(deleted),
             "claims_kept": len(kept),
+            "claims_repaired": claims_repaired,
             "by_reason": by_reason,
         }
 
@@ -867,7 +1052,7 @@ class Verifier:
                 "claims survived"
             )
         abstained = bool(reasons)
-        answer_text = "" if abstained else " ".join(c.text for c in kept)
+        answer_text = "" if abstained else " ".join(_terminated(c.text) for c in kept)
 
         return VerificationReport(
             claims=claims,

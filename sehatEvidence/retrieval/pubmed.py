@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
@@ -26,9 +27,19 @@ import requests
 
 from core.cache import TokenBucket, ncbi_rate_limiter
 from core.schema import EvidenceRecord, SourceDB, StudyDesign
+from retrieval.query_relaxation import drop_order, rebuild, split_translation
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+#: Default esearch result ordering. PubMed's E-utilities default to most-
+#: RECENT first, not relevance -- confirmed live (2026-08-29): the same
+#: query returns a completely disjoint top-6 PMID set under the default
+#: order vs sort=relevance. Since retrieval only ever takes the first
+#: `retmax` hits, the selection rule IS the yield -- "recent" quietly
+#: duplicated the Appraiser's own recency modifier while discarding
+#: topicality entirely.
+DEFAULT_SORT = "relevance"
 
 # NlmCategory values PubMed uses to tag structured abstract sections.
 # See efetch XML: Article/Abstract/AbstractText[@NlmCategory=...]
@@ -54,6 +65,29 @@ _STUDY_DESIGN_KEYWORDS: list[tuple[str, StudyDesign]] = [
     ("guideline", StudyDesign.GUIDELINE),
     ("review", StudyDesign.REVIEW),
 ]
+
+
+@dataclass
+class EsearchResult:
+    ids: list[str]
+    count: int  # TRUE total hit count, independent of retmax
+    query_translation: str  # NCBI's own Automatic Term Mapping expansion
+    term: str  # the term actually sent
+
+
+@dataclass
+class RelaxationTrace:
+    """Visible record of what esearch_relaxed() did, meant to be surfaced
+    to the end user (report["retrieval_notes"]) -- this project's whole
+    positioning is "show your work," and a silently-recovered near-zero
+    result is exactly the kind of work worth showing."""
+
+    original_term: str
+    final_term: str
+    counts: list[int] = field(default_factory=list)  # hit count after each round
+    dropped: list[str] = field(default_factory=list)  # concept groups removed, in order
+    floor: int = 0
+    cleared_floor: bool = False
 
 
 class PubMedClient:
@@ -122,14 +156,107 @@ class PubMedClient:
     # Step 1: esearch
     # ------------------------------------------------------------------
 
-    def esearch(self, query: str, retmax: int = 20) -> list[str]:
-        """Returns a list of PMIDs matching the query."""
-        resp = self._get(
-            ESEARCH_URL,
-            {"db": "pubmed", "term": query, "retmax": retmax, "retmode": "json"},
+    def esearch_full(
+        self, query: str, retmax: int = 20, sort: Optional[str] = DEFAULT_SORT
+    ) -> "EsearchResult":
+        """esearch, keeping the two fields the plain `esearch()` wrapper
+        below discards: `count` (the TRUE total hit count, independent of
+        retmax) and `query_translation` (NCBI's own Automatic Term Mapping
+        expansion) -- both needed by esearch_relaxed() to detect and repair
+        an ATM collapse. `sort=None` for a count-only probe (sorting a
+        result set you're about to discard is wasted work on NCBI's side)."""
+        params = {"db": "pubmed", "term": query, "retmax": retmax, "retmode": "json"}
+        if sort:
+            params["sort"] = sort
+        resp = self._get(ESEARCH_URL, params)
+        result = resp.json().get("esearchresult", {})
+        try:
+            count = int(result.get("count", 0))
+        except (TypeError, ValueError):
+            count = 0
+        return EsearchResult(
+            ids=result.get("idlist", []),
+            count=count,
+            query_translation=result.get("querytranslation", ""),
+            term=query,
         )
-        data = resp.json()
-        return data.get("esearchresult", {}).get("idlist", [])
+
+    def esearch(self, query: str, retmax: int = 20) -> list[str]:
+        """Back-compat wrapper: ids only, relevance-sorted. Kept so any
+        direct caller (agents/verifier.py's supersession search, tests)
+        keeps working unchanged."""
+        return self.esearch_full(query, retmax=retmax).ids
+
+    def esearch_relaxed(
+        self,
+        query: str,
+        retmax: int = 20,
+        yield_floor: Optional[int] = None,
+        min_concepts: int = 2,
+        max_rounds: int = 6,
+    ) -> tuple[list[str], "RelaxationTrace"]:
+        """esearch with automatic recovery from an ATM collapse.
+
+        `yield_floor` defaults to `retmax` itself, not an invented number:
+        if PubMed can't even fill the page we asked for, it had ZERO
+        ranking freedom left -- the result set IS the whole intersection,
+        which is exactly the observed collapse signature (a query that
+        should return dozens returns 0-3). "Relax until the requested page
+        can actually be filled" self-scales with retmax and needs no
+        clinical judgment.
+
+        Only concepts syntactically indistinguishable from "ATM gave up"
+        are ever dropped (see query_relaxation.drop_order) -- never a
+        hardcoded list of clinical tokens, and never a concept carrying a
+        date/type/subset filter tag (query_relaxation.Concept.pinned).
+        A drop is kept ONLY if it strictly increases the count (probed with
+        a cheap sort=None, retmax=0 call), so a relaxation round can never
+        make things worse. Strict-search ids always come first in the
+        returned list and are never displaced by relaxed ones.
+        """
+        floor = retmax if yield_floor is None else yield_floor
+        strict = self.esearch_full(query, retmax=retmax, sort=DEFAULT_SORT)
+        trace = RelaxationTrace(
+            original_term=query, final_term=query, counts=[strict.count],
+            dropped=[], floor=floor, cleared_floor=strict.count >= floor,
+        )
+        if trace.cleared_floor or not strict.query_translation:
+            return strict.ids, trace
+
+        concepts = split_translation(strict.query_translation)
+        order = drop_order(concepts)
+        dropped: set[int] = set()
+        current_term = strict.query_translation
+        current_count = strict.count
+
+        for _round, idx in enumerate(order):
+            if _round >= max_rounds:
+                break
+            if len(concepts) - len(dropped) <= min_concepts:
+                break
+            candidate_drop = dropped | {idx}
+            candidate_term = rebuild(concepts, candidate_drop)
+            if not candidate_term:
+                continue
+            probe = self.esearch_full(candidate_term, retmax=0, sort=None)
+            if probe.count <= current_count:
+                continue  # no progress -- revert, never trade precision for nothing
+            dropped = candidate_drop
+            current_term = candidate_term
+            current_count = probe.count
+            trace.dropped.append(concepts[idx].text)
+            trace.counts.append(current_count)
+            if current_count >= floor:
+                break
+
+        if not dropped:
+            return strict.ids, trace
+
+        final = self.esearch_full(current_term, retmax=retmax, sort=DEFAULT_SORT)
+        trace.final_term = current_term
+        trace.cleared_floor = final.count >= floor
+        merged_ids = list(strict.ids) + [i for i in final.ids if i not in strict.ids]
+        return merged_ids, trace
 
     # ------------------------------------------------------------------
     # Step 2: efetch + parse
@@ -146,9 +273,20 @@ class PubMedClient:
         return self._parse_efetch_xml(resp.text)
 
     def search_and_fetch(self, query: str, retmax: int = 20) -> list[EvidenceRecord]:
-        """Convenience: esearch then efetch in one call."""
-        pmids = self.esearch(query, retmax=retmax)
-        return self.efetch(pmids)
+        """Convenience: relaxed esearch then efetch in one call. Signature
+        unchanged from before the relaxation fix -- existing callers keep
+        working; use search_and_fetch_traced() to also get the trace."""
+        records, _trace = self.search_and_fetch_traced(query, retmax=retmax)
+        return records
+
+    def search_and_fetch_traced(
+        self, query: str, retmax: int = 20
+    ) -> tuple[list[EvidenceRecord], "RelaxationTrace"]:
+        """Same as search_and_fetch(), but also returns the relaxation
+        trace so a caller can surface it (e.g. into the report's
+        retrieval_notes) without a second round trip."""
+        pmids, trace = self.esearch_relaxed(query, retmax=retmax)
+        return self.efetch(pmids), trace
 
     # ------------------------------------------------------------------
     # XML parsing

@@ -61,8 +61,9 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
+from typing import Callable, Optional
 
+from config import MAX_ABSTRACT_CHARS
 from core.llm import LLMClient, LLMError
 from core.schema import EvidenceRecord, StudyDesign
 
@@ -152,7 +153,14 @@ _RECRUITING_STATUSES = {
 
 # --- bounded LLM-as-judge blend constants ---
 
-_LLM_BATCH_SIZE = 20          # max records per LLM call
+_LLM_BATCH_SIZE = 10          # max records per LLM call
+                               # Halved from 20: with full-length abstracts
+                               # (see MAX_ABSTRACT_CHARS) a 20-record batch
+                               # was a ~30K-token judging task per call,
+                               # deep into known LLM-as-judge position/
+                               # verbosity bias territory (Zheng et al.
+                               # 2023, cited above); it also shrinks the
+                               # blast radius of one low-coverage batch.
 _BLEND_W_HEURISTIC = 0.65     # the rubric dominates the blend
 _BLEND_W_LLM = 0.35
 _BLEND_BOUND = 25             # max deviation from H for solid records
@@ -184,6 +192,14 @@ class AppraisedRecord:
     record: EvidenceRecord
     score: int
     rationale: str
+    #: Raw, UN-blended, un-bounded LLM topical relevance (0-100), None when
+    #: the LLM was unavailable/skipped for this record. `score` above is the
+    #: blended, design-dominated value the rubric uses for ranking; this is
+    #: the one field that answers "how on-topic is this, independent of
+    #: study design" -- needed because a design-dominated score structurally
+    #: cannot tell a well-supported case report from an off-topic review
+    #: (see pipeline.py's _topical_score()).
+    relevance: Optional[int] = None
 
 
 @dataclass
@@ -196,6 +212,7 @@ class _Row:
     notes: list[str]
     final: int = 0
     rationale: str = ""
+    relevance: Optional[int] = None  # raw LLM relevance; see AppraisedRecord.relevance
 
 
 # --- small helpers -----------------------------------------------------------
@@ -393,7 +410,10 @@ class Appraiser:
         self.llm = llm or LLMClient()
 
     def appraise(
-        self, records: list[EvidenceRecord], question: str
+        self,
+        records: list[EvidenceRecord],
+        question: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> list[AppraisedRecord]:
         """
         Score, sort and truncate a pool of records. Returns AppraisedRecords
@@ -403,6 +423,10 @@ class Appraiser:
         Rows are sorted by citation_key once BEFORE batching, so batch
         membership (and therefore the LLM prompts) is deterministic
         regardless of input order.
+
+        on_progress, when given, is called as (batch_index, batch_count)
+        (both 1-based/1-total) after each LLM batch resolves -- lets a
+        caller stream mid-stage progress instead of only start/done.
         """
         if not records:
             return []
@@ -434,7 +458,8 @@ class Appraiser:
         # remaining batches. Non-transport fallbacks (malformed payload,
         # >10% missing keys) do NOT trip this memory.
         llm_down = False
-        for start in range(0, len(rows), _LLM_BATCH_SIZE):
+        batch_count = math.ceil(len(rows) / _LLM_BATCH_SIZE)
+        for batch_index, start in enumerate(range(0, len(rows), _LLM_BATCH_SIZE), start=1):
             chunk = rows[start : start + _LLM_BATCH_SIZE]
             if llm_down:
                 rankings, failure_tag = None, "llm_unavailable"
@@ -452,9 +477,15 @@ class Appraiser:
             for row in chunk:
                 self._finalize(row, rankings, failure_tag)
 
+            if on_progress is not None:
+                try:
+                    on_progress(batch_index, batch_count)
+                except Exception as exc:
+                    print(f"[appraiser] on_progress callback failed ({exc}); ignoring")
+
         rows.sort(key=_sort_key)
         return [
-            AppraisedRecord(record=row.record, score=row.final, rationale=row.rationale)
+            AppraisedRecord(record=row.record, score=row.final, rationale=row.rationale, relevance=row.relevance)
             for row in rows[: self.pool_cap]
         ]
 
@@ -490,7 +521,7 @@ class Appraiser:
                 f"  title: {r.title or ''}\n"
                 f"  design: {r.study_design.value}\n"
                 f"  date: {r.publication_date.isoformat() if r.publication_date else 'unknown'}\n"
-                f"  abstract: {(r.abstract or '')[:500]}"
+                f"  abstract: {(r.abstract or '')[:MAX_ABSTRACT_CHARS]}"
             )
         return "\n".join(lines)
 
@@ -598,6 +629,7 @@ class Appraiser:
                 llm_note = "llm_skipped"  # heuristic-only for this record
             else:
                 relevance, llm_rationale = hit
+                row.relevance = relevance  # raw, un-blended -- see AppraisedRecord.relevance
                 weak = (
                     record.study_design is StudyDesign.UNKNOWN
                     or not _has_abstract(record)

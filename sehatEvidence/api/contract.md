@@ -222,12 +222,13 @@ The shape is **identical** for answers and abstentions — only the values diffe
     "claims_kept": 3,
     "by_reason": { "source retracted (crossref)": 1, "unsupported by cited evidence": 1 }
   },
-  "answer_text": "Metformin was associated with lower all-cause mortality [S1]. ...",
+  "answer_text": "Metformin was associated with lower all-cause mortality. ...",
   "claims": [ /* Claim objects, see below */ ],
   "evidence": [ /* Evidence objects, see below */ ],
   "disclaimer": "EvidenceBoard is a literature search and evidence-summarization aid ...",
   "queries": ["metformin all-cause mortality type 2 diabetes", "..."],
   "synthesizer_parse_deletions": [ { "text": "...", "reason": "uncited sentence" } ],
+  "unanswered_aspects": [ "The exact weight-based dosing regimen is not stated in the evidence set" ],
   "cached": false,
   "run_id": "3f9a1c2b..."
 }
@@ -241,12 +242,13 @@ The shape is **identical** for answers and abstentions — only the values diffe
 | `abstained` | `boolean` | `true` when no answer is given |
 | `abstain_reasons` | `string[]` | empty unless `abstained`. Known values: `"fewer than 2 records retrieved"`, `"fewer than 2 high-relevance records"`, `"LLM unavailable during synthesis"`, `"synthesizer judged evidence insufficient"`, `"LLM unavailable"`, plus the Verifier's own reasons |
 | `funnel` | `object` | verification funnel, see below |
-| `answer_text` | `string` | the kept + flagged claim texts joined with spaces; `""` when abstained. Every sentence carries `[S#]` citation markers |
+| `answer_text` | `string` | the kept + flagged claim texts, each given a trailing `.` if it doesn't already end in `.`/`!`/`?`, joined with spaces; `""` when abstained. Plain prose only -- no inline `[S#]` tags (each claim's citations live in the matching `claims[].citations`, not in this text) |
 | `claims` | `Claim[]` | **all** claims in generation order, including deleted ones; empty when abstained |
 | `evidence` | `Evidence[]` | the appraised pool, best-first, `S1` … `Sn`. Populated even on abstention whenever the run got that far — that is what makes an abstention auditable |
 | `disclaimer` | `string` | `config.DISCLAIMER`; must be displayed on every surface that shows an answer |
 | `queries` | `string[]` | the Strategist's planned search queries, always populated whenever stage 1 ran (empty only for the top-level "LLM totally dead" net and a failed mock replay, which never reach stage 1) |
 | `synthesizer_parse_deletions` | `object[]` | `{"text", "reason"}` — draft sentences the Synthesizer's own deterministic parser dropped *before* the Verifier ever saw them (uncited sentences, citations to an unknown S-id). Distinct from the verification funnel above: these never entered it at all |
+| `unanswered_aspects` | `string[]` | the Synthesizer's own self-reported statements (`[GAP]`-tagged sentences) that a specific facet of the question isn't addressed by the evidence set. These carry no citation, are never claims, and never reach the Verifier — a partial answer can have both a cited `answer_text` and a non-empty `unanswered_aspects`. Always `[]` for a total abstention via the exact `INSUFFICIENT_EVIDENCE` token or an empty evidence pool. This is self-reported by the model, not independently checked — render it visibly distinct from `answer_text` so it is never mistaken for a verified claim |
 | `cached` | `boolean` | present on responses from `POST /api/ask`/`POST /api/ask/stream` (not from `GET /api/history/{id}`, where it's implied): `true` if this report was replayed rather than freshly computed |
 | `run_id` | `string \| null` | the history row id this run was recorded as; `null` only if recording itself failed (never blocks the answer) |
 

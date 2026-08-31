@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Badge } from "../shared/Badge";
 import { CopyableId } from "../shared/CopyableId";
 import type { Evidence } from "../../lib/types";
+import { highlightQuotes } from "../../lib/highlightQuotes";
 import { linkFor } from "../../lib/links";
 import { StudyDesignBadge } from "./StudyDesignBadge";
 
@@ -17,7 +18,7 @@ function scoreClass(score: number): string {
  * abstract were computed by the backend but never surfaced anywhere;
  * retraction_source was silently dropped before it even reached the API
  * (see the pipeline.py fix). All four are shown here now. */
-export function EvidenceRow({ evidence }: { evidence: Evidence }) {
+export function EvidenceRow({ evidence, quotes = [] }: { evidence: Evidence; quotes?: string[] }) {
   const [expanded, setExpanded] = useState(false);
   const url = linkFor(evidence);
   const title = evidence.title || "(untitled record)";
@@ -71,9 +72,16 @@ export function EvidenceRow({ evidence }: { evidence: Evidence }) {
                 {expanded ? "hide abstract" : "show abstract"}
               </button>
             )}
+            {quotes.length > 0 && (
+              <Badge kind="info" mark="">
+                {quotes.length} cited passage{quotes.length === 1 ? "" : "s"}
+              </Badge>
+            )}
           </div>
           {expanded && evidence.abstract && (
-            <p className="mt-2 rounded-sm bg-paper p-3 text-[12.5px] leading-relaxed text-ink-soft">{evidence.abstract}</p>
+            <p className="mt-2 rounded-sm bg-paper p-3 text-[12.5px] leading-relaxed text-ink-soft">
+              {highlightQuotes(evidence.abstract, quotes)}
+            </p>
           )}
         </div>
       )}

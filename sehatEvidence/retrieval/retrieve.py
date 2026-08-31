@@ -16,7 +16,8 @@ retrieve. Reasons:
     -> comparable numbers across runs and across baselines.
   - Bounded API cost per question, which matters on a 3 req/s PubMed limit
     and a live demo.
-Breadth still comes from the Strategist producing 3-5 queries up front, which
+Breadth still comes from the Strategist producing as many queries as the
+question needs up front (no fixed count -- see agents/strategist.py), which
 we fan out here in parallel.
 
 ZERO AI in this module.
@@ -66,18 +67,24 @@ class EvidenceGatherer:
         per_source_limit: int = 15,
         include_trials: bool = True,
         include_preprints: bool = True,
-    ) -> list[EvidenceRecord]:
+        collect_traces: bool = False,
+    ):
         """
-        Takes one query string or a list of them (Strategist normally
-        produces 3-5), fans out to all sources in parallel, merges,
-        dedupes, and cross-references retraction status.
+        Takes one query string or a list of them, fans out to all sources
+        in parallel, merges, dedupes, and cross-references retraction
+        status.
 
-        Returns a single clean list of EvidenceRecords.
+        Returns a single clean list of EvidenceRecords. When
+        collect_traces=True (opt-in; default behavior/signature for
+        existing callers is unchanged), returns (records, traces) instead,
+        where traces is a list of pubmed.RelaxationTrace -- one per PubMed
+        query that needed automatic-term-mapping recovery (queries that
+        didn't need it produce no trace at all).
         """
         if isinstance(queries, str):
             queries = [queries]
 
-        raw_records = self._fan_out(
+        raw_records, traces = self._fan_out(
             queries, per_source_limit, include_trials, include_preprints
         )
         merged = self._dedupe(raw_records)
@@ -88,6 +95,8 @@ class EvidenceGatherer:
             # testing) afterward.
             merged = self._close_europmc_retraction_gap(merged)
             merged = self._cross_reference_retractions(merged)
+        if collect_traces:
+            return merged, traces
         return merged
 
     # ------------------------------------------------------------------
@@ -100,7 +109,7 @@ class EvidenceGatherer:
         per_source_limit: int,
         include_trials: bool,
         include_preprints: bool,
-    ) -> list[EvidenceRecord]:
+    ):
         tasks = []
         for query in queries:
             tasks.append(("pubmed", query))
@@ -109,12 +118,14 @@ class EvidenceGatherer:
                 tasks.append(("clinicaltrials", query))
 
         records: list[EvidenceRecord] = []
-        # Deliberately modest worker count. The real win is overlapping the
-        # THREE SOURCES (independent rate limits); running many queries
-        # against the SAME source concurrently just crowds that source's
-        # token bucket and risks 429s without going any faster, since the
-        # limiter serializes them anyway.
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        traces = []
+        # Worker count raised from 3: with the Strategist's proposer<->critic
+        # loop now free to produce more than 3-5 queries, serialization
+        # ACROSS queries -- not just across sources -- became the
+        # bottleneck. Each source's own TokenBucket still serializes calls
+        # to that source, so this cannot cause a 429 storm; it just lets
+        # more than one query's three sources overlap at once.
+        with ThreadPoolExecutor(max_workers=6) as pool:
             futures = {
                 pool.submit(
                     self._fetch_one,
@@ -128,13 +139,16 @@ class EvidenceGatherer:
             for future in as_completed(futures):
                 source, query = futures[future]
                 try:
-                    records.extend(future.result())
+                    result_records, trace = future.result()
+                    records.extend(result_records)
+                    if trace is not None:
+                        traces.append(trace)
                 except Exception as exc:
                     # One source failing must not kill the whole retrieval --
                     # partial evidence is better than none, and the answer
                     # will simply be grounded in fewer sources.
                     print(f"[retrieve] {source} failed for query {query!r}: {exc}")
-        return records
+        return records, traces
 
     def _fetch_one(
         self,
@@ -142,21 +156,24 @@ class EvidenceGatherer:
         query: str,
         limit: int,
         include_preprints: bool,
-    ) -> list[EvidenceRecord]:
+    ):
         if source == "pubmed":
-            return self.pubmed.search_and_fetch(query, retmax=limit)
+            records, trace = self.pubmed.search_and_fetch_traced(query, retmax=limit)
+            return records, (trace if trace.dropped else None)
         if source == "europepmc":
-            return self.europepmc.search(
+            records = self.europepmc.search(
                 query, page_size=limit, include_preprints=include_preprints
             )
+            return records, None
         if source == "clinicaltrials":
-            return self.clinicaltrials.search(
+            records = self.clinicaltrials.search_relaxed(
                 query,
                 page_size=limit,
                 max_pages=1,
                 statuses=list(RELEVANT_STATUSES_FOR_PIPELINE),
             )
-        return []
+            return records, None
+        return [], None
 
     # ------------------------------------------------------------------
     # Step 2: dedupe
@@ -319,7 +336,8 @@ def gather_evidence(
     per_source_limit: int = 15,
     include_trials: bool = True,
     include_preprints: bool = True,
-) -> list[EvidenceRecord]:
+    collect_traces: bool = False,
+):
     global _default_gatherer
     if _default_gatherer is None:
         _default_gatherer = EvidenceGatherer()
@@ -328,4 +346,5 @@ def gather_evidence(
         per_source_limit=per_source_limit,
         include_trials=include_trials,
         include_preprints=include_preprints,
+        collect_traces=collect_traces,
     )

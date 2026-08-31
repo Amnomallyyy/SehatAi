@@ -49,6 +49,21 @@ DISCLAIMER = ("EvidenceBoard is a literature search and evidence-summarization a
 #: Case-insensitive words accepted as "true" for boolean env flags.
 _TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
 
+#: Per-abstract character ceiling in any LLM prompt (Appraiser, Synthesizer,
+#: Verifier). 6,000 chars (~1,500 tokens) covers the full text of the large
+#: majority of PubMed abstracts, including long structured Cochrane/
+#: systematic-review abstracts -- it exists only as a runaway guard against
+#: a malformed record, not as a summarization budget. Defined once here so
+#: every agent truncates on the same number.
+MAX_ABSTRACT_CHARS = 6000
+
+#: Total character budget for the evidence portion of one prompt (used by
+#: the Synthesizer's budget-aware evidence selection and the Verifier's
+#: per-claim entailment prompt). ~60K tokens -- under half the 128K context
+#: window of the configured models, leaving ample room for the system
+#: prompt, instructions and output.
+MAX_EVIDENCE_PROMPT_CHARS = 240_000
+
 
 # --- env parsing helpers -------------------------------------------------------
 
@@ -127,9 +142,29 @@ class Settings:
     ncbi_tool_name: Optional[str] = None
     ncbi_email: Optional[str] = None
     ncbi_api_key: Optional[str] = None
-    pool_cap: int = 30
+    pool_cap: int = 50
     enable_supersession: bool = True
-    llm_timeout: int = 60
+    enable_citation_repair: bool = True
+    # Raised from 60, then from 180: 180 was calibrated only for the
+    # larger PROMPTS (full abstracts, whole evidence pool); it wasn't
+    # revisited when llm_max_tokens below was raised to 16000, and a
+    # reasoning model generating up to 16000 tokens of visible
+    # chain-of-thought on a free-tier endpoint can genuinely take longer
+    # than 180s to finish -- confirmed live, 2026-08-30: a synthesis call
+    # timed out on all 3 failover keys in a row at exactly 180s each. This
+    # increase is real generation time being given room to complete, not a
+    # tolerance for an actually-dead endpoint (a truly dead key still
+    # fails fast on connection refused/DNS errors, not a timeout).
+    llm_timeout: int = 300
+    # Raised from 4096: the configured models are reasoning models whose
+    # visible chain-of-thought can land in the same `content` field as the
+    # final answer (not always cleanly segregated into reasoning_content --
+    # confirmed live, 2026-08-30: a Synthesizer response was cut off
+    # mid-word after ~150 sentences of pure reasoning, never reaching the
+    # actual cited answer). 4096 tokens is not enough headroom for a
+    # 50-record evidence pool's worth of visible reasoning plus the answer
+    # itself. 16000 is still a small fraction of the 128K context window.
+    llm_max_tokens: int = 16000
     server_host: str = "127.0.0.1"
     server_port: int = 8000
     db_path: str = "evidenceboard.db"  # history + response cache (core/store.py)
@@ -147,9 +182,11 @@ class Settings:
             ncbi_tool_name=_env_opt("NCBI_TOOL_NAME"),
             ncbi_email=_env_opt("NCBI_EMAIL"),
             ncbi_api_key=_env_opt("NCBI_API_KEY"),
-            pool_cap=_env_int("POOL_CAP", 30),
+            pool_cap=_env_int("POOL_CAP", 50),
             enable_supersession=_env_bool("ENABLE_SUPERSESSION", True),
-            llm_timeout=_env_int("LLM_TIMEOUT", 60),
+            enable_citation_repair=_env_bool("ENABLE_CITATION_REPAIR", True),
+            llm_timeout=_env_int("LLM_TIMEOUT", 300),
+            llm_max_tokens=_env_int("LLM_MAX_TOKENS", 16000),
             server_host=_env_str("SERVER_HOST", "127.0.0.1"),
             server_port=_env_int("SERVER_PORT", 8000),
             db_path=_env_str("DB_PATH", "evidenceboard.db"),
@@ -194,6 +231,7 @@ def build_llm_clients(settings: Settings, model_override: Optional[str] = None) 
             api_key=key,
             model=model,
             time_out=settings.llm_timeout,
+            max_tokens=settings.llm_max_tokens,
         )
         for key in settings.llm_api_keys
     ]

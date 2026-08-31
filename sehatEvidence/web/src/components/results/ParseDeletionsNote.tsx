@@ -5,8 +5,10 @@ import type { SynthesizerParseDeletion } from "../../lib/types";
  * evidence). Distinct from the Verifier's deletion funnel -- these never
  * reached verification at all. Previously computed but never surfaced
  * past a stdout log line (a genuine backend gap, not just a UI one). */
-export function ParseDeletionsNote({ deletions }: { deletions: SynthesizerParseDeletion[] }) {
-  if (deletions.length === 0) return null;
+export function ParseDeletionsNote({ deletions }: { deletions?: SynthesizerParseDeletion[] }) {
+  // Defensive: a report served from history/cache can predate this field
+  // (this app caches forever with no TTL, core/store.py) -- never crash.
+  if (!deletions || deletions.length === 0) return null;
   return (
     <details className="mb-6 rounded-[3px] border border-rule bg-card">
       <summary className="focus-ring cursor-pointer list-none px-4 py-3 text-[12.5px] font-semibold text-ink-soft [&::-webkit-details-marker]:hidden">

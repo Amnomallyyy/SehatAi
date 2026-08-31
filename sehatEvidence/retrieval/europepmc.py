@@ -73,7 +73,17 @@ class EuropePMCClient:
         """
         full_query = query if include_preprints else f"({query}) NOT SRC:PPR"
         data = self._get(
-            {"query": full_query, "pageSize": page_size, "resultType": "core"}
+            {
+                "query": full_query,
+                "pageSize": page_size,
+                "resultType": "core",
+                # Europe PMC's MeSH/synonym query expansion is OFF by
+                # default -- turning it on is the Europe-PMC-side
+                # equivalent of PubMed's Automatic Term Mapping, and closes
+                # the same class of gap on rare-disease vocabulary (e.g.
+                # "anti-MDA5" vs "MDA5" vs "IFIH1").
+                "synonym": "TRUE",
+            }
         )
         results = data.get("resultList", {}).get("result", [])
         records = [self._parse_result(r) for r in results]
