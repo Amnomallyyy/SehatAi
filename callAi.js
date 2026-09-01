@@ -123,7 +123,7 @@ function withTimeout(promise, ms, label) {
 // see the original comment preserved below — NVIDIA's DeepSeek endpoint
 // hasn't shown the same requirement, and some APIs 400 on an
 // unrecognized field, so it's opt-in per provider, not global).
-function makeOpenAICompatibleProvider({ name, apiKeyEnv, baseURL, modelEnv, defaultModel, sendReasoningEffort = false, systemPrefix = null, minMaxTokens = null }) {
+function makeOpenAICompatibleProvider({ name, apiKeyEnv, baseURL, modelEnv, defaultModel, sendReasoningEffort = false, reasoningEffortValue = "none", systemPrefix = null, minMaxTokens = null }) {
   const apiKey = process.env[apiKeyEnv];
   if (!apiKey) return null;
   const model = process.env[modelEnv] || defaultModel;
@@ -171,7 +171,7 @@ function makeOpenAICompatibleProvider({ name, apiKeyEnv, baseURL, modelEnv, defa
         messages: [{ role: "system", content: buildSystem(system) }, { role: "user", content: message }],
         temperature,
         max_tokens: effectiveMaxTokens(maxTokens),
-        ...(sendReasoningEffort ? { reasoning_effort: reasoningEffort || "none", reasoning_format: "hidden" } : {}),
+        ...(sendReasoningEffort ? { reasoning_effort: reasoningEffort || reasoningEffortValue, reasoning_format: "hidden" } : {}),
       }), PROVIDER_TIMEOUT_MS, name);
       const text = response.choices[0]?.message?.content;
       if (!text) throw new Error(`${name}: empty content in response`);
@@ -207,7 +207,7 @@ ${JSON.stringify(schema)}`;
         // arrives, which looks exactly like provider exhaustion in the
         // logs but is actually this.
         max_tokens: effectiveMaxTokens(1000),
-        ...(sendReasoningEffort ? { reasoning_effort: "none", reasoning_format: "hidden" } : {}),
+        ...(sendReasoningEffort ? { reasoning_effort: reasoningEffortValue, reasoning_format: "hidden" } : {}),
       }), PROVIDER_TIMEOUT_MS, name);
       const text = response.choices[0]?.message?.content;
       if (!text) throw new Error(`${name}: empty content in structured response`);
@@ -279,6 +279,16 @@ const PROVIDER_FACTORIES = {
     modelEnv: "GROQ_MODEL",
     defaultModel: "qwen/qwen3.6-27b",
     sendReasoningEffort: true, // this model 400s without it — see file header
+    // FOUND LIVE: switching GROQ_MODEL to openai/gpt-oss-120b broke
+    // every single Groq call with "400 reasoning_effort must be one of
+    // low, medium, or high" — the "none" value below was correct for
+    // qwen but gpt-oss-120b's API rejects it outright, cascading the
+    // whole provider fallback chain into failures on every message.
+    // "low" is the closest equivalent to "none" (fastest, least visible
+    // reasoning) for a model that requires one of the three real levels.
+    // If GROQ_MODEL changes again, re-check which values that model's
+    // Groq endpoint actually accepts before assuming this still applies.
+    reasoningEffortValue: "low",
   }),
   // ADDED: Gemini via Google's official OpenAI-compatibility endpoint
   // (ai.google.dev/gemini-api/docs/openai — confirmed live). Not
@@ -488,7 +498,15 @@ function logCallDuration(providerName, startedAt, structured) {
 // Groq/Gemini) by 4x if a call ever rambles instead of answering
 // cleanly. Pass an explicit maxTokens at the call site if a genuinely
 // longer plain-text response is ever needed.
-export async function callAI({ system, message, temperature = 0, maxTokens = 300, reasoningEffort = "none" }) {
+// FOUND LIVE, alongside the gpt-oss-120b reasoningEffortValue fix on the
+// groq provider entry above: this default of "none" silently defeated
+// that fix for every real caller. Nothing in this codebase ever passes an
+// explicit reasoningEffort override (confirmed by grep) -- every call
+// relied on this default, which always won over each provider's own
+// reasoningEffortValue fallback in `reasoningEffort || reasoningEffortValue`
+// (a non-empty default string is never falsy). Defaulting to null here
+// lets that per-provider fallback actually take effect.
+export async function callAI({ system, message, temperature = 0, maxTokens = 300, reasoningEffort = null }) {
   if (PROVIDER_CHAIN.length === 0) {
     throw new Error("AI call failed: no AI provider is configured (see callAi.js startup warning).");
   }

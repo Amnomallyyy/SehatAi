@@ -1808,13 +1808,34 @@ const ASSISTANT_PLACEHOLDERS = {
   diet: 'Ask a diet/nutrition question… (Enter to send, Shift+Enter for new line)',
 };
 
+// FOUND LIVE: `if (sehataiToken) return sehataiToken;` alone only guards
+// against a SECOND call after the FIRST has already resolved -- it does
+// nothing for two calls that both start before either has finished (e.g.
+// initAssistantPage's own status-check call racing a message send fired
+// right after page load). Since /me/sehatai-token revokes-and-reissues
+// (see its own doc comment -- there's no "return the existing valid one"
+// option with a hash-only token store), two concurrent calls each mint
+// their own token and each revoke whatever the OTHER just created; the
+// LAST response to arrive silently wins in `sehataiToken = data.token`,
+// which is a race, not a guarantee it's the still-valid one -- a patient
+// hit exactly this live, with the earlier (now-revoked) token winning the
+// race, sending every real chat message as "Missing or invalid token."
+// Caching the in-flight PROMISE (not just the eventual value) collapses
+// any concurrent callers onto the SAME single request.
+let sehataiTokenPromise = null;
+
 async function ensureSehataiToken() {
   if (sehataiToken) return sehataiToken;
-  const res = await apiFetch('/me/sehatai-token', { method: 'POST' });
-  const data = await res.json();
-  if (!res.ok) throw new Error(errMsg(data));
-  sehataiToken = data.token;
-  return sehataiToken;
+  if (!sehataiTokenPromise) {
+    sehataiTokenPromise = (async () => {
+      const res = await apiFetch('/me/sehatai-token', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(errMsg(data));
+      sehataiToken = data.token;
+      return sehataiToken;
+    })().finally(() => { sehataiTokenPromise = null; });
+  }
+  return sehataiTokenPromise;
 }
 
 function assistantBubble(role, html) {
@@ -1825,6 +1846,37 @@ function assistantBubble(role, html) {
   thread.appendChild(row);
   thread.scrollTop = thread.scrollHeight;
   return row;
+}
+
+// SehatAI's backend answers in one shot -- no real intermediate stages to
+// report, unlike EvidenceBoard's genuine NDJSON stream above. Rather than
+// leave a single static "…" for however long a slow provider fallback
+// takes (confirmed live tonight: DietBot alone can run 30s+), this
+// rotates through plausible status phrases and ticks a real elapsed-time
+// counter. The phrases are cosmetic (not a report of actual pipeline
+// state); the timer is real. Returns a stop() that must be called before
+// the bubble is removed, or the interval leaks.
+const ASSISTANT_THINKING_PHRASES = {
+  symptom: ['Reviewing what you\'ve described', 'Checking against safety guidelines', 'Weighing possible causes', 'Preparing a response'],
+  diet: ['Reviewing your profile', 'Looking up nutrition guidelines', 'Checking recipe options', 'Preparing a response'],
+};
+
+function startThinkingIndicator(bubbleEl, mode) {
+  const phrases = ASSISTANT_THINKING_PHRASES[mode] || ASSISTANT_THINKING_PHRASES.symptom;
+  const bubble = bubbleEl.querySelector('.msg-bubble');
+  const startedAt = Date.now();
+  let phraseIndex = 0;
+
+  const render = () => {
+    const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+    bubble.innerHTML = `<span class="t-xs" style="color:var(--text-light)"><span class="thinking-dot">●</span> ${escHtml(phrases[phraseIndex % phrases.length])}… <span style="opacity:.6">${elapsedSec}s</span></span>`;
+  };
+  render();
+
+  const phraseTimer = setInterval(() => { phraseIndex += 1; render(); }, 2500);
+  const tickTimer = setInterval(render, 1000);
+
+  return () => { clearInterval(phraseTimer); clearInterval(tickTimer); };
 }
 
 function renderAssistantReply(result) {
@@ -1845,7 +1897,8 @@ async function sendAssistantMessage(explicitText) {
   const sendBtn = document.getElementById('assistant-send-btn');
   sendBtn.disabled = true;
   assistantBubble('user', escHtml(text));
-  const thinking = assistantBubble('bot', '<span class="t-xs" style="color:var(--text-light)">…</span>');
+  const thinking = assistantBubble('bot', '');
+  const stopThinking = startThinkingIndicator(thinking, assistantMode);
 
   try {
     const token = await ensureSehataiToken();
@@ -1855,6 +1908,7 @@ async function sendAssistantMessage(explicitText) {
       body: JSON.stringify({ mode: assistantMode, message: text, sessionId: sehataiSessionIds[assistantMode] }),
     });
     const result = await res.json();
+    stopThinking();
     thinking.remove();
     if (!res.ok) {
       assistantBubble('bot', `<span style="color:var(--red)">${escHtml(result.error || `HTTP ${res.status}`)}</span>`);
@@ -1863,6 +1917,7 @@ async function sendAssistantMessage(explicitText) {
       renderAssistantReply(result);
     }
   } catch (err) {
+    stopThinking();
     thinking.remove();
     assistantBubble('bot', `<span style="color:var(--red)">Could not reach the assistant: ${escHtml(err.message)}</span>`);
   } finally {
@@ -1971,6 +2026,29 @@ function renderEvidenceAnswer(report) {
   evidenceBubble('bot', html);
 }
 
+// Real per-stage labels for EvidenceBoard's actual pipeline (see its own
+// api/contract.md's /api/ask/stream doc) -- unlike the AI Assistant's
+// thinking indicator below, this reflects genuine progress: each line
+// only appears once that real pipeline stage has actually started/
+// finished, not a simulated countdown.
+const EVIDENCE_STAGE_LABELS = {
+  strategist: 'Planning search strategy',
+  retrieval: 'Searching PubMed, Europe PMC, ClinicalTrials.gov',
+  appraiser: 'Appraising evidence quality',
+  synthesizer: 'Synthesizing answer',
+  verifier: 'Verifying every claim',
+  red_team: 'Red-teaming for weaknesses',
+  complete: 'Finalizing',
+};
+
+function renderEvidenceThinking(el, doneStages, activeStage) {
+  const lines = doneStages.map((s) => `<div class="t-xs" style="color:var(--good, #1A7F5A)">✓ ${escHtml(EVIDENCE_STAGE_LABELS[s] || s)}</div>`);
+  if (activeStage) {
+    lines.push(`<div class="t-xs" style="color:var(--text-light)"><span class="thinking-dot">●</span> ${escHtml(EVIDENCE_STAGE_LABELS[activeStage] || activeStage)}…</div>`);
+  }
+  el.querySelector('.msg-bubble').innerHTML = lines.join('');
+}
+
 async function sendEvidenceQuestion(explicitText) {
   const input = document.getElementById('evidence-input');
   const text = explicitText != null ? explicitText : input.value.trim();
@@ -1979,20 +2057,58 @@ async function sendEvidenceQuestion(explicitText) {
   const sendBtn = document.getElementById('evidence-send-btn');
   sendBtn.disabled = true;
   evidenceBubble('user', escHtml(text));
-  const thinking = evidenceBubble('bot', '<span class="t-xs" style="color:var(--text-light)">Searching literature…</span>');
+  const thinking = evidenceBubble('bot', '<span class="t-xs" style="color:var(--text-light)">Connecting…</span>');
+  const doneStages = [];
 
   try {
-    const res = await fetch(`${EVIDENCE_API}/api/ask`, {
+    const res = await fetch(`${EVIDENCE_API}/api/ask/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: text }),
     });
-    const report = await res.json();
-    thinking.remove();
     if (!res.ok) {
-      evidenceBubble('bot', `<span style="color:var(--red)">${escHtml(report.error || `HTTP ${res.status}`)}</span>`);
-    } else {
+      const errBody = await res.json().catch(() => ({}));
+      thinking.remove();
+      evidenceBubble('bot', `<span style="color:var(--red)">${escHtml(errBody.error || `HTTP ${res.status}`)}</span>`);
+      return;
+    }
+
+    // NDJSON: one JSON object per line, streamed as it happens -- see
+    // EVIDENCE_STAGE_LABELS' doc comment above for why this is real
+    // progress, not a simulation.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let report = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // last (possibly incomplete) line stays in the buffer
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === 'stage' && event.status === 'start') {
+          renderEvidenceThinking(thinking, doneStages, event.stage);
+        } else if (event.type === 'stage' && event.status === 'done') {
+          doneStages.push(event.stage);
+          renderEvidenceThinking(thinking, doneStages, null);
+        } else if (event.type === 'cache_hit') {
+          renderEvidenceThinking(thinking, [], null);
+        } else if (event.type === 'result') {
+          report = event.report;
+        }
+      }
+    }
+
+    thinking.remove();
+    if (report) {
       renderEvidenceAnswer(report);
+    } else {
+      evidenceBubble('bot', '<span style="color:var(--red)">Stream ended with no result.</span>');
     }
   } catch (err) {
     thinking.remove();

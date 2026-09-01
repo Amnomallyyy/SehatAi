@@ -499,6 +499,10 @@ img { max-width: 100%; }
 }
 .mode-toggle-btn:not(.active):hover { background: var(--sky); }
 
+/* Thinking indicator (AI Assistant + Clinical Evidence) */
+.thinking-dot { display: inline-block; animation: thinking-pulse 1.4s ease-in-out infinite; }
+@keyframes thinking-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
 .conv-thread {
   flex: 1;
   overflow-y: auto;

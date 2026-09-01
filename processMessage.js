@@ -3090,11 +3090,19 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   const specialists = enforcePediatricRouting(triageResult.specialists || ['General Physician'], age);
 
   if (urgency === 'emergency') {
+    // FOUND LIVE: this was the one emergency path in the whole file that
+    // never called markEmergencyAcknowledgeable — every other emergency
+    // reply (keyword match, AI classifier, crisis) gets the "Notify
+    // someone" / "Continue with this chat" buttons and the chat-stays-
+    // locked-until-acknowledged behavior; this one, reached when
+    // Infermedica's OWN /triage engine (not our classifiers) calls the
+    // urgency level emergency, silently had neither — no way to resume
+    // the conversation at all short of starting a new session.
     const triageLevel = triageResult.triageLevel;
     const templatedNote = TRIAGE_LEVEL_NOTES[triageLevel];
     const reply = templatedNote
       || `🚨 ${triageResult.triage?.triage_level_explanation || 'This may be a medical emergency. Please seek immediate medical attention.'}`;
-    return envelope({
+    return envelope(markEmergencyAcknowledgeable({
       kind: 'emergency',
       sessionId,
       isEmergency: true,
@@ -3105,7 +3113,7 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       resolvedSex: sex,
       reply: cleanReply(reply),
       source: 'infermedica_triage',
-    });
+    }, sessionId, message));
   }
 
   // ------------------------------------------------------------------

@@ -38,7 +38,14 @@ def get_or_create_sehatai_patient_id(user: models.User, db: Session) -> uuid.UUI
     if user.sehatai_patient_id is not None:
         return user.sehatai_patient_id
 
-    patient = models.Patient(name=user.name)
+    # consented_at: FOUND LIVE -- DataFetch's own pipeline (pipeline.py's
+    # "Step 6: Checking patient consent") refuses to process ANY document
+    # for a patient row where this is null, entirely separate from the
+    # password/auth gate. A patient reaching this code path is already
+    # authenticated as themselves via CareLink and about to upload their
+    # own file through their own session -- that action IS the consent;
+    # there's no separate consent UI/flow for this bridge to collect.
+    patient = models.Patient(name=user.name, consented_at=datetime.now(timezone.utc))
     db.add(patient)
     db.flush()  # assigns patient.id without committing yet
 

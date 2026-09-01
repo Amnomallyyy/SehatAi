@@ -127,7 +127,17 @@ def structured_document_to_payload(
             "value_numeric": val.value_numeric,
             "unit": val.unit,
             "normal_range": val.normal_range,
-            "flag": val.flag,
+            # FOUND LIVE: the AI classification step (clients.py's prompt)
+            # never specifies a required case for this field, and echoes
+            # back whatever case the source document/model happened to
+            # use (e.g. "LOW" from an uppercase-styled report table) --
+            # the DB's extracted_data_flag_check constraint only accepts
+            # the lowercase set this test block's own example uses
+            # ("normal" below), so an otherwise-correct extraction failed
+            # storage entirely on casing alone. Normalizing here is
+            # cheaper and more robust than trying to constrain the
+            # model's output casing via prompt wording.
+            "flag": val.flag.lower() if val.flag else val.flag,
             "operator": val.operator,
         })
 
