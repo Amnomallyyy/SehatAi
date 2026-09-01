@@ -1,0 +1,101 @@
+version: "3.9"
+
+# Five services, five Dockerfiles (see each one's own comments for why its
+# build context is what it is). No secrets live in this file -- every
+# service's real .env is bind-mounted read-only from the host instead of
+# being baked into an image or copied into `environment:` here.
+#
+# Ports match the architecture doc's assignments exactly, so nothing on
+# the host side (browser bookmarks, the frontend's hardcoded API/
+# SEHATAI_API/EVIDENCE_API constants in app.js) needs to change:
+#   sehatai-backend   -> 3000
+#   carelink-backend  -> 8000
+#   carelink-frontend -> 3002
+#   evidenceboard     -> 8002
+#   dietbot           -> 8001
+#
+# Browser-facing URLs in frontend/static/js/app.js stay "localhost:PORT"
+# on purpose -- the browser runs on the host, outside this network
+# entirely, so it always reaches these over the published ports below,
+# never through Docker's internal service-name DNS. Only container-to-
+# container calls (sehatai-backend -> dietbot) use service names.
+
+services:
+  sehatai-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./.env:/app/.env:ro
+    environment:
+      # Overrides whatever DIETBOT_API_URL is in .env -- inside this
+      # network, "dietbot" resolves via Docker's internal DNS; localhost
+      # would mean "this container itself," not the dietbot one.
+      DIETBOT_API_URL: http://dietbot:8001
+      CORS_ORIGIN: http://localhost:3002
+    depends_on:
+      - dietbot
+    restart: unless-stopped
+
+  carelink-backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Root .env: DataFetch's own vars (SUPABASE_URL/KEY, OCRSPACE_API_KEY,
+      # GEMINI_API_KEY, ...) -- read by lab_reports.py's subprocess call
+      # into main.py, which loads it from DATAFETCH_DIR=/app.
+      - ./.env:/app/.env:ro
+      # backend/.env: DATABASE_URL, SECRET_KEY, GROQ_API_KEY -- loaded by
+      # database.py's load_dotenv() from its own working directory.
+      - ./backend/.env:/app/backend/.env:ro
+      # Persist uploaded reports/avatars/lab-report staging across restarts
+      # instead of losing them when the container is recreated.
+      - carelink-uploads:/app/backend/app/static/uploads
+      - carelink-avatars:/app/backend/app/static/avatars
+    restart: unless-stopped
+
+  carelink-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3002"
+    depends_on:
+      - carelink-backend
+    restart: unless-stopped
+
+  evidenceboard:
+    build:
+      context: ./sehatEvidence
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./sehatEvidence/.env:/app/.env:ro
+      # Question-history/cache DB survives container recreation.
+      - evidenceboard-db:/app/data
+    environment:
+      # See config.py's DB_PATH default -- pointed at the persisted
+      # volume above rather than the container's throwaway filesystem.
+      DB_PATH: /app/data/evidenceboard.db
+    restart: unless-stopped
+
+  dietbot:
+    build:
+      context: C:/Users/lenovo/SehatAi
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - C:/Users/lenovo/SehatAi/.env:/app/.env:ro
+    restart: unless-stopped
+
+volumes:
+  carelink-uploads:
+  carelink-avatars:
+  evidenceboard-db:

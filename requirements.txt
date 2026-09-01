@@ -10,6 +10,10 @@ supabase==2.31.0         # bumped from 2.10.0 -- that version's create_client() 
                           # newer sb_secret_/sb_publishable_ key format at the client-side validation
                           # step, before ever making a request, with "Invalid API key". Confirmed live:
                           # the exact same key/project fails on 2.10.0 and succeeds on 2.31.0.
-bcrypt==4.2.0
+bcrypt==4.0.1             # pinned to match backend/requirements.txt's constraint -- passlib
+                          # (CareLink's own auth) crashes on bcrypt>=4.1 (see that file's comment).
+                          # Both containers install both requirements files into one environment
+                          # (backend/Dockerfile), so the two must agree; auth.py here only uses
+                          # gensalt/hashpw/checkpw, all present unchanged in 4.0.1.
 pytest==8.3.4
 schedule==1.2.2

@@ -1,0 +1,5 @@
+# frontend_main.py's own deps -- previously just installed ad-hoc into
+# the backend's venv locally; a container needs them declared explicitly.
+fastapi
+uvicorn[standard]
+jinja2

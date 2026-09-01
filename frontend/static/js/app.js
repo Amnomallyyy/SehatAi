@@ -1895,6 +1895,12 @@ function initAssistantPage() {
     .then(() => { statusEl.textContent = 'Ready'; })
     .catch((err) => { statusEl.textContent = 'Connection failed'; toast(err.message, 'error'); });
 
+  // This function runs every time the AI Assistant nav link is clicked
+  // (see initNav's page router), not just the first time. Both the event
+  // wiring below AND the initial greeting bubble at the bottom of this
+  // function are guarded by this early return, so navigating away and
+  // back leaves an in-progress conversation exactly as it was rather
+  // than re-adding a duplicate greeting on top of it.
   if (assistantInitialized) return;
   assistantInitialized = true;
 
@@ -1911,6 +1917,16 @@ function initAssistantPage() {
 
   document.querySelectorAll('#assistant-mode-toggle .mode-toggle-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchAssistantMode(btn.dataset.mode));
+  });
+
+  // See public/index.html's own newSessionBtn -- same idea here: clears
+  // ONLY the current mode's session id (see sehataiSessionIds), so
+  // starting fresh in Symptoms never touches an in-progress Diet
+  // conversation, and vice versa.
+  document.getElementById('assistant-new-session-btn').addEventListener('click', () => {
+    sehataiSessionIds[assistantMode] = null;
+    document.getElementById('assistant-thread').innerHTML = '';
+    assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
   });
 
   assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);

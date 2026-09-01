@@ -1,0 +1,18 @@
+# Used as the build context for BOTH sehatai-backend (root Dockerfile) and
+# carelink-backend (backend/Dockerfile, which also needs root context to
+# reach DataFetch's files -- see that Dockerfile's own comment).
+node_modules/
+backend/venv/
+datafetch_venv/
+sehatEvidence/venv/
+sehatEvidence/web/node_modules/
+frontend/venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+.env
+.env.*
+!.env.example
+*.log
+sehatEvidence/evidenceboard.db
