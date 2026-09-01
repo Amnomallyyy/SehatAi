@@ -1808,6 +1808,63 @@ const ASSISTANT_PLACEHOLDERS = {
   diet: 'Ask a diet/nutrition question… (Enter to send, Shift+Enter for new line)',
 };
 
+// ---- Chat persistence (client-side only) ----
+// SehatAI's own backend deliberately never stores raw message text
+// server-side (see chatLog.js's own doc comment -- a privacy decision,
+// not an oversight) -- only extracted symptom state persists there, for
+// 24h. "See my chat again after a refresh" is a real, reasonable ask,
+// but the right way to satisfy it is NOT to reverse that server-side
+// decision -- it's to keep the visible thread in the browser's own
+// storage, which never leaves this device and never touches SehatAI's
+// database. Scoped by CareLink's own user id (not just "the assistant
+// tab") so two different accounts logging into the same browser never
+// see each other's chat -- a real scenario hit while testing tonight.
+// 24h TTL mirrors the server's own session TTL, so a restored thread and
+// a restored server-side session go stale at the same time.
+const ASSISTANT_CHAT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function assistantStorageKey(mode) {
+  const userId = auth.user()?.id ?? 'anon';
+  return `sehatai_chat_v1_${userId}_${mode}`;
+}
+
+function saveAssistantThread(mode) {
+  try {
+    const thread = document.getElementById('assistant-thread');
+    const bubbles = Array.from(thread.querySelectorAll('.msg-row')).map((row) => ({
+      mine: row.classList.contains('mine'),
+      html: row.querySelector('.msg-bubble').innerHTML,
+    }));
+    localStorage.setItem(assistantStorageKey(mode), JSON.stringify({
+      sessionId: sehataiSessionIds[mode],
+      savedAt: Date.now(),
+      bubbles,
+    }));
+  } catch (err) {
+    // localStorage can throw (private browsing, storage disabled, quota) --
+    // non-fatal, the chat just won't survive a refresh this time.
+  }
+}
+
+function loadAssistantThread(mode) {
+  try {
+    const raw = localStorage.getItem(assistantStorageKey(mode));
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (!saved.savedAt || Date.now() - saved.savedAt > ASSISTANT_CHAT_TTL_MS) {
+      localStorage.removeItem(assistantStorageKey(mode));
+      return null;
+    }
+    return saved;
+  } catch (err) {
+    return null;
+  }
+}
+
+function clearAssistantThread(mode) {
+  try { localStorage.removeItem(assistantStorageKey(mode)); } catch (err) { /* ignore */ }
+}
+
 // FOUND LIVE: `if (sehataiToken) return sehataiToken;` alone only guards
 // against a SECOND call after the FIRST has already resolved -- it does
 // nothing for two calls that both start before either has finished (e.g.
@@ -1882,11 +1939,40 @@ function startThinkingIndicator(bubbleEl, mode) {
 function renderAssistantReply(result) {
   const kind = result.kind || 'unknown';
   const kindLabel = kind.replace(/_/g, ' ');
-  let html = `<div class="t-xs" style="margin-bottom:4px;color:var(--text-light);text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>${escHtml(result.reply || '(no reply)')}`;
+  const isEmergency = kind === 'emergency';
+  let html = `<div class="t-xs" style="margin-bottom:4px;color:${isEmergency ? 'var(--red)' : 'var(--text-light)'};text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>${escHtml(result.reply || '(no reply)')}`;
   if (result.recommendation) {
     html += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:.85rem;color:var(--navy);font-weight:600">→ ${escHtml(result.recommendation.specialist_recommended)}</div>`;
   }
-  assistantBubble('bot', html);
+  const row = assistantBubble('bot', html);
+
+  // FOUND LIVE: this tab never rendered result.actions at all -- the
+  // backend's Continue/Notify buttons (see processMessage.js's
+  // markEmergencyAcknowledgeable) only ever showed up in the standalone
+  // public/index.html test page. A patient hitting a real emergency
+  // reply here had the message but no way to acknowledge it and resume
+  // the conversation -- see EMERGENCY_CONTINUE_RE in processMessage.js
+  // for why "Continue" has to be this exact phrase, not any rewording.
+  if (result.actionable && Array.isArray(result.actions) && result.actions.length) {
+    const bubble = row.querySelector('.msg-bubble');
+    const actionsDiv = document.createElement('div');
+    actionsDiv.style.cssText = 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap';
+    for (const action of result.actions) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm ' + (action.id === 'continue' ? 'btn-primary' : 'btn-secondary');
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        actionsDiv.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        if (action.id === 'continue') {
+          sendAssistantMessage('Continue with this chat');
+        } else {
+          actionsDiv.innerHTML = '<span class="t-xs" style="color:var(--text-light)">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
+        }
+      });
+      actionsDiv.appendChild(btn);
+    }
+    bubble.appendChild(actionsDiv);
+  }
 }
 
 async function sendAssistantMessage(explicitText) {
@@ -1933,18 +2019,40 @@ async function sendAssistantMessage(explicitText) {
       sehataiSessionIds[assistantMode] = result.sessionId || sehataiSessionIds[assistantMode];
       renderAssistantReply(result);
     }
+    saveAssistantThread(assistantMode);
   } catch (err) {
     stopThinking();
     thinking.remove();
     assistantBubble('bot', `<span style="color:var(--red)">Could not reach the assistant: ${escHtml(err.message)}</span>`);
+    saveAssistantThread(assistantMode);
   } finally {
     sendBtn.disabled = false;
     input.focus();
   }
 }
 
+// Renders a saved thread (see saveAssistantThread) back into the DOM
+// exactly as it looked before, and restores the matching server-side
+// session id so the next message continues that SAME session rather
+// than the "always start fresh" behavior below applying to a
+// conversation that's actually being knowingly restored, bubble-for-
+// bubble, right in front of the patient.
+function restoreAssistantThread(mode, saved) {
+  const thread = document.getElementById('assistant-thread');
+  thread.innerHTML = '';
+  for (const bubble of saved.bubbles) {
+    const row = document.createElement('div');
+    row.className = 'msg-row' + (bubble.mine ? ' mine' : '');
+    row.innerHTML = `<div class="msg-bubble">${bubble.html}</div>`;
+    thread.appendChild(row);
+  }
+  thread.scrollTop = thread.scrollHeight;
+  sehataiSessionIds[mode] = saved.sessionId;
+}
+
 function switchAssistantMode(mode) {
   if (mode === assistantMode) return;
+  saveAssistantThread(assistantMode);
   assistantMode = mode;
 
   document.querySelectorAll('#assistant-mode-toggle .mode-toggle-btn').forEach((btn) => {
@@ -1953,12 +2061,17 @@ function switchAssistantMode(mode) {
   document.getElementById('assistant-title').textContent = mode === 'diet' ? 'SehatAI Diet Assistant' : 'SehatAI Assistant';
   document.getElementById('assistant-input').placeholder = ASSISTANT_PLACEHOLDERS[mode];
 
-  // Fresh thread per mode switch -- this mirrors the two SEPARATE pages
-  // (public/index.html vs public/diet.html) rather than pretending it's
-  // one continuous conversation, since the underlying sessions really are
-  // separate on SehatAI's side (see the module doc comment above).
-  document.getElementById('assistant-thread').innerHTML = '';
-  assistantBubble('bot', ASSISTANT_GREETINGS[mode]);
+  // Restore this mode's own saved thread (up to 24h old -- see
+  // ASSISTANT_CHAT_TTL_MS) if one exists, same as a fresh page load
+  // does below; otherwise a plain greeting, same as first-ever use.
+  const saved = loadAssistantThread(mode);
+  if (saved) {
+    restoreAssistantThread(mode, saved);
+  } else {
+    document.getElementById('assistant-thread').innerHTML = '';
+    sehataiSessionIds[mode] = null;
+    assistantBubble('bot', ASSISTANT_GREETINGS[mode]);
+  }
 }
 
 function initAssistantPage() {
@@ -1994,14 +2107,25 @@ function initAssistantPage() {
   // See public/index.html's own newSessionBtn -- same idea here: clears
   // ONLY the current mode's session id (see sehataiSessionIds), so
   // starting fresh in Symptoms never touches an in-progress Diet
-  // conversation, and vice versa.
+  // conversation, and vice versa. Also clears the saved thread for this
+  // mode -- a deliberate "start over" must not resurrect itself on the
+  // next reload.
   document.getElementById('assistant-new-session-btn').addEventListener('click', () => {
     sehataiSessionIds[assistantMode] = null;
+    clearAssistantThread(assistantMode);
     document.getElementById('assistant-thread').innerHTML = '';
     assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
   });
 
-  assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
+  // Restore a saved chat (up to 24h old, client-side only -- see
+  // ASSISTANT_CHAT_TTL_MS's doc comment) if one exists for this mode;
+  // otherwise a plain greeting, same as this app's very first use ever.
+  const saved = loadAssistantThread(assistantMode);
+  if (saved) {
+    restoreAssistantThread(assistantMode, saved);
+  } else {
+    assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
+  }
 }
 
 /* ============================================================
