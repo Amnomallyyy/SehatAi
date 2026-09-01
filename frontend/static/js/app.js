@@ -1902,10 +1902,27 @@ async function sendAssistantMessage(explicitText) {
 
   try {
     const token = await ensureSehataiToken();
+    // FOUND LIVE: webserver.js never reads `sessionId` from the request
+    // body at all (see its own comment -- only `newSession` decides
+    // forceNew; the client-supplied session id was always ignored,
+    // trusting the server's own per-patient pointer instead). This tab's
+    // "New session" button and every fresh page load only ever cleared
+    // sehataiSessionIds locally -- neither told the server to actually
+    // start over, so the NEXT message silently resumed whatever session
+    // already existed for this patient (sessions persist 24h by design).
+    // The visible chat showed nothing from that old conversation (raw
+    // text is deliberately never persisted -- see chatLog.js), while the
+    // bot still acted on its full accumulated state -- confirmed live: a
+    // patient's fresh-looking "nausea and fear" silently finalized
+    // against hours-old "nausea and eye pain" data instead of asking
+    // anything new. Sending newSession explicitly, exactly when this
+    // client doesn't already hold a session id for this mode, keeps the
+    // server's state honest with what's actually visible on screen.
+    const isFirstMessageThisMode = !sehataiSessionIds[assistantMode];
     const res = await fetch(`${SEHATAI_API}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ mode: assistantMode, message: text, sessionId: sehataiSessionIds[assistantMode] }),
+      body: JSON.stringify({ mode: assistantMode, message: text, newSession: isFirstMessageThisMode }),
     });
     const result = await res.json();
     stopThinking();
