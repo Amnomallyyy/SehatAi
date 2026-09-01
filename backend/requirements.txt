@@ -1,0 +1,25 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+# Postgres driver -- added when database.py moved off local SQLite onto
+# the shared Supabase project (architecture doc §02).
+psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]
+# Pinned: passlib 1.7.4 (its latest release) crashes on bcrypt>=4.1 with
+# "AttributeError: module 'bcrypt' has no attribute '__about__'", because it
+# reads a version attribute bcrypt removed. This isn't cosmetic -- password
+# hashing raises on every signup/login without this pin. bcrypt 4.0.1 is the
+# newest release that still works with passlib.
+bcrypt==4.0.1
+python-multipart
+pydantic
+# Added beyond the original list: required by Pydantic's EmailStr, which
+# schemas.py uses to validate signup/login emails. Swap EmailStr for a plain
+# str in schemas.py if you'd rather not add this dependency.
+email-validator
+# AI report summaries, via Groq (see app/ai.py):
+groq            # Groq's official client -- talks to their chat completions API
+pypdf           # extracts plain text from the uploaded PDF (Groq's free-tier
+                # chat models take text only, not PDF files directly)
+python-dotenv   # loads GROQ_API_KEY out of a .env file at startup

@@ -182,11 +182,32 @@ async function authenticate(req) {
 const REQUEST_TIMEOUT_MS = 30 * 1000;
 const HEADERS_TIMEOUT_MS = 10 * 1000;
 
+// Architecture doc §04 -- until now nothing here sent an
+// Access-Control-Allow-Origin header at all, so a browser call from
+// CareLink's frontend (a different origin/port) would be silently
+// blocked by same-origin policy before this app's own token check ever
+// ran. Auth here is a Bearer token in a header, never a cookie, so this
+// is safe to allow without allow_credentials (same reasoning CareLink's
+// own main.py CORS setup already uses) — but still scoped to a real
+// origin, not '*', since unlike a token-verified request this reflects
+// straight into a response header. Configure via CORS_ORIGIN in .env;
+// defaults to CareLink's planned dev port (see architecture doc §01).
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3002';
+
 const server = http.createServer({
   requestTimeout: REQUEST_TIMEOUT_MS,
   headersTimeout: HEADERS_TIMEOUT_MS,
 }, async (req, res) => {
   try {
+    res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
       const html = await readFile(path.join(__dirname, 'public', 'index.html'), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

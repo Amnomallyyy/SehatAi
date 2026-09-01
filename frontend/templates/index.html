@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CareLink — Doctor-Patient Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<!-- ── Toast container ── -->
+<div id="toast-container"></div>
+
+<!-- ══════════════════════════════════════════════════════════
+     AUTH PAGE (shown when logged out)
+═══════════════════════════════════════════════════════════ -->
+<div id="auth-page" style="display:none">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="wordmark">CareLink</div>
+      <div class="tagline">Secure doctor-patient communication</div>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login">Log in</button>
+      <button class="auth-tab" data-tab="signup">Create account</button>
+    </div>
+
+    <!-- Login form -->
+    <form id="login-form">
+      <div class="error-banner" style="display:none"></div>
+      <div class="field">
+        <label for="login-email">Email</label>
+        <input type="email" id="login-email" name="email" autocomplete="email" required placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" name="password" autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Log in</button>
+    </form>
+
+    <!-- Signup form -->
+    <form id="signup-form" style="display:none">
+      <div class="error-banner" style="display:none"></div>
+      <div class="field">
+        <label for="signup-name">Full name</label>
+        <input type="text" id="signup-name" name="name" autocomplete="name" required placeholder="e.g. Dr. Alice Smith">
+      </div>
+      <div class="field">
+        <label for="signup-email">Email</label>
+        <input type="email" id="signup-email" name="email" autocomplete="email" required placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="signup-password">Password</label>
+        <input type="password" id="signup-password" name="password" autocomplete="new-password" required placeholder="8+ characters" minlength="8">
+      </div>
+      <div class="field">
+        <label>I am a…</label>
+        <div class="role-picker">
+          <div class="role-option">
+            <input type="radio" id="role-doctor" name="role" value="doctor">
+            <label for="role-doctor">
+              <div class="role-label-title">🩺 Doctor</div>
+              <div class="role-label-desc">Review and respond to patient reports</div>
+            </label>
+          </div>
+          <div class="role-option">
+            <input type="radio" id="role-patient" name="role" value="patient">
+            <label for="role-patient">
+              <div class="role-label-title">👤 Patient</div>
+              <div class="role-label-desc">Share reports and message your care team</div>
+            </label>
+          </div>
+        </div>
+        <div class="field-hint">This choice is permanent and shapes how you use the app.</div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Create account</button>
+    </form>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     APP SHELL (shown when logged in)
+═══════════════════════════════════════════════════════════ -->
+<div id="app-shell" style="display:none; min-height:100vh; display:none">
+  <div id="app">
+
+    <!-- Sidebar -->
+    <nav id="sidebar">
+      <div class="sidebar-brand">
+        <div class="wordmark">CareLink</div>
+        <div class="tagline">Doctor-patient portal</div>
+      </div>
+      <div class="sidebar-user">
+        <div class="avatar avatar-lg" id="sidebar-avatar" style="margin-bottom:8px">?</div>
+        <div class="user-name" id="sidebar-name">…</div>
+        <div class="user-role" id="sidebar-role">…</div>
+        <a href="#" class="sidebar-nudge" id="sidebar-nudge" style="display:none">Complete your profile →</a>
+      </div>
+      <div class="sidebar-nav">
+        <a href="#" class="nav-link" data-page="connections">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span>Connections</span>
+          <div class="nav-badge" id="conn-badge" style="display:none">0</div>
+        </a>
+        <a href="#" class="nav-link" data-page="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>Conversations</span>
+        </a>
+        <a href="#" class="nav-link" data-page="reports">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <span>Reports</span>
+        </a>
+        <a href="#" class="nav-link" data-page="calendar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2"/>
+            <line x1="16" y1="2" x2="16" y2="6"/>
+            <line x1="8" y1="2" x2="8" y2="6"/>
+            <line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+          <span>Med Calendar</span>
+        </a>
+        <a href="#" class="nav-link" data-page="assistant" id="assistant-nav-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+          </svg>
+          <span>AI Assistant</span>
+        </a>
+        <a href="#" class="nav-link" data-page="evidence" id="evidence-nav-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+          <span>Clinical Evidence</span>
+        </a>
+        <a href="#" class="nav-link" data-page="profile">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span>Profile</span>
+        </a>
+      </div>
+      <div class="sidebar-logout">
+        <button id="logout-btn">Sign out</button>
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main id="main">
+
+      <!-- ── Connections page ── -->
+      <div id="connections-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Connections</h1>
+          <p>Connect with your care team to start sharing reports and messages.</p>
+        </div>
+        <div class="connections-layout">
+
+          <!-- Incoming requests (high-priority — first) -->
+          <div>
+            <div class="connections-section-header">
+              <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.6a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 3h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 10.6a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                Incoming requests
+                <span class="section-count" id="incoming-count">0</span>
+              </h2>
+            </div>
+            <div class="connection-list" id="incoming-list"></div>
+          </div>
+
+          <!-- Connected -->
+          <div>
+            <div class="connections-section-header">
+              <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                Connected
+                <span class="section-count" id="connected-count">0</span>
+              </h2>
+            </div>
+            <div class="connection-list" id="connected-list"></div>
+          </div>
+
+          <!-- Outgoing requests -->
+          <div>
+            <div class="connections-section-header">
+              <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Sent requests
+                <span class="section-count" id="outgoing-count">0</span>
+              </h2>
+            </div>
+            <div class="connection-list" id="outgoing-list"></div>
+          </div>
+
+          <!-- Send a new request -->
+          <div>
+            <div class="connections-section-header">
+              <h2>Send a request</h2>
+            </div>
+            <div class="send-request-form">
+              <div class="error-banner" id="send-request-error" style="display:none"></div>
+              <form id="send-request-form">
+                <div class="form-row">
+                  <input type="email" id="connect-placeholder" placeholder="Enter email" required autocomplete="off">
+                  <button type="submit" id="connect-submit-btn" class="btn btn-primary">Connect</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ── Dashboard page ── -->
+      <div id="dashboard-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Conversations</h1>
+          <p>Your active message threads with connected patients and doctors.</p>
+        </div>
+        <div class="dashboard-layout">
+          <div class="conversations-list" id="conversations-list"></div>
+        </div>
+      </div>
+
+      <!-- ── Conversation view ── -->
+      <div id="conv-page" class="page" style="flex-direction:column">
+        <div class="conv-header">
+          <button class="conv-header-back" id="conv-back-btn" aria-label="Back to conversations">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          </button>
+          <div class="avatar" id="conv-avatar">?</div>
+          <div>
+            <div class="t-md" id="conv-other-name">…</div>
+            <div class="t-xs" id="conv-other-role">…</div>
+          </div>
+        </div>
+
+        <div class="conv-thread" id="conv-thread"></div>
+
+        <div class="conv-composer">
+          <div class="upload-panel">
+            <button class="upload-trigger-btn" id="upload-toggle-btn">
+              + Attach report (PDF)
+            </button>
+            <button class="upload-trigger-btn upload-trigger-btn-presc" id="presc-upload-toggle-btn" style="display:none">
+              + Attach prescription (PDF)
+            </button>
+            <div class="upload-form" id="upload-form">
+              <div class="error-banner" id="upload-error" style="display:none"></div>
+              <input type="file" id="report-file-input" accept=".pdf,application/pdf">
+              <div class="upload-form-row">
+                <div class="field">
+                  <label for="report-display-name">Report name (optional)</label>
+                  <input type="text" id="report-display-name" placeholder="e.g. Bloodwork March 2026" maxlength="200">
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="upload-submit-btn">Upload</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="upload-cancel-btn">Cancel</button>
+              </div>
+            </div>
+            <div class="upload-form" id="presc-upload-form">
+              <div class="error-banner" id="presc-upload-error" style="display:none"></div>
+              <input type="file" id="prescription-file-input" accept=".pdf,application/pdf">
+              <div class="upload-form-row">
+                <div class="field">
+                  <label for="prescription-display-name">Prescription name (optional)</label>
+                  <input type="text" id="prescription-display-name" placeholder="e.g. Amoxicillin - Aug 2026" maxlength="200">
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="presc-upload-submit-btn">Upload</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="presc-upload-cancel-btn">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-inner">
+            <textarea id="msg-textarea" placeholder="Type a message… (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+            <button class="btn btn-primary" id="msg-send-btn" aria-label="Send message">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── AI Assistant page (patient-only) ── -->
+      <div id="assistant-page" class="page" style="flex-direction:column">
+        <div class="conv-header">
+          <div class="avatar" id="assistant-avatar">🩺</div>
+          <div style="flex:1">
+            <div class="t-md" id="assistant-title">SehatAI Assistant</div>
+            <div class="t-xs" id="assistant-status">Connecting…</div>
+          </div>
+          <div class="mode-toggle" id="assistant-mode-toggle" role="group" aria-label="Assistant mode">
+            <button type="button" class="mode-toggle-btn active" data-mode="symptom">🩺 Symptoms</button>
+            <button type="button" class="mode-toggle-btn" data-mode="diet">🥗 Diet</button>
+          </div>
+        </div>
+        <div class="conv-thread" id="assistant-thread"></div>
+        <div class="conv-composer">
+          <div class="composer-inner">
+            <textarea id="assistant-input" placeholder="Describe a symptom… (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+            <button class="btn btn-primary" id="assistant-send-btn" aria-label="Send message">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Clinical Evidence page (doctor-only) ── -->
+      <div id="evidence-page" class="page" style="flex-direction:column">
+        <div class="conv-header">
+          <div class="avatar" id="evidence-avatar">📚</div>
+          <div>
+            <div class="t-md">EvidenceBoard</div>
+            <div class="t-xs">Verification-first clinical evidence search — not a diagnosis tool</div>
+          </div>
+        </div>
+        <div class="conv-thread" id="evidence-thread">
+          <div class="t-xs" style="text-align:center;padding:24px;color:var(--text-light)">Ask a clinical question — every claim in the answer carries its own citation, and unverifiable claims are removed before you see them.</div>
+        </div>
+        <div class="conv-composer">
+          <div class="composer-inner">
+            <textarea id="evidence-input" placeholder="e.g. Does metformin reduce cardiovascular risk in non-diabetic patients? (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+            <button class="btn btn-primary" id="evidence-send-btn" aria-label="Ask">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Report detail page ── -->
+      <div id="report-page" class="page">
+        <div class="report-layout" id="report-layout">
+          <!-- Dynamically rendered -->
+        </div>
+      </div>
+
+      <!-- ── Reports page (cross-conversation history) ── -->
+      <div id="reports-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Reports</h1>
+          <p>Reports and prescriptions shared across all your conversations.</p>
+        </div>
+        <div class="reports-layout" id="reports-layout">
+          <!-- Dynamically rendered -->
+        </div>
+      </div>
+
+      <!-- ── Med Calendar page ── -->
+      <div id="calendar-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Med Calendar</h1>
+          <p>Upcoming and past appointments with your care team.</p>
+        </div>
+        <div class="calendar-layout" id="calendar-layout">
+          <!-- Dynamically rendered -->
+        </div>
+      </div>
+
+      <!-- ── Profile page ── -->
+      <div id="profile-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Profile</h1>
+          <p>Manage your photo and account details.</p>
+        </div>
+        <div class="profile-layout" id="profile-layout">
+          <!-- Dynamically rendered -->
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
