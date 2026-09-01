@@ -1,40 +1,48 @@
 // ============================================
 // HealthMate AI: Patient History RAG Search
 // Embeds the patient's message, searches summaries_vectors for that
-// patient via pgvector, then re-ranks results so clinical_note rows
+// patient via pgvector, then re-ranks results so clinical_advice rows
 // (doctor-authored, authoritative) always outrank ai_summary rows
 // (AI-generated, supporting context only) — regardless of raw
 // similarity score. This is the trust hierarchy decided earlier:
 // a doctor's note that's slightly less semantically similar should
 // still surface before a more-similar AI summary.
+//
+// Uses the shared embeddingProvider (see embeddingProvider.js) —
+// currently Jina by default, at 1024 dimensions, matching
+// summaries_vectors.embedding. Do NOT call Gemini/GoogleGenerativeAI
+// directly here — that was the earlier bug (403 Forbidden, this
+// project's Gemini access is not working). All embedding calls go
+// through embedText() so switching providers is a one-file change.
 // ============================================
 
-import { createClient } from "@supabase/supabase-js";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import "dotenv/config";
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+import { embedText, isFakeMode } from "./embeddingProvider.js";
+import { supabase } from "./supabaseClient.js";
 
 const SIMILARITY_FLOOR = 0.65; // below this, a result is too weak to be worth including at all
 const MAX_HISTORY_ITEMS = 4;   // cap what actually enters the generation context
 
-const SOURCE_TYPE_PRIORITY = { clinical_note: 0, ai_summary: 1 };
+// source_type on summaries_vectors is only ever 'ai_summary' or
+// 'clinical_advice' (see the table's CHECK constraint) — 'clinical_note'
+// never matches a real row.
+const SOURCE_TYPE_PRIORITY = { clinical_advice: 0, ai_summary: 1 };
 
 /**
  * @param {string} patientId
  * @param {string} queryText - typically the patient's raw message, or the matched symptom names joined
  * @returns {Promise<Array<{
- *   sourceType: 'clinical_note' | 'ai_summary',
+ *   sourceType: 'clinical_advice' | 'ai_summary',
  *   content: string,
  *   similarity: number,
  *   createdAt: string
  * }>>}
  */
 export async function getPatientHistory(patientId, queryText) {
-  const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
-  const embedResult = await model.embedContent(queryText);
-  const queryEmbedding = embedResult.embedding.values;
+  const queryEmbedding = await embedText(queryText, 1024); // summaries_vectors.embedding is vector(1024)
+
+  if (isFakeMode()) {
+    console.warn("⚠️  getPatientHistory running in FAKE embedding mode — similarity scores are not meaningful.");
+  }
 
   const { data, error } = await supabase.rpc("match_patient_history", {
     query_embedding: queryEmbedding,
@@ -58,7 +66,7 @@ export async function getPatientHistory(patientId, queryText) {
 
   const ranked = aboveFloor.sort((a, b) => {
     const priorityDiff = SOURCE_TYPE_PRIORITY[a.source_type] - SOURCE_TYPE_PRIORITY[b.source_type];
-    if (priorityDiff !== 0) return priorityDiff; // clinical_note (0) sorts before ai_summary (1)
+    if (priorityDiff !== 0) return priorityDiff; // clinical_advice (0) sorts before ai_summary (1)
     return b.similarity - a.similarity; // within the same source_type, higher similarity first
   });
 
