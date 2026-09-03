@@ -11,7 +11,7 @@ against the same Supabase project both the Node app and DietBot already share
 ## 1. Current state (what already exists)
 
 **Auth**: not a real user system. `auth.js` issues a per-patient bearer token
-out-of-band via `node issueToken.js <patientId>` (CLI, operator-run). No
+out-of-band via `node sehatai/issuetoken.js <patientId>` (CLI, operator-run). No
 signup, no login form, no password. Tokens are SHA-256 hashed in
 `patient_api_tokens`. This was built specifically to close an IDOR (client
 could previously pass any `patientId` in the request body) — it is NOT a login
@@ -57,7 +57,7 @@ Browser (login page, patient console, diet console)
    │  2. gets back a Supabase session JWT
    │
    ▼
-Node backend (webServer.js)
+Node backend (sehatai/webserver.js)
    │  verifies the JWT (supabase.auth.getUser(jwt)) → auth.users.id
    │  looks up patients.auth_user_id = that id → patientId
    │  (same "server decides identity, never trust client body" principle
@@ -247,7 +247,7 @@ way `verifyApiToken` currently resolves a token hash. Same shape, same
 ## 6. Mandatory intake form gate
 
 Add a check at the very top of `processPatientMessage`/`processDietMessage`
-(or, cleaner, in `webServer.js` before either is called): if
+(or, cleaner, in `sehatai/webserver.js` before either is called): if
 `patient_intake_form` has no row for this `patientId`, short-circuit with a
 `kind: 'intake_required'` response instead of running the pipeline. The
 frontend renders a form (existing_conditions, allergies,
@@ -263,10 +263,10 @@ rather than a change to `processMessage.js`'s existing stage numbering.
 ## 7. Migration note: token auth → real auth
 
 Don't delete `auth.js`/`patient_api_tokens` on day one. Keep both auth paths
-accepted in `authenticate()` (`webServer.js`) during rollout — Bearer token
+accepted in `authenticate()` (`sehatai/webserver.js`) during rollout — Bearer token
 OR Supabase session JWT, either resolves to a `patientId` — so demo/test
 flows that already have issued tokens (e.g. anything using
-`issueToken.js`) keep working while the real login UI is being built and
+`sehatai/issuetoken.js`) keep working while the real login UI is being built and
 tested. Retire the token path once the login flow is confirmed working
 end-to-end, at whatever point makes sense for the demo timeline.
 
@@ -306,15 +306,15 @@ so whoever builds the login/upload work doesn't have to rediscover it.
    backend (service-role key) is unaffected.
 4. Build `POST /api/auth/signup` and `POST /api/auth/login` (§5).
 5. Build the frontend login/signup page (replaces manually pasting a token
-   from `issueToken.js`).
+   from `sehatai/issuetoken.js`).
 6. Add the intake-form gate (§6) + its endpoint + frontend form.
 7. Build the file upload endpoint (signed upload to `patient-documents`,
    insert into `documents`) + frontend upload UI.
-8. Update `webServer.js`'s `authenticate()` to accept both token and
+8. Update `sehatai/webserver.js`'s `authenticate()` to accept both token and
    Supabase-JWT auth (§7) during rollout.
 9. (Optional, flagged in §8) session-persistence + history-rehydration
    endpoint.
-10. Once login is confirmed working end-to-end, retire `issueToken.js` /
+10. Once login is confirmed working end-to-end, retire `sehatai/issuetoken.js` /
     `patient_api_tokens` path.
 
 Everything downstream of step 4 (the actual triage/diet pipelines,
