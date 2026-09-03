@@ -11,7 +11,7 @@ source venv/bin/activate
 pip install --upgrade pip
 
 # Install requirements
-pip install -r requirements.txt
+pip install -r datafetch/requirements.txt
 
 # Copy .env if it doesn't exist
 if [ ! -f .env ]; then
@@ -20,4 +20,4 @@ if [ ! -f .env ]; then
     echo "Note: OCR.space free tier has a 1MB file limit."
 fi
 
-echo "Setup complete. Run 'python setup_checks.py' to verify."
+echo "Setup complete. Run 'python datafetch/setup_checks.py' to verify."

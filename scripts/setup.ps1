@@ -9,7 +9,7 @@ python -m venv venv
 python -m pip install --upgrade pip
 
 # Install requirements
-pip install -r requirements.txt
+pip install -r datafetch/requirements.txt
 
 # Copy .env if it doesn't exist
 if (-not (Test-Path .env)) {
@@ -18,4 +18,4 @@ if (-not (Test-Path .env)) {
     Write-Host "Note: OCR.space free tier has a 1MB file limit." -ForegroundColor Yellow
 }
 
-Write-Host "Setup complete. Run 'python setup_checks.py' to verify." -ForegroundColor Green
+Write-Host "Setup complete. Run 'python datafetch/setup_checks.py' to verify." -ForegroundColor Green

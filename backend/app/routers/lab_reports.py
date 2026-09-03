@@ -118,7 +118,7 @@ async def upload_lab_report(
         result = subprocess.run(
             [
                 DATAFETCH_PYTHON,
-                "main.py",
+                "datafetch/main.py",
                 "--file", str(staged_path),
                 "--patient-id", str(sehatai_patient_id),
                 "--password", raw_password,
