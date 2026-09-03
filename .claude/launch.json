@@ -4,7 +4,7 @@
     {
       "name": "sehatai-webserver",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["webserver.js"],
+      "runtimeArgs": ["sehatai/webserver.js"],
       "port": 3000
     }
   ]

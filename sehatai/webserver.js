@@ -21,7 +21,7 @@
 // the request body with NO verification at all — a real IDOR against
 // health data, since anyone could pass any patient's UUID and get
 // recommendations grounded in that patient's real allergies/meds/labs.
-// Every request now MUST carry a bearer token (see issueToken.js),
+// Every request now MUST carry a bearer token (see issuetoken.js),
 // and the patientId used for the rest of the pipeline comes ONLY from
 // that token — never from the request body, which is untrusted client
 // input. A body-supplied `patientId` is now ignored entirely.
@@ -35,8 +35,8 @@
 // without.
 //
 // Usage:
-//   node issueToken.js <patientId>   (mint a token first — see auth.js)
-//   node webServer.js
+//   node sehatai/issuetoken.js <patientId>   (mint a token first — see auth.js)
+//   node sehatai/webserver.js
 // Then open http://localhost:3000 in a browser and paste the token in
 // when prompted (see public/index.html).
 //
@@ -233,7 +233,7 @@ const server = http.createServer({
     if (req.method === 'POST' && req.url === '/api/chat') {
       const patientId = await authenticate(req);
       if (!patientId) {
-        sendJson(res, 401, { error: 'Missing or invalid API token. See issueToken.js.' });
+        sendJson(res, 401, { error: 'Missing or invalid API token. See issuetoken.js.' });
         return;
       }
 
@@ -304,7 +304,7 @@ server.listen(PORT, () => {
   if (ALLOW_UNAUTHENTICATED) {
     console.log(`(dev mode — unauthenticated, treated as patient ${DEFAULT_PATIENT_ID})`);
   } else {
-    console.log('Requests require an API token — issue one with: node issueToken.js <patientId>');
+    console.log('Requests require an API token — issue one with: node sehatai/issuetoken.js <patientId>');
   }
   console.log('(same backend as `npm run chat` — this is just a browser front-end for it)');
 });

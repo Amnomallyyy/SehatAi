@@ -4,12 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "chat": "node testChat.js",
-    "seed:data": "node seedfakedata.js",
-    "seed:graph": "node seedsymptomknowledgegraph.js",
-    "embed:symptoms": "node embedSymptom.js",
-    "test:edge": "node testEdgeCases.js",
-    "dietbot": "node startDietBot.js"
+    "chat": "node sehatai/testChat.js",
+    "seed:data": "node sehatai/seedfakedata.js",
+    "test:edge": "node sehatai/testEdgeCases.js",
+    "dietbot": "node sehatai/startDietBot.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
