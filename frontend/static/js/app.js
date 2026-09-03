@@ -1829,6 +1829,74 @@ const ASSISTANT_PLACEHOLDERS = {
   diet: 'Ask a diet/nutrition question… (Enter to send, Shift+Enter for new line)',
 };
 
+// ---- Chat persistence (client-side only) ----
+// SehatAI's own backend deliberately never stores raw message text
+// server-side (see chatLog.js's own doc comment -- a privacy decision,
+// not an oversight) -- only extracted symptom state persists there, for
+// 24h. "See my chat again after a refresh" is a real, reasonable ask,
+// but the right way to satisfy it is NOT to reverse that server-side
+// decision -- it's to keep the visible thread in the browser's own
+// storage, which never leaves this device and never touches SehatAI's
+// database. Scoped by CareLink's own user id (not just "the assistant
+// tab") so two different accounts logging into the same browser never
+// see each other's chat -- a real scenario hit while testing tonight.
+// 24h TTL mirrors the server's own session TTL, so a restored thread and
+// a restored server-side session go stale at the same time.
+//
+// ONE thread, not one per mode: the original ask was "same chat window, a
+// switch to change which pipeline it's talking to" -- an earlier version
+// of this kept a fully separate visible thread per mode (mirroring how
+// SehatAI's own SESSIONS really are separate server-side), which meant
+// toggling to Diet made your Symptoms conversation visibly vanish. The
+// backend sessions genuinely do stay separate (sehataiSessionIds still
+// tracks one id per mode, each mode's messages still go to the right
+// session) -- only the VISIBLE thread is now one continuous window, so
+// switching the toggle only ever changes where the NEXT message routes,
+// never what's already on screen.
+const ASSISTANT_CHAT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function assistantStorageKey() {
+  const userId = auth.user()?.id ?? 'anon';
+  return `sehatai_chat_v1_${userId}`;
+}
+
+function saveAssistantThread() {
+  try {
+    const thread = document.getElementById('assistant-thread');
+    const bubbles = Array.from(thread.querySelectorAll('.msg-row')).map((row) => ({
+      mine: row.classList.contains('mine'),
+      html: row.querySelector('.msg-bubble').innerHTML,
+    }));
+    localStorage.setItem(assistantStorageKey(), JSON.stringify({
+      sessionIds: { ...sehataiSessionIds },
+      savedAt: Date.now(),
+      bubbles,
+    }));
+  } catch (err) {
+    // localStorage can throw (private browsing, storage disabled, quota) --
+    // non-fatal, the chat just won't survive a refresh this time.
+  }
+}
+
+function loadAssistantThread() {
+  try {
+    const raw = localStorage.getItem(assistantStorageKey());
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (!saved.savedAt || Date.now() - saved.savedAt > ASSISTANT_CHAT_TTL_MS) {
+      localStorage.removeItem(assistantStorageKey());
+      return null;
+    }
+    return saved;
+  } catch (err) {
+    return null;
+  }
+}
+
+function clearAssistantThread() {
+  try { localStorage.removeItem(assistantStorageKey()); } catch (err) { /* ignore */ }
+}
+
 // FOUND LIVE: `if (sehataiToken) return sehataiToken;` alone only guards
 // against a SECOND call after the FIRST has already resolved -- it does
 // nothing for two calls that both start before either has finished (e.g.
@@ -1903,42 +1971,46 @@ function startThinkingIndicator(bubbleEl, mode) {
 function renderAssistantReply(result) {
   const kind = result.kind || 'unknown';
   const kindLabel = kind.replace(/_/g, ' ');
-  let html = `<div class="t-xs" style="margin-bottom:4px;color:var(--text-light);text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>${escHtml(result.reply || '(no reply)')}`;
+  const isEmergency = kind === 'emergency';
+  let html = `<div class="t-xs" style="margin-bottom:4px;color:${isEmergency ? 'var(--red)' : 'var(--text-light)'};text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>${escHtml(result.reply || '(no reply)')}`;
   if (result.recommendation) {
     html += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:.85rem;color:var(--navy);font-weight:600">→ ${escHtml(result.recommendation.specialist_recommended)}</div>`;
   }
-  // Generic action-button renderer — mirrors public/index.html's own
-  // (the standalone SehatAI page every action id here was first built
-  // for). Covers the emergency Notify/Continue buttons AND the
-  // profile-completeness gate's "Complete your profile" button
-  // (processMessage.js STAGE 5) with one mechanism, since both just
-  // send {actionable:true, actions:[{id,label}]} on the envelope.
-  if (result.actionable && Array.isArray(result.actions) && result.actions.length) {
-    html += `<div class="assistant-actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${result.actions.map(a =>
-      `<button class="btn btn-sm btn-secondary action-btn" data-action="${escHtml(a.id)}">${escHtml(a.label)}</button>`
-    ).join('')}</div>`;
-  }
   const row = assistantBubble('bot', html);
 
-  const actionsEl = row.querySelector('.assistant-actions');
-  if (actionsEl) {
-    actionsEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.action-btn');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      actionsEl.querySelectorAll('.action-btn').forEach(b => (b.disabled = true));
-      if (action === 'continue') {
-        // Matches EMERGENCY_CONTINUE_RE in processMessage.js exactly.
-        sendAssistantMessage('Continue with this chat');
-      } else if (action === 'notify') {
-        // No real integration to emergency services/contacts in this
-        // app — just acknowledges the choice, same as public/index.html.
-        actionsEl.innerHTML = '<span class="t-xs" style="color:var(--text-light)">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
-      } else if (action === 'complete_profile') {
-        showPage('profile');
-        loadProfilePage();
-      }
-    });
+  // Generic action-button renderer — mirrors public/index.html's own
+  // (the standalone SehatAI page every action id here was first built
+  // for). Covers the emergency Notify/Continue buttons (see
+  // processMessage.js's markEmergencyAcknowledgeable) AND the
+  // profile-completeness gate's "Complete your profile" button
+  // (processMessage.js STAGE 5) with one mechanism, since all three
+  // just send {actionable:true, actions:[{id,label}]} on the envelope.
+  if (result.actionable && Array.isArray(result.actions) && result.actions.length) {
+    const bubble = row.querySelector('.msg-bubble');
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'assistant-actions';
+    actionsDiv.style.cssText = 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap';
+    for (const action of result.actions) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm ' + (action.id === 'continue' ? 'btn-primary' : 'btn-secondary');
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        actionsDiv.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        if (action.id === 'continue') {
+          // Matches EMERGENCY_CONTINUE_RE in processMessage.js exactly.
+          sendAssistantMessage('Continue with this chat');
+        } else if (action.id === 'complete_profile') {
+          showPage('profile');
+          loadProfilePage();
+        } else {
+          // "notify" -- no real integration to emergency services/
+          // contacts in this app, just acknowledges the choice.
+          actionsDiv.innerHTML = '<span class="t-xs" style="color:var(--text-light)">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
+        }
+      });
+      actionsDiv.appendChild(btn);
+    }
+    bubble.appendChild(actionsDiv);
   }
 }
 
@@ -1986,16 +2058,40 @@ async function sendAssistantMessage(explicitText) {
       sehataiSessionIds[assistantMode] = result.sessionId || sehataiSessionIds[assistantMode];
       renderAssistantReply(result);
     }
+    saveAssistantThread();
   } catch (err) {
     stopThinking();
     thinking.remove();
     assistantBubble('bot', `<span style="color:var(--red)">Could not reach the assistant: ${escHtml(err.message)}</span>`);
+    saveAssistantThread();
   } finally {
     sendBtn.disabled = false;
     input.focus();
   }
 }
 
+// Renders a saved thread (see saveAssistantThread) back into the DOM
+// exactly as it looked before, and restores BOTH modes' server-side
+// session ids so each mode's next message continues its own real
+// session rather than the "always start fresh" behavior below applying
+// to a conversation that's actually being knowingly restored, bubble-
+// for-bubble, right in front of the patient.
+function restoreAssistantThread(saved) {
+  const thread = document.getElementById('assistant-thread');
+  thread.innerHTML = '';
+  for (const bubble of saved.bubbles) {
+    const row = document.createElement('div');
+    row.className = 'msg-row' + (bubble.mine ? ' mine' : '');
+    row.innerHTML = `<div class="msg-bubble">${bubble.html}</div>`;
+    thread.appendChild(row);
+  }
+  thread.scrollTop = thread.scrollHeight;
+  sehataiSessionIds = { ...sehataiSessionIds, ...saved.sessionIds };
+}
+
+// Only ever changes where the NEXT message routes -- see the module doc
+// comment above saveAssistantThread for why the visible thread itself is
+// deliberately untouched here.
 function switchAssistantMode(mode) {
   if (mode === assistantMode) return;
   assistantMode = mode;
@@ -2005,13 +2101,6 @@ function switchAssistantMode(mode) {
   });
   document.getElementById('assistant-title').textContent = mode === 'diet' ? 'SehatAI Diet Assistant' : 'SehatAI Assistant';
   document.getElementById('assistant-input').placeholder = ASSISTANT_PLACEHOLDERS[mode];
-
-  // Fresh thread per mode switch -- this mirrors the two SEPARATE pages
-  // (public/index.html vs public/diet.html) rather than pretending it's
-  // one continuous conversation, since the underlying sessions really are
-  // separate on SehatAI's side (see the module doc comment above).
-  document.getElementById('assistant-thread').innerHTML = '';
-  assistantBubble('bot', ASSISTANT_GREETINGS[mode]);
 }
 
 function initAssistantPage() {
@@ -2044,17 +2133,28 @@ function initAssistantPage() {
     btn.addEventListener('click', () => switchAssistantMode(btn.dataset.mode));
   });
 
-  // See public/index.html's own newSessionBtn -- same idea here: clears
-  // ONLY the current mode's session id (see sehataiSessionIds), so
-  // starting fresh in Symptoms never touches an in-progress Diet
-  // conversation, and vice versa.
+  // See public/index.html's own newSessionBtn -- same idea, adapted to
+  // the one-shared-thread model above: there's only one visible timeline
+  // now, so "start over" clears both modes' sessions and the whole
+  // visible thread, not just one mode's slice of it. Also clears the
+  // saved copy -- a deliberate restart must not resurrect itself on the
+  // next reload.
   document.getElementById('assistant-new-session-btn').addEventListener('click', () => {
-    sehataiSessionIds[assistantMode] = null;
+    sehataiSessionIds = { symptom: null, diet: null };
+    clearAssistantThread();
     document.getElementById('assistant-thread').innerHTML = '';
     assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
   });
 
-  assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
+  // Restore the saved chat (up to 24h old, client-side only -- see
+  // ASSISTANT_CHAT_TTL_MS's doc comment) if one exists; otherwise a
+  // plain greeting, same as this app's very first use ever.
+  const saved = loadAssistantThread();
+  if (saved) {
+    restoreAssistantThread(saved);
+  } else {
+    assistantBubble('bot', ASSISTANT_GREETINGS[assistantMode]);
+  }
 }
 
 /* ============================================================
