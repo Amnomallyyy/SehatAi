@@ -93,16 +93,29 @@ function isCovered(clause, mentionTexts) {
 
 /**
  * @param {string} message - the patient's raw message for this turn
- * @param {Array<{name?:string, orig_text?:string, text?:string}>} mentions
+ * @param {Array<{name?:string, orig_text?:string, orth?:string, text?:string}>} mentions
  *   - Infermedica /parse's mentions array for THIS turn only (not
- *     accumulated evidence — orig_text only exists on the fresh parse
+ *     accumulated evidence — orig_text/orth only exist on the fresh parse
  *     response, not on merged evidence items)
  * @returns {string[]} - clause-level complaints that didn't match any
  *   recognized mention, trimmed and deduped
  */
 export function extractUnaccountedComplaints(message, mentions = []) {
+  // BUG FIXED HERE (found live): this account's /parse responses never
+  // carry `orig_text` at all — they carry `orth` instead, Infermedica's
+  // own field for the actual recognized surface wording (e.g. "moderate
+  // headache", "fever since yesterday"), which is what's actually close
+  // to the patient's own clause text. Falling straight through to `name`
+  // (the CANONICAL finding name, e.g. "Headache, moderate" / "Fever,
+  // lasting less than 3 days") compares against a differently-ordered,
+  // differently-worded string that a raw clause essentially never
+  // contains — so every real, correctly-matched symptom got reported
+  // back to the patient as "couldn't match this to anything," directly
+  // contradicting the same reply's own matched-symptoms list. `orth`
+  // slots in between orig_text and text: prefer it over the canonical
+  // name whenever present.
   const mentionTexts = mentions
-    .map((m) => m.orig_text || m.text || m.name)
+    .map((m) => m.orig_text || m.orth || m.text || m.name)
     .filter(Boolean);
 
   const clauses = splitIntoClauses(message);
