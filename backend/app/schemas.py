@@ -2,7 +2,7 @@
 Pydantic request/response models -- this is the actual API contract.
 Mirrors API_CONTRACT.md; if you change something here, update that file too.
 """
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -47,6 +47,8 @@ class UserOut(BaseModel):
     role: UserRole
     specialization: Optional[str] = None
     avatar_url: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    sex: Optional[Literal["male", "female"]] = None
 
 
 class ProfileUpdate(BaseModel):
@@ -54,6 +56,24 @@ class ProfileUpdate(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     specialization: Optional[str] = Field(default=None, max_length=100)
+    # Patient-only (see routers/users.py) -- feeds the SehatAI symptom-triage
+    # bot's age/sex resolution (dependencies.sync_sehatai_profile). Binary
+    # only, matching Infermedica's actual API constraint (sex is one of its
+    # required /triage evidence fields).
+    date_of_birth: Optional[date] = Field(default=None, description="Not in the future, not implausibly old")
+    sex: Optional[Literal["male", "female"]] = None
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _validate_date_of_birth(cls, v: Optional[date]) -> Optional[date]:
+        if v is None:
+            return v
+        today = datetime.now(timezone.utc).date()
+        if v > today:
+            raise ValueError("Date of birth can't be in the future")
+        if today.year - v.year > 120:
+            raise ValueError("Date of birth is not plausible")
+        return v
 
 
 class SignupRequest(BaseModel):

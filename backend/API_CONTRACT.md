@@ -88,10 +88,11 @@ These are the exact JSON shapes referenced by name in the endpoint list below.
 ```json
 {
   "id": 1, "name": "Dr. Alice Smith", "email": "alice@example.com", "role": "doctor",
-  "specialization": "Cardiologist", "avatar_url": "/users/1/avatar"
+  "specialization": "Cardiologist", "avatar_url": "/users/1/avatar",
+  "date_of_birth": null, "sex": null
 }
 ```
-`role` is always `"doctor"` or `"patient"`. `specialization` is doctor-only (always `null` for a patient), nullable (existing accounts start with no specialization), and a plain string — see [Profile / Avatar](#profile--avatar) for the preset list. `avatar_url` is `null` until a photo is uploaded; when present it's an authenticated download path (`/users/{id}/avatar`), same pattern as `Report.pdf_url` — **not** a public static URL.
+`role` is always `"doctor"` or `"patient"`. `specialization` is doctor-only (always `null` for a patient), nullable (existing accounts start with no specialization), and a plain string — see [Profile / Avatar](#profile--avatar) for the preset list. `avatar_url` is `null` until a photo is uploaded; when present it's an authenticated download path (`/users/{id}/avatar`), same pattern as `Report.pdf_url` — **not** a public static URL. `date_of_birth` (`"YYYY-MM-DD"`) and `sex` (`"male"` / `"female"`) are patient-only (always `null` for a doctor), nullable, and feed the SehatAI symptom-triage bot's age/sex resolution — see `PATCH /users/me` below; a patient account with either still `null` gets a `profile_incomplete` reply instead of a specialist recommendation the first time they ask for one.
 
 **Token** (response of signup/login)
 ```json
@@ -239,8 +240,10 @@ List users by role. `role` is **required** — there's no unfiltered "list every
 
 #### `PATCH /users/me`
 Edit your own profile.
-- Body: any subset of `{ "name": string, "specialization": string }` — only included fields change.
+- Body: any subset of `{ "name": string, "specialization": string, "date_of_birth": "YYYY-MM-DD", "sex": "male"|"female" }` — only included fields change.
 - `specialization` is doctor-only — `400` if a patient sends it. Not validated against the preset list server-side (a patient sending garbage would 400 anyway; a doctor's client is expected to pair the preset dropdown with a free-text "Other" field, but the column itself just stores whatever string is sent).
+- `date_of_birth`/`sex` are patient-only — `400` if a doctor sends either. `date_of_birth` is rejected (`422`) if it's in the future or more than 120 years ago; `sex` is a strict `male`/`female` enum (matches Infermedica's actual API constraint — binary only).
+- Setting either syncs onto SehatAI's own `patients` row (same shared Postgres database) so the change is live for the patient's very next symptom-triage chat message, with no extra plumbing — see `dependencies.sync_sehatai_profile`.
 - `200` → `User`
 
 Preset specialization options (`DOCTOR_SPECIALIZATIONS`, exposed for the frontend to build a dropdown from): `Cardiologist`, `Dermatologist`, `Endocrinologist`, `Gastroenterologist`, `General Practitioner`, `Nephrologist`, `Neurologist`, `Obstetrician/Gynecologist`, `Oncologist`, `Ophthalmologist`, `Orthopedist`, `Pediatrician`, `Psychiatrist`, `Pulmonologist`, `Rheumatologist`, `Urologist`, `Other`. `"Other"` is a UI affordance pairing this list with a free-text field — the stored value is just whatever string is sent, preset or custom.

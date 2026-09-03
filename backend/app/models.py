@@ -23,7 +23,7 @@ import enum
 import uuid as uuid_module
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Date, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -87,6 +87,13 @@ class User(Base):
     # Nullable so existing/new doctor accounts aren't blocked at signup;
     # "mandatory going forward" is enforced as a frontend nudge instead.
     specialization = Column(String(100), nullable=True)
+    # Patient-only, by convention (not DB-enforced, same as specialization
+    # above). Feeds the symptom-triage bot's age/sex resolution on
+    # SehatAI's side -- see dependencies.sync_sehatai_profile -- so a
+    # recommendation is never computed against fabricated demographics.
+    # Nullable: unset until the patient fills in their Profile page.
+    date_of_birth = Column(Date, nullable=True)
+    sex = Column(String(10), nullable=True)
     # Random on-disk filename, same pattern as Report.pdf_path -- never the
     # client's original filename (path traversal / collision safety).
     avatar_path = Column(String(500), nullable=True)

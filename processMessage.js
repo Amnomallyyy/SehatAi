@@ -145,7 +145,7 @@ function cleanReply(text) {
 }
 
 function envelope(fields) {
-  return {
+  const env = {
     bot: 'specialist_router',
     kind: 'unknown',
     sessionId: null,
@@ -180,6 +180,24 @@ function envelope(fields) {
     reply: '',
     ...fields,
   };
+
+  // Disclose that a recommendation used the patient's real, on-file
+  // age/sex -- appended once, at finalization only. 'recommendation' and
+  // 'emergency' are the only two kinds ever built with resolvedAge/
+  // resolvedSex populated (every mid-conversation clarification/gate
+  // envelope leaves them null), so this can never fire on anything but
+  // an actual Infermedica-backed result. See STAGE 5's profile-
+  // completeness gate for the other half of this fix.
+  if (
+    (env.kind === 'recommendation' || env.kind === 'emergency') &&
+    env.resolvedAge != null &&
+    env.resolvedSex != null &&
+    env.reply
+  ) {
+    env.reply = `${env.reply} (This reflects your profile: age ${env.resolvedAge}, ${env.resolvedSex}.)`;
+  }
+
+  return env;
 }
 
 function guidanceReply(guidance) {
@@ -1936,20 +1954,39 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // ================================================================
   const patientProfile = await getPatientProfile(patientId);
 
-  if (patientProfile?.age == null) {
-    // Silently defaulting to "30, male" when a patient's own profile has no
-    // date_of_birth on file (wrong patientId, or a real row missing
-    // it) can quietly skew triage — the pediatric safety net in
-    // particular only fires if the age it receives is real. Surface
-    // it instead of guessing invisibly.
-    console.warn(
-      `[processMessage] Patient ${patientId} has no age on file (missing/unmatched patients row, ` +
-      `or a null date_of_birth) — defaulting to age 30 for Infermedica. If this is unexpected, check ` +
-      `that this patientId matches a seeded row (see claude/seedfakedata.js).`
-    );
+  // FIXED (found live): this used to silently default to "age 30, male"
+  // whenever a patient's own profile had no date_of_birth on file (true
+  // for every CareLink-bridged patient today — the bridge only ever
+  // writes name + consented_at) — with nothing but a server console
+  // warning. The patient was never told a recommendation was computed
+  // against fabricated demographics, and the pediatric safety net in
+  // particular only fires if the age it receives is real. Hard-gate
+  // instead: this sits AFTER the emergency/off-topic/dependent gates
+  // above, so a real emergency is never blocked by an incomplete
+  // profile — only the ordinary symptom-gathering path is. No backfill
+  // for existing/seeded accounts — the gate applies immediately.
+  if (patientProfile?.age == null || !patientProfile?.sex) {
+    const reply =
+      "Before I can give you a specialist recommendation, I need your age and sex on file — they affect " +
+      "which conditions are actually likely. Please complete your profile, then come back and we'll pick " +
+      "this up.";
+    await logChatMessage({
+      sessionId,
+      patientId,
+      message,
+      response: { kind: 'profile_incomplete', reply },
+    });
+    return envelope({
+      kind: 'profile_incomplete',
+      sessionId,
+      subject: subjectInfo,
+      reply: cleanReply(reply),
+      actionable: true,
+      actions: [{ id: 'complete_profile', label: 'Complete your profile' }],
+    });
   }
-  const age = patientProfile?.age || 30;
-  const sex = patientProfile?.sex?.toLowerCase() || 'male';
+  const age = patientProfile.age;
+  const sex = patientProfile.sex.toLowerCase();
 
   // ================================================================
   // STAGE 6: CLASSIFY & ACCUMULATE (Groq only — ZERO Infermedica calls)

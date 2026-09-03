@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..dependencies import AVATAR_DIR
+from ..dependencies import AVATAR_DIR, sync_sehatai_profile
 from ..security import get_current_user
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -37,18 +37,34 @@ def update_my_profile(
     current_user: models.User = Depends(get_current_user),
 ):
     """Edit-profile endpoint for both roles. `specialization` is doctor-only
-    -- a patient sending it gets a clear 400 rather than it being silently
-    dropped."""
+    and `date_of_birth`/`sex` are patient-only -- sending the wrong one for
+    your role gets a clear 400 rather than it being silently dropped."""
     if payload.specialization is not None and current_user.role != models.UserRole.doctor:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Only doctors can set a specialization"
+        )
+    if (payload.date_of_birth is not None or payload.sex is not None) and current_user.role != models.UserRole.patient:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Only patients can set date of birth / sex"
         )
     if payload.name is not None:
         current_user.name = payload.name
     if payload.specialization is not None:
         current_user.specialization = payload.specialization
+    if payload.date_of_birth is not None:
+        current_user.date_of_birth = payload.date_of_birth
+    if payload.sex is not None:
+        current_user.sex = payload.sex
     db.commit()
     db.refresh(current_user)
+
+    # Keep SehatAI's own `patients` row in sync so the change is live for
+    # the patient's very next chat message -- see dependencies.py's
+    # sync_sehatai_profile doc comment. Patient-only and only worth a call
+    # when one of the two synced fields actually changed.
+    if current_user.role == models.UserRole.patient and (payload.date_of_birth is not None or payload.sex is not None):
+        sync_sehatai_profile(current_user, db)
+
     return current_user
 
 

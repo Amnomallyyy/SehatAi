@@ -45,7 +45,17 @@ def get_or_create_sehatai_patient_id(user: models.User, db: Session) -> uuid.UUI
     # authenticated as themselves via CareLink and about to upload their
     # own file through their own session -- that action IS the consent;
     # there's no separate consent UI/flow for this bridge to collect.
-    patient = models.Patient(name=user.name, consented_at=datetime.now(timezone.utc))
+    #
+    # date_of_birth/sex: seeded from whatever's already on the CareLink
+    # User row (null if the patient hasn't filled in their Profile page
+    # yet) -- see sync_sehatai_profile below for the other half of this
+    # (a LATER profile edit, after the bridge already exists).
+    patient = models.Patient(
+        name=user.name,
+        date_of_birth=user.date_of_birth,
+        sex=user.sex,
+        consented_at=datetime.now(timezone.utc),
+    )
     db.add(patient)
     db.flush()  # assigns patient.id without committing yet
 
@@ -53,6 +63,33 @@ def get_or_create_sehatai_patient_id(user: models.User, db: Session) -> uuid.UUI
     db.commit()
     db.refresh(user)
     return user.sehatai_patient_id
+
+
+def sync_sehatai_profile(user: "models.User", db: Session) -> None:
+    """Pushes User.date_of_birth/sex onto SehatAI's own `patients` row --
+    called from routers/users.py's PATCH /users/me right after a patient
+    edits their profile, so the symptom-triage bot's age/sex resolution
+    (Patientprofile.js, read fresh every turn) is live for that patient's
+    very next chat message with zero extra plumbing (see architecture doc:
+    "Age/sex are patient-scoped ... fetched fresh every turn").
+
+    No-ops if this patient hasn't opened the AI Assistant tab yet
+    (sehatai_patient_id still null) -- get_or_create_sehatai_patient_id
+    above already seeds the Patient row from the User's CURRENT
+    date_of_birth/sex the first time it runs, so there's nothing stale
+    to fix here; this only matters for a patient who bridged BEFORE
+    filling in DOB/sex, or who edits it again afterwards.
+    """
+    if user.sehatai_patient_id is None:
+        return
+
+    patient = db.query(models.Patient).filter(models.Patient.id == user.sehatai_patient_id).first()
+    if patient is None:
+        return
+
+    patient.date_of_birth = user.date_of_birth
+    patient.sex = user.sex
+    db.commit()
 
 
 def get_conversation_or_404(db: Session, conversation_id: int) -> models.Conversation:

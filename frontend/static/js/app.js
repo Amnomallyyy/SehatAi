@@ -1649,7 +1649,23 @@ function renderProfilePage(user) {
       <div class="field" id="profile-specialization-other-field" style="${selectedPreset === 'Other' ? '' : 'display:none'}">
         <label for="profile-specialization-other">Custom specialization</label>
         <input type="text" id="profile-specialization-other" maxlength="100" value="${hasCustomSpec ? escHtml(user.specialization) : ''}" placeholder="e.g. Sports Medicine">
-      </div>` : ''}
+      </div>` : `
+      <div class="field">
+        <label for="profile-dob-input">Date of birth</label>
+        <input type="date" id="profile-dob-input" value="${user.date_of_birth || ''}">
+      </div>
+      <div class="field">
+        <label for="profile-sex-select">Sex</label>
+        <select id="profile-sex-select">
+          <option value="" ${!user.sex ? 'selected' : ''}>Select…</option>
+          <option value="male" ${user.sex === 'male' ? 'selected' : ''}>Male</option>
+          <option value="female" ${user.sex === 'female' ? 'selected' : ''}>Female</option>
+        </select>
+      </div>
+      <p class="t-xs" style="color:var(--text-light);margin-top:-8px">
+        Used by the AI Assistant's symptom triage to give an age/sex-appropriate recommendation — without
+        this on file, it can't give you one.
+      </p>`}
 
       <div class="error-banner" id="profile-save-error" style="display:none"></div>
       <button class="btn btn-primary btn-sm" id="profile-save-btn">Save changes</button>
@@ -1681,6 +1697,11 @@ async function saveProfile(isDoctor) {
     const other = document.getElementById('profile-specialization-other')?.value.trim();
     const spec = sel === 'Other' ? other : sel;
     if (spec) payload.specialization = spec;
+  } else {
+    const dob = document.getElementById('profile-dob-input').value;
+    const sex = document.getElementById('profile-sex-select').value;
+    if (dob) payload.date_of_birth = dob;
+    if (sex) payload.sex = sex;
   }
 
   btn.classList.add('btn-loading'); btn.disabled = true;
@@ -1886,7 +1907,39 @@ function renderAssistantReply(result) {
   if (result.recommendation) {
     html += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:.85rem;color:var(--navy);font-weight:600">→ ${escHtml(result.recommendation.specialist_recommended)}</div>`;
   }
-  assistantBubble('bot', html);
+  // Generic action-button renderer — mirrors public/index.html's own
+  // (the standalone SehatAI page every action id here was first built
+  // for). Covers the emergency Notify/Continue buttons AND the
+  // profile-completeness gate's "Complete your profile" button
+  // (processMessage.js STAGE 5) with one mechanism, since both just
+  // send {actionable:true, actions:[{id,label}]} on the envelope.
+  if (result.actionable && Array.isArray(result.actions) && result.actions.length) {
+    html += `<div class="assistant-actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${result.actions.map(a =>
+      `<button class="btn btn-sm btn-secondary action-btn" data-action="${escHtml(a.id)}">${escHtml(a.label)}</button>`
+    ).join('')}</div>`;
+  }
+  const row = assistantBubble('bot', html);
+
+  const actionsEl = row.querySelector('.assistant-actions');
+  if (actionsEl) {
+    actionsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.action-btn');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      actionsEl.querySelectorAll('.action-btn').forEach(b => (b.disabled = true));
+      if (action === 'continue') {
+        // Matches EMERGENCY_CONTINUE_RE in processMessage.js exactly.
+        sendAssistantMessage('Continue with this chat');
+      } else if (action === 'notify') {
+        // No real integration to emergency services/contacts in this
+        // app — just acknowledges the choice, same as public/index.html.
+        actionsEl.innerHTML = '<span class="t-xs" style="color:var(--text-light)">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
+      } else if (action === 'complete_profile') {
+        showPage('profile');
+        loadProfilePage();
+      }
+    });
+  }
 }
 
 async function sendAssistantMessage(explicitText) {
