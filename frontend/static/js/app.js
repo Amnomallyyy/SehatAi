@@ -201,6 +201,26 @@ function initAuth() {
     } finally { btn.classList.remove('btn-loading'); }
   });
 
+  /* Signup: show/require date of birth + sex only for the patient role --
+     unlike the Profile page's identical-looking doctor/patient split (a
+     one-time render keyed off an already-known server-side role), this
+     form's role is live-selected by the user, so it needs a real listener. */
+  const patientFieldsWrap = document.getElementById('signup-patient-fields');
+  const dobInput = document.getElementById('signup-dob-input');
+  const sexSelect = document.getElementById('signup-sex-select');
+  function toggleSignupPatientFields() {
+    const show = signupForm.querySelector('[name="role"]:checked')?.value === 'patient';
+    patientFieldsWrap.style.display = show ? '' : 'none';
+    dobInput.required = show;
+    sexSelect.required = show;
+  }
+  signupForm.querySelector('.role-picker').addEventListener('change', toggleSignupPatientFields);
+  // Sync immediately, not just on change -- a browser restoring a
+  // previously-checked radio (bfcache) on refresh sets .checked directly
+  // without firing 'change', which would otherwise leave the visible/
+  // required state out of sync with the actually-selected role.
+  toggleSignupPatientFields();
+
   /* Signup */
   signupForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -212,15 +232,25 @@ function initAuth() {
 
     btn.classList.add('btn-loading');
     try {
+      const body = {
+        name:     signupForm.querySelector('[name="name"]').value.trim(),
+        email:    signupForm.querySelector('[name="email"]').value.trim(),
+        password: signupForm.querySelector('[name="password"]').value,
+        role
+      };
+      if (role === 'patient') {
+        // Guard against an empty string reaching Pydantic's date/Literal
+        // types as a raw parse error instead of the backend's clean 400 --
+        // same pattern as saveProfile()'s patient branch.
+        const dob = dobInput.value;
+        const sex = sexSelect.value;
+        if (dob) body.date_of_birth = dob;
+        if (sex) body.sex = sex;
+      }
       const res = await fetch(`${API}/auth/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name:     signupForm.querySelector('[name="name"]').value.trim(),
-          email:    signupForm.querySelector('[name="email"]').value.trim(),
-          password: signupForm.querySelector('[name="password"]').value,
-          role
-        })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
       if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }

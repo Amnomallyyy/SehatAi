@@ -51,6 +51,22 @@ class UserOut(BaseModel):
     sex: Optional[Literal["male", "female"]] = None
 
 
+def _validate_date_of_birth_value(v: Optional[date]) -> Optional[date]:
+    """Shared by ProfileUpdate and SignupRequest -- not in the future, not
+    implausibly old. The role-conditional "is this required/forbidden for
+    you" check lives in the router (routers/users.py's PATCH /me,
+    routers/auth.py's signup), not here -- this only ever validates a date
+    that's actually present."""
+    if v is None:
+        return v
+    today = datetime.now(timezone.utc).date()
+    if v > today:
+        raise ValueError("Date of birth can't be in the future")
+    if today.year - v.year > 120:
+        raise ValueError("Date of birth is not plausible")
+    return v
+
+
 class ProfileUpdate(BaseModel):
     """PATCH /users/me -- every field optional, only what's sent changes."""
 
@@ -66,14 +82,7 @@ class ProfileUpdate(BaseModel):
     @field_validator("date_of_birth")
     @classmethod
     def _validate_date_of_birth(cls, v: Optional[date]) -> Optional[date]:
-        if v is None:
-            return v
-        today = datetime.now(timezone.utc).date()
-        if v > today:
-            raise ValueError("Date of birth can't be in the future")
-        if today.year - v.year > 120:
-            raise ValueError("Date of birth is not plausible")
-        return v
+        return _validate_date_of_birth_value(v)
 
 
 class SignupRequest(BaseModel):
@@ -81,11 +90,23 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=72, description="8-72 characters (bcrypt's hard limit is 72 bytes)")
     role: UserRole
+    # Patient-only. Stays Optional here (schema-level backward compatibility,
+    # same "shared contract" convention as the rest of this class) --
+    # required-if-patient / forbidden-if-doctor is enforced in
+    # routers/auth.py's signup(), mirroring PATCH /users/me's identical
+    # role-conditional check on these same two fields.
+    date_of_birth: Optional[date] = Field(default=None, description="Patient-only; not in the future, not implausibly old")
+    sex: Optional[Literal["male", "female"]] = None
 
     @field_validator("email")
     @classmethod
     def _normalize_email(cls, v: str) -> str:
         return v.lower().strip()
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _validate_date_of_birth(cls, v: Optional[date]) -> Optional[date]:
+        return _validate_date_of_birth_value(v)
 
 
 class LoginRequest(BaseModel):

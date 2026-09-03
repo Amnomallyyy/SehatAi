@@ -78,6 +78,21 @@
         </div>
         <div class="field-hint">This choice is permanent and shapes how you use the app.</div>
       </div>
+      <div id="signup-patient-fields" style="display:none">
+        <div class="field">
+          <label for="signup-dob-input">Date of birth</label>
+          <input type="date" id="signup-dob-input" name="date_of_birth">
+        </div>
+        <div class="field">
+          <label for="signup-sex-select">Sex</label>
+          <select id="signup-sex-select" name="sex">
+            <option value="" selected>Select…</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+          <div class="field-hint">Used by the AI Assistant's symptom triage to give an age/sex-appropriate recommendation — without this on file, it can't give you one.</div>
+        </div>
+      </div>
       <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Create account</button>
     </form>
   </div>

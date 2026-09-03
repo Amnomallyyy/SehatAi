@@ -41,6 +41,7 @@ doctor2_token, doctor2_id = r.json()["access_token"], r.json()["user"]["id"]
 
 r = requests.post(f"{BASE}/auth/signup", json={
     "name": "Pat Jones", "email": "pat@example.com", "password": "patientpass123", "role": "patient",
+    "date_of_birth": "1990-05-15", "sex": "female",
 })
 check("signup patient -> 201", r.status_code == 201, r.text)
 patient = r.json()
@@ -48,13 +49,29 @@ patient_token, patient_id = patient["access_token"], patient["user"]["id"]
 
 r = requests.post(f"{BASE}/auth/signup", json={
     "name": "Pat2", "email": "pat2@example.com", "password": "patientpass123", "role": "patient",
+    "date_of_birth": "1985-11-02", "sex": "male",
 })
 patient2_token, patient2_id = r.json()["access_token"], r.json()["user"]["id"]
 
+# Intentionally sends no date_of_birth/sex -- this is testing the
+# duplicate-email branch specifically, which must still fire (400) before
+# the DOB/sex requirement check ever runs. See auth.py's signup() doc
+# comment for why that check is placed after the duplicate-email check.
 r = requests.post(f"{BASE}/auth/signup", json={
     "name": "dup", "email": "pat@example.com", "password": "whatever123", "role": "patient",
 })
 check("signup duplicate email -> 400", r.status_code == 400, r.text)
+
+r = requests.post(f"{BASE}/auth/signup", json={
+    "name": "No DOB", "email": "nodob@example.com", "password": "whatever123", "role": "patient",
+})
+check("signup patient missing dob/sex -> 400", r.status_code == 400, r.text)
+
+r = requests.post(f"{BASE}/auth/signup", json={
+    "name": "Dr. Extra", "email": "drextra@example.com", "password": "whatever123", "role": "doctor",
+    "date_of_birth": "1980-01-01", "sex": "male",
+})
+check("signup doctor with dob/sex -> 400", r.status_code == 400, r.text)
 
 r = requests.post(f"{BASE}/auth/login", json={"email": "pat@example.com", "password": "wrongpass"})
 check("login wrong password -> 401", r.status_code == 401, r.text)

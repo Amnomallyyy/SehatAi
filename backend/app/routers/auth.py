@@ -14,6 +14,24 @@ def signup(payload: schemas.SignupRequest, db: Session = Depends(get_db)):
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered")
 
+    # Mirrors PATCH /users/me's identical role-conditional check
+    # (routers/users.py) -- date_of_birth/sex feed the symptom-triage bot's
+    # age/sex resolution and are meaningless for a doctor account. Placed
+    # after the duplicate-email check (not before), and as a router check
+    # rather than a schema validator, so an already-registered email still
+    # gets the clearer, more specific 400 first -- see test_flow.py's
+    # duplicate-email signup test, which intentionally sends no DOB/sex.
+    if payload.role == models.UserRole.patient:
+        if payload.date_of_birth is None or payload.sex is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Date of birth and sex are required for patient accounts",
+            )
+    elif payload.date_of_birth is not None or payload.sex is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Only patients can set date of birth / sex"
+        )
+
     try:
         password_hash = hash_password(payload.password)
     except Exception:
@@ -24,6 +42,8 @@ def signup(payload: schemas.SignupRequest, db: Session = Depends(get_db)):
         email=payload.email,
         password_hash=password_hash,
         role=payload.role,
+        date_of_birth=payload.date_of_birth,
+        sex=payload.sex,
     )
     db.add(user)
     db.commit()

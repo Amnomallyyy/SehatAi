@@ -209,9 +209,10 @@ Deliberately has no `status` and no `ai_summary` field — neither concept appli
 #### `POST /auth/signup`
 Create an account and log in immediately.
 - Auth: none
-- Body: `{ "name": string, "email": string, "password": string (8-72 chars), "role": "doctor" | "patient" }`
+- Body: `{ "name": string, "email": string, "password": string (8-72 chars), "role": "doctor" | "patient", "date_of_birth"?: "YYYY-MM-DD", "sex"?: "male"|"female" }`
 - `201` → `Token`
 - `400` if email is already registered
+- `date_of_birth`/`sex` are patient-only: `400` if `role=="patient"` and either is missing, `400` if `role=="doctor"` and either is provided. `date_of_birth` is rejected (`422`) if it's in the future or more than 120 years ago; `sex` is a strict `male`/`female` enum (matches Infermedica's actual API constraint — binary only).
 - Email is lowercased/trimmed automatically before storage and comparison.
 
 #### `POST /auth/login`
@@ -541,3 +542,4 @@ The spec was explicit about the data model but left some behavior undefined. Her
 15. **Appointment reminders are computed on every read, not stored.** `active_reminder` is a pure function of `scheduled_at` vs. the current time (see `dependencies.compute_active_reminder`) — there's no scheduler, no push/email notification, and no dismissal-tracking table. This was a deliberate scope decision: this backend has no background job runner, and a badge that's simply "currently true or not" based on time math needed no new infrastructure.
 16. **Doctor specialization is nullable, not required at signup.** `SignupRequest` is shared across both roles and is itself part of the locked contract — adding a required field there would break existing patient signups too. "Mandatory going forward" is a frontend-enforced nudge (a doctor with `specialization: null` sees a "complete your profile" prompt), not a server-side constraint.
 17. **Avatars stay behind an authenticated download endpoint** (`GET /users/{id}/avatar`), not a public static file mount, even though photos are lower-stakes than medical PDFs. This keeps the app's file-serving story consistent (everything so far is "authenticated `FileResponse`") and reuses the exact same visibility rule as `GET /users/{user_id}` — a stranger can't fetch someone's photo any more than their name.
+18. **`date_of_birth`/`sex`, unlike specialization (note 16), ARE effectively required for patient signups** — but as a router-level business rule, not a schema-required field (both stay `Optional` in `SignupRequest`'s shape, so the schema itself doesn't hard-break). `POST /auth/signup` `400`s if `role=="patient"` and either is missing, mirroring `PATCH /users/me`'s identical role-conditional check. Justification for the asymmetry with note 16: specialization is cosmetic (drives a "complete your profile" nudge); DOB/sex feed the symptom-triage bot's actual clinical safety logic (age/sex-appropriate recommendations, see SehatAI's `processMessage.js` STAGE 5 gate) — "fill it in later" isn't an acceptable default for patients.
