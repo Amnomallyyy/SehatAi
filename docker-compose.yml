@@ -87,12 +87,12 @@ services:
 
   dietbot:
     build:
-      context: C:/Users/lenovo/SehatAi
+      context: ./dietbot
       dockerfile: Dockerfile
     ports:
       - "8001:8001"
     volumes:
-      - C:/Users/lenovo/SehatAi/.env:/app/.env:ro
+      - ./dietbot/.env:/app/.env:ro
     restart: unless-stopped
 
 volumes:

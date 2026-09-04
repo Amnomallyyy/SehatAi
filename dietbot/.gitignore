@@ -1,0 +1,21 @@
+# Environment variables (contains real API keys)
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+venv/
+env/
+
+# Local session files (if any)
+.session_*
+
+# Log files
+*.log
+
+# IDE settings (optional)
+.vscode/
+.idea/
