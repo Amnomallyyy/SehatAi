@@ -23,7 +23,7 @@ import enum
 import uuid as uuid_module
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -400,26 +400,145 @@ class PatientAPIToken(Base):
 
 
 class Document(Base):
-    """DataFetch's `documents` table -- already holds 17 real rows. A
+    """DataFetch's `documents` table -- already holds 18 real rows. A
     lab-report upload through CareLink inserts here (status='uploaded'),
     NOT into CareLink's own Report table (routers/reports.py) -- that one
     is a distinct, existing feature (PDFs shared inside a conversation
-    thread) and is intentionally left untouched by this bridge."""
+    thread) and is intentionally left untouched by this bridge.
+
+    CORRECTED (found live, 2026-09-05): id/superseded_by were declared as
+    Integer here, but the real column type (confirmed against
+    information_schema) is uuid -- same PK style as `patients`. This model
+    was never actually queried anywhere in backend/ before now (grep
+    confirmed), so the mismatch was dormant rather than a live bug, but it
+    would have broken the moment anything tried to join on `documents.id`
+    -- exactly what structured_reports.py's ExtractedData FK needs to do.
+    file_size_bytes is bigint, not int, for the same reason. document_date
+    is a plain `date`, not a timestamp.
+    """
     __tablename__ = "documents"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4)
     patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=False, index=True)
     category = Column(String, nullable=True)
     uploaded_at = Column(DateTime, default=utc_now)
     doctor_reviewed = Column(Boolean, default=False)
     file_path = Column(String, nullable=True)
     file_url = Column(String, nullable=True)
-    file_size_bytes = Column(Integer, nullable=True)
+    file_size_bytes = Column(BigInteger, nullable=True)
     mime_type = Column(String, nullable=True)
     original_filename = Column(String, nullable=True)
     file_hash = Column(String, nullable=True)
-    document_date = Column(DateTime, nullable=True)
+    document_date = Column(Date, nullable=True)
     status = Column(String, nullable=True)
     raw_ocr = Column(Text, nullable=True)
     ocr_engine = Column(String, nullable=True)
-    superseded_by = Column(Integer, nullable=True)
+    superseded_by = Column(UUID(as_uuid=True), nullable=True)
+
+
+class ExtractedData(Base):
+    """DataFetch's `extracted_data` table -- a structured per-marker lab
+    result (test_name/value/unit/normal_range/flag), one row per marker
+    per document. Already holds 60 real rows across 18 documents.
+    Read-only from backend/'s side: nothing here ever writes to this
+    table -- only datafetch/pipeline.py's OCR pipeline does, via its own
+    Supabase RPC. See routers/structured_reports.py for the read API."""
+    __tablename__ = "extracted_data"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=True, index=True)
+    test_name = Column(Text, nullable=False)
+    value = Column(Text, nullable=False)
+    value_numeric = Column(Numeric, nullable=True)
+    unit = Column(Text, nullable=True)
+    normal_range = Column(Text, nullable=True)
+    flag = Column(Text, nullable=True)
+    operator = Column(Text, nullable=True)
+    recorded_at = Column(DateTime, nullable=True)
+    document_date = Column(Date, nullable=True)
+    supersedes_id = Column(UUID(as_uuid=True), nullable=True)
+    ocr_engine = Column(Text, nullable=True)
+    ocr_confidence = Column(Numeric, nullable=True)
+
+
+class DocumentNote(Base):
+    """A doctor's optional free-text note on one structured lab document
+    (the `documents` bridge table above) -- CareLink-owned, unlike the
+    documents/extracted_data tables it references. A new table rather
+    than DataFetch's existing `clinical_advice`: that one's doctor_id
+    column is a uuid (some other identity concept, not a CareLink login)
+    and it's a bridge table this backend doesn't own or migrate (see the
+    BRIDGE TABLES note above) -- writing into it from here would mean
+    guessing at semantics nothing in this repo defines.
+
+    One row per (document_id, doctor_id): a second save from the same
+    doctor overwrites their existing note rather than adding a new row --
+    this is one optional text field per doctor per document, not a
+    running comment thread (ReportComment already covers threaded
+    discussion, on CareLink's own Report model).
+    """
+    __tablename__ = "document_notes"
+    __table_args__ = (UniqueConstraint("document_id", "doctor_id", name="uq_document_note_doc_doctor"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    doctor_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    # Whole-document retraction flag ("this report's extracted values are
+    # wrong, see my note for what's actually correct") -- deliberately
+    # document-level, not per-marker: the note's free text is where the
+    # doctor explains what's actually correct, not a second structured
+    # field to keep in sync. Requires non-empty content when true (see
+    # upsert_document_note's validation) -- a retraction with no
+    # explanation isn't useful to whoever reads it next.
+    retracted = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    doctor = relationship("User", foreign_keys=[doctor_id])
+
+
+class ExtractionVerification(Base):
+    """One independent second-model verification run against a document's
+    ORIGINAL source file -- see backend/app/verification.py. Feeds the
+    'Extraction audit' panel's verification_status/needs_review fields,
+    which were hardcoded placeholders (always 'not_run'/False) until this
+    existed. CareLink-owned: runs as a background task after upload, never
+    touches DataFetch's documents/extracted_data tables (read-only from
+    this side, same as everywhere else in structured_reports.py)."""
+    __tablename__ = "extraction_verifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="running")  # running | complete | failed | no_source
+    model_used = Column(String(50), nullable=True)
+    agreement_count = Column(Integer, default=0, nullable=False)
+    disagreement_count = Column(Integer, default=0, nullable=False)
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=utc_now, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    findings = relationship("ExtractionVerificationFinding", back_populates="verification", cascade="all, delete-orphan")
+
+
+class ExtractionVerificationFinding(Base):
+    """One marker's agree/disagree result within one ExtractionVerification
+    run: the primary value already stored in extracted_data vs. what the
+    independent verifier model read from the same source file. Keyed by
+    normalized_marker_name (marker_names.normalize_marker), not a raw FK
+    to extracted_data -- matches how trend history is already looked up,
+    and stays valid even if a marker's exact row changes."""
+    __tablename__ = "extraction_verification_findings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    verification_id = Column(Integer, ForeignKey("extraction_verifications.id"), nullable=False, index=True)
+    normalized_marker_name = Column(Text, nullable=False, index=True)
+    primary_value = Column(Text, nullable=True)
+    primary_unit = Column(Text, nullable=True)
+    verified_value = Column(Text, nullable=True)
+    verified_unit = Column(Text, nullable=True)
+    agrees = Column(Boolean, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+    verification = relationship("ExtractionVerification", back_populates="findings")

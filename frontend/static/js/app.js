@@ -8,16 +8,23 @@ const API = 'http://localhost:8000';
 const SEHATAI_API = 'http://localhost:3000';
 const EVIDENCE_API = 'http://localhost:8002';
 
-/* ── Auth helpers ── */
+/* ── Auth helpers ──
+   sessionStorage, not localStorage, deliberately: localStorage is shared
+   across every tab on this origin, so two tabs (e.g. a doctor and a
+   patient account open side by side) would silently steal each other's
+   session on every login/reload -- apiFetch() re-reads the token fresh
+   on every call, so the failure isn't just a stale UI, actions in one
+   tab start silently authenticating as whichever account logged in last
+   in ANY tab. sessionStorage is per-tab, so this can't happen. */
 const auth = {
-  token: () => localStorage.getItem('token'),
-  user:  () => { try { return JSON.parse(localStorage.getItem('user')); } catch { return null; } },
+  token: () => sessionStorage.getItem('token'),
+  user:  () => { try { return JSON.parse(sessionStorage.getItem('user')); } catch { return null; } },
   save(token, user) {
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(user));
+    sessionStorage.setItem('token', token);
+    sessionStorage.setItem('user', JSON.stringify(user));
   },
-  updateUser(user) { localStorage.setItem('user', JSON.stringify(user)); },
-  clear() { localStorage.removeItem('token'); localStorage.removeItem('user'); }
+  updateUser(user) { sessionStorage.setItem('user', JSON.stringify(user)); },
+  clear() { sessionStorage.removeItem('token'); sessionStorage.removeItem('user'); }
 };
 
 const DOCTOR_SPECIALIZATIONS = [
@@ -130,6 +137,10 @@ function applyRoleVisibility() {
   if (assistantLink) assistantLink.style.display = isDoctor ? 'none' : '';
   const evidenceLink = document.getElementById('evidence-nav-link');
   if (evidenceLink) evidenceLink.style.display = isDoctor ? '' : 'none';
+  // Lab-report upload (structured extraction) is patient-only -- see
+  // routers/lab_reports.py's require_patient_role.
+  const uploadWrap = document.getElementById('upload-lab-report-wrap');
+  if (uploadWrap) uploadWrap.style.display = isDoctor ? 'none' : '';
 }
 
 /* ── Page routing ── */
@@ -148,9 +159,20 @@ function showPage(id) {
   const shell = document.getElementById('app-shell');
   if (id === 'auth') {
     shell.style.display = 'none';
-    document.getElementById('auth-page').style.display = 'flex';
+    // 'block', not 'flex' -- #auth-page no longer centers its own content
+    // via flex (that moved to .auth-split's grid when the login page was
+    // rebuilt into a split hero/form layout); a stale 'flex' here made
+    // .auth-split shrink-to-fit as a flex item instead of filling the
+    // viewport, since it had no flex-grow of its own.
+    document.getElementById('auth-page').style.display = 'block';
   } else {
-    shell.style.display = 'flex';
+    // 'block', not 'flex' -- same bug as above, one level up: #app is a
+    // single child with its OWN `display:flex` (sidebar + main), so it
+    // doesn't need #app-shell to be a flex container at all. Setting
+    // this to 'flex' made #app a flex item with no flex-grow, so it
+    // shrank to its content's width instead of filling the viewport --
+    // confirmed live, #app measured ~710px wide on a 1536px screen.
+    shell.style.display = 'block';
     document.getElementById('auth-page').style.display = 'none';
   }
   currentPage = id;
@@ -271,6 +293,7 @@ function onLogin() {
   applyProfileNudge();
   applyRoleVisibility();
   updatePendingBadge();
+  if (user.role === 'doctor') loadDoctorNotifications();
   showPage('connections');
   loadConnections();
 }
@@ -280,6 +303,7 @@ function onLogin() {
    ============================================================ */
 let connectionsCache = [];
 let reportsAccessCache = []; // patient-only: which doctors they've granted reports access to
+let doctorNotificationsCache = []; // doctor-only: unreviewed lab documents across all granted patients
 
 async function loadConnections() {
   try {
@@ -309,6 +333,24 @@ function updatePendingBadge() {
   else badge.style.display = 'none';
 }
 
+/* Doctor-side notification badge on the Reports nav item -- see
+   structured_reports.py's GET /structured/notifications. */
+async function loadDoctorNotifications() {
+  try {
+    const res = await apiFetch('/structured/notifications');
+    doctorNotificationsCache = res.ok ? await res.json() : [];
+  } catch { doctorNotificationsCache = []; }
+  updateReportsBadge();
+}
+
+function updateReportsBadge() {
+  const badge = document.getElementById('reports-badge');
+  if (!badge) return;
+  const count = doctorNotificationsCache.length;
+  if (count) { badge.textContent = count; badge.style.display = 'flex'; }
+  else badge.style.display = 'none';
+}
+
 function renderConnections(connections) {
   const me = auth.user();
   const accepted  = connections.filter(c => c.status === 'accepted');
@@ -323,7 +365,7 @@ function renderConnections(connections) {
   connectedEl.innerHTML = '';
   if (accepted.length === 0) {
     connectedEl.innerHTML = emptyState(
-      isDoctor ? '🩺' : '👤',
+      isDoctor ? 'people' : 'person',
       isDoctor ? 'No patients connected yet.' : 'No doctors connected yet.',
       isDoctor ? 'Accept a patient request below to get started.' : 'Send a connection request to your doctor using their email address.'
     );
@@ -339,7 +381,7 @@ function renderConnections(connections) {
   document.getElementById('incoming-count').textContent = incoming.length;
   incomingEl.innerHTML = '';
   if (incoming.length === 0) {
-    incomingEl.innerHTML = emptyState('📬', 'No pending requests.', '');
+    incomingEl.innerHTML = emptyState('inbox', 'No pending requests.', '');
   } else {
     incoming.forEach(c => {
       const other = isDoctor ? c.patient : c.doctor;
@@ -352,7 +394,7 @@ function renderConnections(connections) {
   document.getElementById('outgoing-count').textContent = outgoing.length;
   outgoingEl.innerHTML = '';
   if (outgoing.length === 0) {
-    outgoingEl.innerHTML = emptyState('📤', 'No outgoing requests.', '');
+    outgoingEl.innerHTML = emptyState('send', 'No outgoing requests.', '');
   } else {
     outgoing.forEach(c => {
       const other = isDoctor ? c.patient : c.doctor;
@@ -366,9 +408,30 @@ function renderConnections(connections) {
   document.getElementById('connect-submit-btn').textContent = isDoctor ? 'Add patient' : 'Connect with doctor';
 }
 
-function emptyState(icon, msg, hint) {
-  return `<div class="empty-state">
-    <div class="empty-icon">${icon}</div>
+/* Thin-stroke line icons only, matching the sidebar nav / compliance-badge
+   treatment elsewhere in the app -- these used to be emoji (📬📤💬⚠️🩺👈🔒📄🗓️),
+   which read as an inconsistent leftover against the rest of the Industry
+   design system's monochrome, corner-bracket blueprint look. Several reuse
+   the exact path data already used for a sidebar nav icon or the auth
+   page's compliance badge, kept in sync by hand. */
+const EMPTY_STATE_ICONS = {
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
+  message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  person: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  pointLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+};
+
+function emptyState(iconKey, msg, hint) {
+  const svg = EMPTY_STATE_ICONS[iconKey] || EMPTY_STATE_ICONS.alert;
+  return `<div class="blueprint empty-state">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div class="empty-icon">${svg}</div>
     <p>${msg}</p>
     ${hint ? `<p class="empty-hint">${hint}</p>` : ''}
   </div>`;
@@ -381,8 +444,9 @@ function connectionCard(user, type, conn) {
   const isGranted = grantedDoctorIds.has(user.id);
 
   const div = document.createElement('div');
-  div.className = `connection-card ${type}`;
+  div.className = `blueprint connection-card ${type}`;
   div.innerHTML = `
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
     <div class="avatar">${initials(user.name)}</div>
     <div class="connection-info">
       <div class="connection-name">${escHtml(user.name)}</div>
@@ -408,6 +472,8 @@ function connectionCard(user, type, conn) {
           ✎ ${conn.doctor_nickname ? escHtml(conn.doctor_nickname) : 'Add nickname'}
         </button>` : ''}
       ${type === 'accepted' ? `<button class="btn btn-secondary btn-sm open-conv-btn" data-user-id="${user.id}" data-user-role="${user.role}">Open chat</button>` : ''}
+      ${type === 'accepted' ? `<button class="btn btn-ghost btn-sm disconnect-btn" data-id="${conn.id}" data-name="${escHtml(user.name)}">Disconnect</button>` : ''}
+      ${type === 'outgoing' ? `<button class="btn btn-ghost btn-sm cancel-request-btn" data-id="${conn.id}" data-name="${escHtml(user.name)}">Cancel</button>` : ''}
     </div>`;
 
   div.querySelectorAll('.accept-btn').forEach(b => b.addEventListener('click', () => respondConnection(conn.id, 'accepted', b)));
@@ -420,7 +486,57 @@ function connectionCard(user, type, conn) {
   }));
   div.querySelectorAll('.grant-toggle-input').forEach(cb => cb.addEventListener('change', () => toggleReportsAccess(cb)));
   div.querySelectorAll('.nickname-btn').forEach(b => b.addEventListener('click', () => editNickname(b)));
+  div.querySelectorAll('.disconnect-btn').forEach(b => b.addEventListener('click', () => deleteConnection(
+    b.dataset.id, b,
+    'Disconnect?',
+    `You'll no longer share reports or be able to message ${b.dataset.name}. Your existing conversation history is kept. You can reconnect later by sending a new request.`,
+    'Disconnect', 'Disconnected.'
+  )));
+  div.querySelectorAll('.cancel-request-btn').forEach(b => b.addEventListener('click', () => deleteConnection(
+    b.dataset.id, b,
+    'Cancel request?',
+    `Your pending request to ${b.dataset.name} will be withdrawn.`,
+    'Cancel request', 'Request cancelled.'
+  )));
   return div;
+}
+
+function confirmDialog(title, message, confirmLabel = 'Confirm') {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card" style="max-width:380px">
+        <div class="modal-header"><h2>${escHtml(title)}</h2></div>
+        <div style="padding:16px 20px;font-size:.9375rem;color:var(--text-mid);line-height:1.5">${escHtml(message)}</div>
+        <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-ghost btn-sm" id="confirm-cancel-btn">Never mind</button>
+          <button class="btn btn-danger btn-sm" id="confirm-ok-btn">${escHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = (result) => { overlay.remove(); resolve(result); };
+    overlay.querySelector('#confirm-cancel-btn').addEventListener('click', () => cleanup(false));
+    overlay.querySelector('#confirm-ok-btn').addEventListener('click', () => cleanup(true));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+  });
+}
+
+async function deleteConnection(id, btn, title, message, confirmLabel, successMsg) {
+  const ok = await confirmDialog(title, message, confirmLabel);
+  if (!ok) return;
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(`/connections/${id}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) {
+      const data = await res.json().catch(() => ({}));
+      toast(errMsg(data), 'error');
+      return;
+    }
+    toast(successMsg, 'success');
+    await loadConnections();
+  } catch { toast('Failed to update connection.', 'error'); }
+  finally { btn.disabled = false; }
 }
 
 async function toggleReportsAccess(cb) {
@@ -531,7 +647,7 @@ function renderDashboard(convs) {
     // Show accepted connections as "start a conversation"
     const accepted = connectionsCache.filter(c => c.status === 'accepted');
     if (accepted.length === 0) {
-      list.innerHTML = emptyState('💬', 'No conversations yet.',
+      list.innerHTML = emptyState('message', 'No conversations yet.',
         'Connect with your ' + (me.role === 'doctor' ? 'patients' : 'doctor') + ' first in the Connections tab.');
     } else {
       list.innerHTML = `<p class="t-sm" style="color:var(--text-mid);margin-bottom:12px">Start a conversation with one of your connections:</p>`;
@@ -932,6 +1048,7 @@ function initPrescriptionUpload() {
    REPORT DETAIL
    ============================================================ */
 let reportState = null; // { report, commentLastId, pollTimer }
+let structuredDocState = null; // { doc, patientId, selectedMarker } -- see openStructuredDocument
 
 async function openReportDetail(reportId) {
   stopConvPolling();
@@ -1049,6 +1166,328 @@ function renderReportDetail(report) {
 
   /* Comment composer */
   initCommentComposer(report.id);
+}
+
+/* ============================================================
+   STRUCTURED DOCUMENT DETAIL (Phase 2 of the reports rebuild)
+   Real per-marker lab data from DataFetch's extraction pipeline
+   (backend/app/routers/structured_reports.py), NOT CareLink's own
+   `reports` table -- a document with no linked conversation report has
+   no stepper, no AI summary, no comments (nothing to show for those).
+   Renders into the same #report-page/#report-layout openReportDetail
+   already uses -- no new page container needed.
+   ============================================================ */
+async function openStructuredDocument(documentId, patientId = null, verificationPollsLeft = 3) {
+  stopConvPolling();
+  stopCommentPolling();
+
+  showPage('report');
+  const layout = document.getElementById('report-layout');
+  layout.innerHTML = '<div class="skeleton skeleton-line w80" style="margin:20px 0"></div>';
+
+  const me = auth.user();
+  patientId = me.role === 'patient' ? me.id : (patientId || structuredDocState?.patientId);
+  if (!patientId) { layout.innerHTML = emptyState('alert', 'No patient selected.', ''); return; }
+
+  try {
+    const res = await apiFetch(`/structured/documents/${documentId}?patient_id=${patientId}`);
+    const doc = await res.json();
+    if (!res.ok) { toast(errMsg(doc), 'error'); return; }
+    structuredDocState = { doc, patientId, selectedMarker: doc.default_trend_marker || null };
+    renderStructuredDocument(doc);
+    if (doc.default_trend_marker) loadMarkerTrend(documentId, doc.default_trend_marker);
+
+    // The independent verification pass (Phase 2) runs as a background
+    // task right after upload -- it may still be "running" by the time
+    // this page loads. A few retries a few seconds apart are enough to
+    // pick up the result without open-ended polling. Deliberately NOT
+    // triggered by "not_run" -- that's also the permanent state of any
+    // document that predates Phase 2 (or was inserted outside
+    // lab_reports.py's upload route) and will never get a verification
+    // row, so polling on it would retry forever for no reason.
+    if (doc.audit?.verification_status === 'running' && verificationPollsLeft > 0) {
+      setTimeout(() => {
+        if (structuredDocState?.doc?.document_id === documentId) {
+          openStructuredDocument(documentId, patientId, verificationPollsLeft - 1);
+        }
+      }, 6000);
+    }
+  } catch { toast('Failed to load document.', 'error'); }
+}
+
+function renderStructuredDocument(doc) {
+  const layout = document.getElementById('report-layout');
+  const dateLabel = doc.document_date ? fmtDateTime(doc.document_date) : 'Undated';
+  const isDoctor = auth.user()?.role === 'doctor';
+
+  layout.innerHTML = `
+    <div>
+      <button class="btn btn-ghost btn-sm" id="back-to-reports-btn" style="margin-bottom:8px">← All reports</button>
+      <div class="report-header">
+        <div class="report-header-info">
+          <h1>${escHtml(doc.category || 'Lab document')}</h1>
+          <div class="report-header-meta">${dateLabel}${doc.original_filename ? ' · ' + escHtml(doc.original_filename) : ''}</div>
+        </div>
+      </div>
+      <div id="retraction-banner" class="retraction-banner" style="display:${doc.retracted ? 'block' : 'none'}">
+        ⚠ This report has been retracted by a doctor — see Doctor's Notes below for what's correct.
+      </div>
+    </div>
+    <div class="structured-detail-grid">
+      <div class="structured-detail-main">
+        <div class="blueprint marker-table">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div class="marker-head">
+            <div>Marker</div><div>Value</div><div>Reference range</div><div style="text-align:right">Δ vs previous</div>
+          </div>
+          <div id="marker-rows">${renderMarkerTable(doc.markers)}</div>
+        </div>
+        <div class="blueprint" style="padding:18px">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <h3 style="margin:0 0 14px" id="trend-title">${doc.default_trend_marker ? escHtml(doc.markers.find(m => m.normalized_name === doc.default_trend_marker)?.test_name || '') + ' · trend' : 'Trend'}</h3>
+          <div id="trend-trace-container"><div class="trend-empty">Select a marker to see its trend.</div></div>
+        </div>
+      </div>
+      <div class="structured-detail-side">
+        <div class="blueprint" style="padding:18px">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div class="doc-kicker">Source document</div>
+          <div class="source-preview-box">
+            <div class="t-xs">${doc.has_source_file ? 'Preview unavailable yet' : 'Original file not stored'}</div>
+          </div>
+          <div class="source-actions">
+            <button class="btn btn-secondary btn-sm" id="doc-download-btn" ${doc.has_source_file ? '' : 'disabled'}>Download</button>
+            ${isDoctor ? `<button class="btn btn-primary btn-sm" id="doc-review-btn" ${doc.doctor_reviewed ? 'disabled' : ''}>${doc.doctor_reviewed ? 'Reviewed ✓' : 'Mark reviewed'}</button>` : ''}
+          </div>
+        </div>
+        ${renderExtractionAudit(doc.audit)}
+        <div class="blueprint" style="padding:18px">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div class="doc-kicker">Doctor's notes</div>
+          <div id="doc-notes-list" class="t-xs">Loading…</div>
+          ${isDoctor ? `
+            <textarea id="doc-note-input" rows="3" placeholder="Add a note for this report (optional)" style="width:100%;margin-top:10px;resize:vertical"></textarea>
+            <label class="t-xs" style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer">
+              <input type="checkbox" id="doc-note-retract-checkbox">
+              Mark this report as retracted (requires a note explaining what's correct)
+            </label>
+            <button class="btn btn-secondary btn-sm" id="doc-note-save-btn" style="margin-top:8px">Save note</button>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+
+  layout.querySelector('#back-to-reports-btn').addEventListener('click', () => {
+    showPage('reports');
+    loadReportsPage();
+  });
+
+  layout.querySelectorAll('.marker-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const marker = row.dataset.normalizedName;
+      const label = row.dataset.testName;
+      layout.querySelectorAll('.marker-row').forEach((r) => r.classList.remove('is-selected'));
+      row.classList.add('is-selected');
+      layout.querySelector('#trend-title').textContent = `${label} · trend`;
+      loadMarkerTrend(structuredDocState.doc.document_id, marker);
+    });
+  });
+
+  const downloadBtn = layout.querySelector('#doc-download-btn');
+  if (downloadBtn && doc.has_source_file) {
+    // fetch+blob, not window.open/<a href> -- this is an authenticated
+    // route (real medical documents, no public URL), and a plain
+    // navigation can't carry the Authorization header. Same pattern
+    // downloadPdf() already uses for CareLink reports.
+    downloadBtn.addEventListener('click', async () => {
+      downloadBtn.disabled = true;
+      try {
+        const res = await apiFetch(`/structured/documents/${doc.document_id}/file?patient_id=${structuredDocState.patientId}`);
+        if (!res.ok) { toast('Download failed.', 'error'); return; }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${(doc.category || 'document').replace(/\s+/g, '_')}.pdf`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      } catch { toast('Download failed.', 'error'); }
+      finally { downloadBtn.disabled = false; }
+    });
+  }
+
+  loadDocumentNotes(doc.document_id, structuredDocState.patientId);
+  const noteSaveBtn = layout.querySelector('#doc-note-save-btn');
+  if (noteSaveBtn) {
+    noteSaveBtn.addEventListener('click', async () => {
+      const input = layout.querySelector('#doc-note-input');
+      const retractCheckbox = layout.querySelector('#doc-note-retract-checkbox');
+      const retracted = !!retractCheckbox?.checked;
+      if (retracted && !input.value.trim()) { toast("A retraction needs a note explaining what's correct.", 'error'); return; }
+      noteSaveBtn.disabled = true;
+      try {
+        const res = await apiFetch(`/structured/documents/${doc.document_id}/notes?patient_id=${structuredDocState.patientId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ content: input.value, retracted }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) { toast(errMsg(data), 'error'); return; }
+        toast(data ? 'Note saved.' : 'Note cleared.', 'success');
+        loadDocumentNotes(doc.document_id, structuredDocState.patientId);
+      } catch { toast('Failed to save note.', 'error'); }
+      finally { noteSaveBtn.disabled = false; }
+    });
+  }
+
+  const reviewBtn = layout.querySelector('#doc-review-btn');
+  if (reviewBtn && !doc.doctor_reviewed) {
+    reviewBtn.addEventListener('click', async () => {
+      reviewBtn.disabled = true;
+      try {
+        const res = await apiFetch(`/structured/documents/${doc.document_id}/review?patient_id=${structuredDocState.patientId}`, { method: 'POST' });
+        const updated = await res.json().catch(() => ({}));
+        if (!res.ok) { toast(errMsg(updated), 'error'); reviewBtn.disabled = false; return; }
+        reviewBtn.textContent = 'Reviewed ✓';
+        doc.doctor_reviewed = true;
+        if (structuredDocState) structuredDocState.doc.doctor_reviewed = true;
+        doctorNotificationsCache = doctorNotificationsCache.filter(n => n.document_id !== doc.document_id);
+        updateReportsBadge();
+        toast('Marked reviewed.', 'success');
+      } catch { toast('Failed to mark reviewed.', 'error'); reviewBtn.disabled = false; }
+    });
+  }
+}
+
+function renderMarkerTable(markers) {
+  if (!markers.length) return '<div class="t-xs" style="padding:16px 18px">No markers extracted from this document.</div>';
+  return markers.map((m) => {
+    const geometry = markerBarGeometry(m);
+    const rangeCell = geometry
+      ? `<div class="marker-range-bar">
+           <div class="marker-range-band" style="left:${geometry.bandLeftPct}%;right:${geometry.bandRightPct}%"></div>
+           <div class="marker-range-tick" style="left:${geometry.tickLeftPct}%"></div>
+         </div>
+         <div class="marker-range-text">${escHtml(m.normal_range || '')}</div>`
+      : `<div class="marker-range-text">${escHtml(m.normal_range || '—')}</div>`;
+    const deltaText = m.delta_value == null ? '—' : `${m.delta_value > 0 ? '+' : ''}${m.delta_value.toFixed(1)}`;
+    const reviewFlag = m.needs_review
+      ? ' <span class="marker-review-flag" title="The independent verifier read a different value for this marker — worth double-checking against the source document.">⚠</span>'
+      : '';
+    return `
+      <div class="marker-row${m.is_abnormal ? ' is-abnormal' : ''}" data-normalized-name="${escHtml(m.normalized_name)}" data-test-name="${escHtml(m.test_name)}">
+        <div><div class="marker-name">${escHtml(m.test_name)}${reviewFlag}</div><div class="marker-unit">${escHtml(m.unit || '')}</div></div>
+        <div class="marker-value">${escHtml(m.value)}</div>
+        <div class="marker-range-cell">${rangeCell}</div>
+        <div class="marker-delta">${deltaText}</div>
+      </div>`;
+  }).join('');
+}
+
+function markerBarGeometry(marker) {
+  if (marker.ref_low == null && marker.ref_high == null) return null;
+  if (marker.value_numeric == null) return null;
+  const low = marker.ref_low ?? (marker.ref_high - Math.abs(marker.ref_high) * 0.5);
+  const high = marker.ref_high ?? (marker.ref_low + Math.abs(marker.ref_low) * 0.5);
+  if (!(high > low)) return null;
+  // Pad the domain 30% past the reference band on each side so the value
+  // tick has room to sit outside the band when the marker is abnormal,
+  // same visual idea as the mockup's fixed-but-plausible percentages.
+  const pad = (high - low) * 0.3 || 1;
+  const domainLow = Math.min(low - pad, marker.value_numeric - pad * 0.2);
+  const domainHigh = Math.max(high + pad, marker.value_numeric + pad * 0.2);
+  const span = domainHigh - domainLow || 1;
+  const bandLeftPct = ((low - domainLow) / span) * 100;
+  const bandRightPct = 100 - ((high - domainLow) / span) * 100;
+  const tickLeftPct = Math.min(98, Math.max(0, ((marker.value_numeric - domainLow) / span) * 100));
+  return { bandLeftPct: bandLeftPct.toFixed(1), bandRightPct: bandRightPct.toFixed(1), tickLeftPct: tickLeftPct.toFixed(1) };
+}
+
+async function loadMarkerTrend(documentId, normalizedMarkerName) {
+  const container = document.getElementById('trend-trace-container');
+  if (!container) return;
+  container.innerHTML = '<div class="trend-empty">Loading…</div>';
+  try {
+    const res = await apiFetch(`/structured/documents/${documentId}/markers/${encodeURIComponent(normalizedMarkerName)}/history?patient_id=${structuredDocState.patientId}`);
+    const points = res.ok ? await res.json() : [];
+    container.innerHTML = renderTrendTrace(points);
+  } catch { container.innerHTML = '<div class="trend-empty">Failed to load trend.</div>'; }
+}
+
+function renderTrendTrace(history) {
+  const numeric = history.filter((p) => p.value_numeric != null);
+  if (!numeric.length) return '<div class="trend-empty">No numeric history for this marker yet.</div>';
+  if (numeric.length === 1) {
+    const p = numeric[0];
+    return `<div class="trend-trace"><div class="trend-bar-col">
+      <div class="trend-bar-value">${p.value_numeric}</div>
+      <div class="trend-bar is-latest" style="height:70px"></div>
+      <div class="trend-bar-label">${p.document_date ? fmtDateTime(p.document_date).slice(0, 6) : '—'}</div>
+    </div></div><div class="trend-empty">Only one reading on file — trend needs at least two.</div>`;
+  }
+  const vals = numeric.map((p) => p.value_numeric);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = (max - min) || 1;
+  const bars = numeric.map((p, i) => {
+    const heightPx = 20 + ((p.value_numeric - min) / span) * 110;
+    const label = p.document_date ? fmtDateTime(p.document_date).slice(0, 6) : '—';
+    return `<div class="trend-bar-col">
+      <div class="trend-bar-value">${p.value_numeric}</div>
+      <div class="trend-bar${i === numeric.length - 1 ? ' is-latest' : ''}" style="height:${heightPx}px"></div>
+      <div class="trend-bar-label">${label}</div>
+    </div>`;
+  }).join('');
+  return `<div class="trend-trace">${bars}</div>`;
+}
+
+async function loadDocumentNotes(documentId, patientId) {
+  const listEl = document.getElementById('doc-notes-list');
+  if (!listEl) return;
+  try {
+    const res = await apiFetch(`/structured/documents/${documentId}/notes?patient_id=${patientId}`);
+    const notes = res.ok ? await res.json() : [];
+    listEl.innerHTML = notes.length
+      ? notes.map(n => `
+          <div class="doc-note-row${n.retracted ? ' is-retracted' : ''}">
+            <div class="t-xs" style="opacity:.7">${escHtml(n.doctor_name)} · ${relTime(n.updated_at)}${n.retracted ? ' · <strong>RETRACTED</strong>' : ''}</div>
+            <div>${escHtml(n.content)}</div>
+          </div>`).join('')
+      : 'No notes yet.';
+
+    // Authoritative retracted state for the banner is "any doctor's note
+    // on this document is retracted" -- not just the current doctor's own
+    // save response, since multiple doctors can share access to one
+    // patient's reports.
+    const banner = document.getElementById('retraction-banner');
+    if (banner) banner.style.display = notes.some(n => n.retracted) ? 'block' : 'none';
+
+    const input = document.getElementById('doc-note-input');
+    const retractCheckbox = document.getElementById('doc-note-retract-checkbox');
+    if (input) {
+      const mine = notes.find(n => n.doctor_id === auth.user().id);
+      input.value = mine ? mine.content : '';
+      if (retractCheckbox) retractCheckbox.checked = !!(mine && mine.retracted);
+    }
+  } catch { listEl.innerHTML = 'Failed to load notes.'; }
+}
+
+function renderExtractionAudit(audit) {
+  const statusFooter = {
+    not_run: 'Verification not run yet.',
+    no_source: 'Original file not stored — cannot verify.',
+    running: 'Verification in progress…',
+    complete: audit.verified_at ? `Verified ${relTime(audit.verified_at)}` : 'Verified.',
+    failed: `Verification failed${audit.error ? ': ' + escHtml(audit.error) : '.'}`,
+  }[audit.verification_status] || '';
+
+  return `
+    <div class="blueprint" style="padding:18px">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="doc-kicker">Extraction audit</div>
+      <div class="audit-panel-row"><span>Markers found</span><span class="audit-value">${audit.markers_found}</span></div>
+      <div class="audit-panel-row"><span>Confidence ≥ 0.95</span><span class="audit-value">${audit.high_confidence}</span></div>
+      <div class="audit-panel-row"><span>Needs review</span><span class="audit-value${audit.needs_review > 0 ? ' is-flagged' : ''}">${audit.needs_review}</span></div>
+      <div class="audit-footer">${statusFooter}</div>
+    </div>`;
 }
 
 function renderStepper(currentStatus) {
@@ -1353,14 +1792,62 @@ async function loadReportsPage() {
 async function renderPatientReportsPage(layout) {
   const me = auth.user();
   try {
-    const [repRes, prescRes] = await Promise.all([
+    const [repRes, prescRes, docRes] = await Promise.all([
       apiFetch(`/reports?patient_id=${me.id}`),
-      apiFetch(`/prescriptions?patient_id=${me.id}`)
+      apiFetch(`/prescriptions?patient_id=${me.id}`),
+      apiFetch(`/structured/documents?patient_id=${me.id}`)
     ]);
     const reports = repRes.ok ? await repRes.json() : [];
     const prescriptions = prescRes.ok ? await prescRes.json() : [];
-    renderReportsAndPrescriptionsList(layout, reports, prescriptions);
-  } catch { layout.innerHTML = emptyState('⚠️', 'Failed to load reports.', ''); }
+    const documents = docRes.ok ? await docRes.json() : [];
+    renderReportsAndPrescriptionsList(layout, reports, prescriptions, documents, me.id);
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load reports.', ''); }
+}
+
+/* ============================================================
+   LAB REPORT UPLOAD (Phase 4) -- patient-only, feeds the structured
+   extraction pipeline via POST /me/lab-reports (routers/lab_reports.py).
+   That route shells out to DataFetch's OCR pipeline SYNCHRONOUSLY (up to
+   its own 180s timeout) before responding, so this really can take up to
+   three minutes -- the button says so rather than looking stuck.
+   ============================================================ */
+function initLabReportUpload() {
+  const btn = document.getElementById('upload-lab-report-btn');
+  const input = document.getElementById('lab-report-file-input');
+  if (!btn || !input) return;
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const file = input.files[0];
+    input.value = ''; // allow re-selecting the same file next time
+    if (file) uploadLabReport(file);
+  });
+}
+
+async function uploadLabReport(file) {
+  const btn = document.getElementById('upload-lab-report-btn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Extracting… (up to 3 min)';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await apiFetch('/me/lab-reports', { method: 'POST', body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { toast(errMsg(data), 'error'); return; }
+
+    if (data.status === 'queued') {
+      toast('Upload received — extraction is still running in the background. Check back shortly.', '');
+    } else {
+      toast('Report processed — markers extracted.', 'success');
+    }
+    loadReportsPage();
+  } catch (err) {
+    toast('Upload failed: ' + (err.message || 'could not reach the server'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 }
 
 async function renderDoctorReportsPicker(layout) {
@@ -1374,14 +1861,14 @@ async function renderDoctorReportsPicker(layout) {
     const grantedPatientIds = new Set(grants.map(g => g.patient_id));
 
     if (patients.length === 0) {
-      layout.innerHTML = emptyState('🩺', 'No connected patients yet.', 'Connect with a patient first from the Connections tab.');
+      layout.innerHTML = emptyState('people', 'No connected patients yet.', 'Connect with a patient first from the Connections tab.');
       return;
     }
 
     layout.innerHTML = `<div class="patient-picker" id="patient-picker"></div><div id="doctor-reports-list"></div>`;
     const picker = layout.querySelector('#patient-picker');
     const resultsEl = layout.querySelector('#doctor-reports-list');
-    resultsEl.innerHTML = emptyState('👈', 'Select a patient to view their reports.', '');
+    resultsEl.innerHTML = emptyState('pointLeft', 'Select a patient to view their reports.', '');
 
     patients.forEach(p => {
       const conn = connectionsCache.find(c => c.status === 'accepted' && c.patient_id === p.id);
@@ -1400,76 +1887,130 @@ async function renderDoctorReportsPicker(layout) {
       });
       picker.appendChild(btn);
     });
-  } catch { layout.innerHTML = emptyState('⚠️', 'Failed to load.', ''); }
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load.', ''); }
 }
 
 async function loadDoctorPatientReports(patient, hasGrant, resultsEl) {
   if (!hasGrant) {
-    resultsEl.innerHTML = emptyState('🔒', `${patient.name} hasn't shared their reports history with you yet.`,
+    resultsEl.innerHTML = emptyState('lock', `${patient.name} hasn't shared their reports history with you yet.`,
       'They can turn this on from their Connections page.');
     return;
   }
   resultsEl.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
   try {
-    const [repRes, prescRes] = await Promise.all([
+    const [repRes, prescRes, docRes] = await Promise.all([
       apiFetch(`/reports?patient_id=${patient.id}`),
-      apiFetch(`/prescriptions?patient_id=${patient.id}`)
+      apiFetch(`/prescriptions?patient_id=${patient.id}`),
+      apiFetch(`/structured/documents?patient_id=${patient.id}`)
     ]);
     const reports = repRes.ok ? await repRes.json() : [];
     const prescriptions = prescRes.ok ? await prescRes.json() : [];
-    renderReportsAndPrescriptionsList(resultsEl, reports, prescriptions);
-  } catch { resultsEl.innerHTML = emptyState('⚠️', 'Failed to load reports.', ''); }
+    const documents = docRes.ok ? await docRes.json() : [];
+    renderReportsAndPrescriptionsList(resultsEl, reports, prescriptions, documents, patient.id);
+  } catch { resultsEl.innerHTML = emptyState('alert', 'Failed to load reports.', ''); }
 }
 
-/* Shared by both the patient's own view and a doctor's per-patient view. */
-function renderReportsAndPrescriptionsList(container, reports, prescriptions) {
+/* Shared by both the patient's own view and a doctor's per-patient view.
+   patientId is the CareLink id whose reports these are -- passed through
+   explicitly to reportListCard so a doctor's very first click on a
+   structured document has one to send. It can't be derived from
+   structuredDocState here (that's only populated *inside*
+   openStructuredDocument, after it already needed this value). */
+function renderReportsAndPrescriptionsList(container, reports, prescriptions, documents = [], patientId = null) {
   const items = [
-    ...reports.map(r => ({ ...r, _type: 'rep' })),
-    ...prescriptions.map(p => ({ ...p, _type: 'presc' }))
-  ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    ...reports.map(r => ({ ...r, _type: 'rep', _date: r.timestamp })),
+    ...documents.map(d => ({ ...d, _type: 'doc', _date: d.document_date || d.uploaded_at })),
+    ...prescriptions.map(p => ({ ...p, _type: 'presc', _date: p.timestamp }))
+  ].sort((a, b) => new Date(b._date || 0) - new Date(a._date || 0));
+
+  // "Labs" groups CareLink reports + structured documents together --
+  // matches the mockup's exact two-category chip split (All / Labs /
+  // Prescriptions). They stay separate _type values (different detail
+  // views, different click targets) purely for filtering here.
+  const labsCount = reports.length + documents.length;
 
   container.innerHTML = `
-    <div class="reports-filter-tabs">
-      <button class="filter-tab active" data-filter="all">All (${items.length})</button>
-      <button class="filter-tab" data-filter="rep">Reports (${reports.length})</button>
-      <button class="filter-tab" data-filter="presc">Prescriptions (${prescriptions.length})</button>
+    <div class="reports-toolbar">
+      <div class="reports-filter-tabs">
+        <button class="tag tag-accent report-filter-chip active" data-filter="all">All ${items.length}</button>
+        <button class="tag tag-outline report-filter-chip" data-filter="labs">Labs ${labsCount}</button>
+        <button class="tag tag-outline report-filter-chip" data-filter="presc">Prescriptions ${prescriptions.length}</button>
+      </div>
     </div>
-    <div class="reports-list" id="reports-list"></div>`;
+    <div class="reports-grid" id="reports-list"></div>`;
 
   const listEl = container.querySelector('#reports-list');
-  function renderFiltered(filter) {
-    const filtered = filter === 'all' ? items : items.filter(i => i._type === filter);
-    listEl.innerHTML = '';
-    if (filtered.length === 0) { listEl.innerHTML = emptyState('📄', 'Nothing here yet.', ''); return; }
-    filtered.forEach(item => listEl.appendChild(reportListCard(item)));
+  function matches(item, filter) {
+    if (filter === 'all') return true;
+    if (filter === 'labs') return item._type === 'rep' || item._type === 'doc';
+    return item._type === filter;
   }
-  container.querySelectorAll('.filter-tab').forEach(tab => {
+  function renderFiltered(filter) {
+    const filtered = items.filter(i => matches(i, filter));
+    listEl.innerHTML = '';
+    if (filtered.length === 0) { listEl.innerHTML = emptyState('file', 'Nothing here yet.', ''); return; }
+    filtered.forEach(item => listEl.appendChild(reportListCard(item, patientId)));
+  }
+  container.querySelectorAll('.report-filter-chip').forEach(tab => {
     tab.addEventListener('click', () => {
-      container.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
+      container.querySelectorAll('.report-filter-chip').forEach((t) => {
+        t.classList.remove('active', 'tag-accent');
+        t.classList.add('tag-outline');
+      });
+      tab.classList.add('active', 'tag-accent');
+      tab.classList.remove('tag-outline');
       renderFiltered(tab.dataset.filter);
     });
   });
   renderFiltered('all');
 }
 
-function reportListCard(item) {
-  const isPresc = item._type === 'presc';
+/* Same 4-corner blueprint card the mockup uses for every report-list
+   entry, branched three ways by _type -- same visual language, different
+   content/click target per source. */
+function reportListCard(item, patientId = null) {
   const div = document.createElement('div');
-  div.className = 'conv-card';
-  div.innerHTML = `
-    <div class="report-icon ${isPresc ? 'prescription-icon' : ''}">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-      </svg>
-    </div>
-    <div class="conv-card-info">
-      <div class="conv-card-name">${escHtml(item.display_name || (isPresc ? 'Prescription' : 'Report'))}</div>
-      <div class="conv-card-preview">${isPresc ? 'Prescription' : fmtStatus(item.status)} · ${relTime(item.timestamp)}</div>
-    </div>`;
-  div.addEventListener('click', () => { isPresc ? openPrescriptionDetail(item.id) : openReportDetail(item.id); });
+  div.className = 'blueprint report-card';
+  const corners = '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>';
+
+  if (item._type === 'doc') {
+    const label = (item.category || 'Lab document').replace(/_/g, ' ');
+    const dateLabel = item.document_date ? fmtDateTime(item.document_date) : 'Undated';
+    const isUnreviewed = auth.user()?.role === 'doctor' && !item.doctor_reviewed;
+    const badges = [
+      item.retracted ? '<span class="tag" style="padding:1px 6px;font-size:10px;background:var(--color-accent-700);color:#fff">Retracted</span>' : '',
+      isUnreviewed ? '<span class="tag tag-accent" style="padding:1px 6px;font-size:10px">New</span>' : '',
+    ].filter(Boolean).join(' ');
+    div.innerHTML = `${corners}
+      <div class="report-card-kicker">${escHtml(label)} · ${dateLabel}${badges ? ' · ' + badges : ''}</div>
+      <h3 class="report-card-title">${escHtml(label)}</h3>
+      <p class="report-card-desc">${item.marker_count} marker${item.marker_count === 1 ? '' : 's'}${item.abnormal_count ? ' · ' + item.abnormal_count + ' outside reference range' : ' · all within range'}</p>
+      <div class="report-card-spark">${sparkBars(item.spark)}</div>`;
+    div.addEventListener('click', () => openStructuredDocument(item.document_id, patientId));
+  } else if (item._type === 'presc') {
+    div.innerHTML = `${corners}
+      <div class="report-card-kicker">Prescription · ${relTime(item.timestamp)}</div>
+      <h3 class="report-card-title">${escHtml(item.display_name || 'Prescription')}</h3>
+      <p class="report-card-desc">Shared ${relTime(item.timestamp)}</p>
+      <span class="tag tag-outline">Prescription</span>`;
+    div.addEventListener('click', () => openPrescriptionDetail(item.id));
+  } else {
+    const reviewed = item.status === 'reviewed';
+    div.innerHTML = `${corners}
+      <div class="report-card-kicker">Report · ${relTime(item.timestamp)}</div>
+      <h3 class="report-card-title">${escHtml(item.display_name || 'Report')}</h3>
+      <p class="report-card-desc">${fmtStatus(item.status)}${item.ai_summary ? ' · AI summary ready' : ''}</p>
+      <span class="tag ${reviewed ? 'tag-outline' : 'tag-accent'}">${fmtStatus(item.status)}</span>`;
+    div.addEventListener('click', () => openReportDetail(item.id));
+  }
   return div;
+}
+
+/* Small sparkline used on a lab-document card -- values are already
+   normalized 0-1 by the backend (StructuredDocumentSummaryOut.spark). */
+function sparkBars(values) {
+  if (!values || !values.length) return '';
+  return values.map((v) => `<div class="spark-bar" style="height:${4 + v * 16}px"></div>`).join('');
 }
 
 /* ============================================================
@@ -1481,12 +2022,13 @@ async function loadCalendarPage() {
   layout.innerHTML = `
     <div class="calendar-toolbar">
       <div class="calendar-scope-tabs">
-        <button class="filter-tab active" data-scope="upcoming">Upcoming</button>
-        <button class="filter-tab" data-scope="past">Past</button>
+        <button class="tag tag-accent calendar-scope-chip active" data-scope="upcoming">Upcoming</button>
+        <button class="tag tag-outline calendar-scope-chip" data-scope="past">Past</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-appointment-btn">+ Add appointment</button>
     </div>
-    <div class="add-appointment-form" id="add-appointment-form">
+    <div class="blueprint add-appointment-form" id="add-appointment-form">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
       <div class="error-banner" id="appt-form-error" style="display:none"></div>
       <div class="upload-form-row">
         <div class="field">
@@ -1541,10 +2083,14 @@ function wireCalendarToolbar(layout) {
   toggleBtn.addEventListener('click', () => { form.classList.toggle('open'); errEl.style.display = 'none'; });
   cancelBtn.addEventListener('click', () => { form.classList.remove('open'); errEl.style.display = 'none'; });
 
-  layout.querySelectorAll('.calendar-scope-tabs .filter-tab').forEach(tab => {
+  layout.querySelectorAll('.calendar-scope-chip').forEach(tab => {
     tab.addEventListener('click', () => {
-      layout.querySelectorAll('.calendar-scope-tabs .filter-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
+      layout.querySelectorAll('.calendar-scope-chip').forEach((t) => {
+        t.classList.remove('active', 'tag-accent');
+        t.classList.add('tag-outline');
+      });
+      tab.classList.add('active', 'tag-accent');
+      tab.classList.remove('tag-outline');
       loadAppointmentsList(tab.dataset.scope);
     });
   });
@@ -1577,7 +2123,12 @@ function wireCalendarToolbar(layout) {
       document.getElementById('appt-datetime').value = '';
       document.getElementById('appt-reason').value = '';
       toast('Appointment created.', 'success');
-      layout.querySelectorAll('.calendar-scope-tabs .filter-tab').forEach(t => t.classList.toggle('active', t.dataset.scope === 'upcoming'));
+      layout.querySelectorAll('.calendar-scope-chip').forEach((t) => {
+        const isUpcoming = t.dataset.scope === 'upcoming';
+        t.classList.toggle('active', isUpcoming);
+        t.classList.toggle('tag-accent', isUpcoming);
+        t.classList.toggle('tag-outline', !isUpcoming);
+      });
       loadAppointmentsList('upcoming');
     } catch { errEl.textContent = 'Failed to create appointment.'; errEl.style.display = 'block'; }
     finally { submitBtn.classList.remove('btn-loading'); submitBtn.disabled = false; }
@@ -1592,11 +2143,11 @@ async function loadAppointmentsList(scope) {
     const data = res.ok ? await res.json() : [];
     listEl.innerHTML = '';
     if (data.length === 0) {
-      listEl.innerHTML = emptyState('🗓️', scope === 'upcoming' ? 'No upcoming appointments.' : 'No past appointments.', '');
+      listEl.innerHTML = emptyState('calendar', scope === 'upcoming' ? 'No upcoming appointments.' : 'No past appointments.', '');
       return;
     }
     data.forEach(a => listEl.appendChild(appointmentCard(a)));
-  } catch { listEl.innerHTML = emptyState('⚠️', 'Failed to load appointments.', ''); }
+  } catch { listEl.innerHTML = emptyState('alert', 'Failed to load appointments.', ''); }
 }
 
 const REMINDER_LABELS = { '2h': 'In ~2 hours', '1d': 'Tomorrow', '3d': 'In ~3 days' };
@@ -1605,11 +2156,12 @@ function appointmentCard(appt) {
   const me = auth.user();
   const other = me.id === appt.patient_id ? appt.doctor : appt.patient;
   const div = document.createElement('div');
-  div.className = 'conv-card';
+  div.className = 'blueprint appointment-card';
   const reminderBadge = appt.active_reminder
-    ? `<span class="reminder-badge reminder-${appt.active_reminder}">${REMINDER_LABELS[appt.active_reminder]}</span>` : '';
-  const cancelledBadge = appt.status === 'cancelled' ? `<span class="status-pill rejected">Cancelled</span>` : '';
+    ? `<span class="reminder-tag reminder-${appt.active_reminder}">${REMINDER_LABELS[appt.active_reminder]}</span>` : '';
+  const cancelledBadge = appt.status === 'cancelled' ? `<span class="status-tag-cancelled">Cancelled</span>` : '';
   div.innerHTML = `
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
     <div class="avatar">${initials(other.name)}</div>
     <div class="conv-card-info">
       <div class="conv-card-name">${escHtml(other.name)}${other.specialization ? ` · ${escHtml(other.specialization)}` : ''}</div>
@@ -1625,7 +2177,7 @@ function appointmentCard(appt) {
       const data = await res.json();
       if (!res.ok) { toast(errMsg(data), 'error'); return; }
       toast('Appointment cancelled.', 'success');
-      const activeScope = document.querySelector('.calendar-scope-tabs .filter-tab.active')?.dataset.scope || 'upcoming';
+      const activeScope = document.querySelector('.calendar-scope-chip.active')?.dataset.scope || 'upcoming';
       loadAppointmentsList(activeScope);
     } catch { toast('Failed to cancel.', 'error'); }
     finally { b.disabled = false; }
@@ -1645,7 +2197,7 @@ async function loadProfilePage() {
     if (!res.ok) { toast(errMsg(user), 'error'); return; }
     auth.updateUser(user);
     renderProfilePage(user);
-  } catch { layout.innerHTML = emptyState('⚠️', 'Failed to load profile.', ''); }
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load profile.', ''); }
 }
 
 function renderProfilePage(user) {
@@ -2196,14 +2748,102 @@ function initAssistantPage() {
    ============================================================ */
 let evidenceInitialized = false;
 
-function evidenceBubble(role, html) {
+function evidenceBubble(role, html, extraClass = '') {
   const thread = document.getElementById('evidence-thread');
   const row = document.createElement('div');
   row.className = 'msg-row' + (role === 'user' ? ' mine' : '');
-  row.innerHTML = `<div class="msg-bubble" style="max-width:640px">${html}</div>`;
+  row.innerHTML = `<div class="msg-bubble${extraClass ? ' ' + extraClass : ''}" style="max-width:640px">${html}</div>`;
   thread.appendChild(row);
   thread.scrollTop = thread.scrollHeight;
   return row;
+}
+
+/* Neither of these numbers comes from the API as a single field --
+   EvidenceBoard's own contract never returns one "overall score" (see
+   api/contract.md's Report schema). Both are real aggregates computed
+   here from fields the API does return, scoped to the claims/sources
+   that actually made it into the answer (kept + flagged), not the
+   whole appraised pool -- a source the pipeline looked at but never
+   cited shouldn't move a score describing what's actually being shown. */
+function computeEvidenceScores(report) {
+  const shownClaims = (report.claims || []).filter((c) => c.status === 'kept' || c.status === 'flagged');
+  if (!shownClaims.length) return null;
+
+  const citedSids = new Set();
+  shownClaims.forEach((c) => (c.citations || []).forEach((cit) => citedSids.add(cit.sid)));
+  const evidenceBySid = {};
+  (report.evidence || []).forEach((ev) => { evidenceBySid[ev.sid] = ev; });
+  const relevanceScores = [...citedSids].map((sid) => evidenceBySid[sid]?.relevance_score).filter((n) => typeof n === 'number');
+  const confidences = shownClaims.map((c) => c.confidence).filter((n) => typeof n === 'number');
+
+  const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  return {
+    relevanceScore: relevanceScores.length ? Math.round(avg(relevanceScores)) : null,
+    relevanceCount: relevanceScores.length,
+    confidencePct: confidences.length ? Math.round(avg(confidences) * 100) : null,
+    confidenceCount: confidences.length,
+  };
+}
+
+function renderEvidenceScoreRow(scores) {
+  if (!scores) return '';
+  const tile = (value, label, caption) => value == null ? '' : `
+    <div class="evidence-score-tile">
+      <div class="score-value">${value}${label.includes('confidence') ? '%' : '/100'}</div>
+      <div class="score-label">${escHtml(label)}</div>
+      <div class="score-caption">${escHtml(caption)}</div>
+    </div>`;
+  return `<div class="evidence-score-row">
+    ${tile(scores.relevanceScore, 'Evidence score', `Avg. relevance of ${scores.relevanceCount} cited source${scores.relevanceCount === 1 ? '' : 's'}`)}
+    ${tile(scores.confidencePct, 'Verification confidence', `Avg. entailment confidence, ${scores.confidenceCount} claim${scores.confidenceCount === 1 ? '' : 's'}`)}
+  </div>`;
+}
+
+function renderEvidenceClaimRow(claim) {
+  const verdictClass = ['SUPPORTS', 'REFUTES', 'NEI'].includes(claim.verdict) ? claim.verdict : '';
+  const verdictTag = claim.verdict ? `<span class="evidence-claim-verdict ${verdictClass}">${escHtml(claim.verdict)}</span>` : '';
+  const flaggedTag = claim.status === 'flagged' ? '<span class="evidence-claim-flag">⚠ flagged</span>' : '';
+  const confidencePct = typeof claim.confidence === 'number' ? Math.round(claim.confidence * 100) + '% confidence' : '';
+  const citations = (claim.citations || []).map((cit) => cit.url
+    ? `<a href="${escHtml(cit.url)}" target="_blank" rel="noopener">[${escHtml(cit.sid)}] ${escHtml(cit.citation_key)}</a>`
+    : `<span class="t-xs">[${escHtml(cit.sid)}] ${escHtml(cit.citation_key)}</span>`
+  ).join('');
+  return `<div class="evidence-claim-row">
+    <div>${verdictTag}${escHtml(claim.text)}</div>
+    <div class="evidence-claim-meta">${[confidencePct, flaggedTag].filter(Boolean).join(' · ')}</div>
+    ${citations ? `<div class="evidence-claim-citations">${citations}</div>` : ''}
+  </div>`;
+}
+
+/* Some journals (structured abstracts) embed literal markup in the
+   abstract text itself, e.g. "<h4>Purpose of review</h4>..." -- seen
+   live in real EvidenceBoard data. Strip tags rather than render them:
+   this is third-party text, not trusted HTML to execute as innerHTML. */
+function stripHtmlTags(text) {
+  return text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function renderEvidenceSourceCard(ev) {
+  const warnings = [];
+  if (ev.is_retracted) warnings.push('<span class="tag" style="border:1px solid var(--red);color:var(--red)">Retracted</span>');
+  if (ev.is_preprint) warnings.push('<span class="tag" style="border:1px solid var(--amber);color:var(--amber)">Preprint, not peer reviewed</span>');
+  if (ev.study_design) warnings.push(`<span class="tag tag-outline">${escHtml(ev.study_design.replace(/_/g, ' '))}</span>`);
+  const abstractId = `evidence-abstract-${ev.sid}`;
+  const link = ev.url || (ev.doi ? `https://doi.org/${ev.doi}` : null);
+  return `<div class="blueprint evidence-source-card">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div class="evidence-source-title">${escHtml(ev.sid)} · ${link ? `<a href="${escHtml(link)}" target="_blank" rel="noopener">${escHtml(ev.title || ev.citation_key)}</a>` : escHtml(ev.title || ev.citation_key)}</div>
+    <div class="evidence-source-meta">${[ev.journal, ev.publication_date, ev.source].filter(Boolean).map(escHtml).join(' · ')}</div>
+    ${warnings.length ? `<div class="evidence-source-tags">${warnings.join('')}</div>` : ''}
+    ${typeof ev.relevance_score === 'number' ? `
+      <div class="evidence-relevance-row">
+        <div class="evidence-relevance-bar"><div class="evidence-relevance-fill" style="width:${ev.relevance_score}%"></div></div>
+        <div class="evidence-relevance-num">${ev.relevance_score}/100</div>
+      </div>` : ''}
+    ${ev.abstract ? `
+      <div class="evidence-abstract" id="${abstractId}">${escHtml(stripHtmlTags(ev.abstract))}</div>
+      <span class="evidence-abstract-toggle" data-target="${abstractId}">Show full abstract</span>` : ''}
+  </div>`;
 }
 
 function renderEvidenceAnswer(report) {
@@ -2213,17 +2853,48 @@ function renderEvidenceAnswer(report) {
     return;
   }
   const f = report.funnel || {};
-  let html = `${escHtml(report.answer_text || '')}`;
+  const scores = computeEvidenceScores(report);
+  const shownClaims = (report.claims || []).filter((c) => c.status === 'kept' || c.status === 'flagged');
+  // Best-first already (see api/contract.md: "S1 is the highest-ranked
+  // record") -- re-sorting here is just defensive, not load-bearing.
+  const sources = [...(report.evidence || [])].sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+
+  let html = `<div>${escHtml(report.answer_text || '')}</div>`;
+  html += renderEvidenceScoreRow(scores);
+
   if (f.claims_generated != null) {
-    html += `<div class="t-xs" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);color:var(--text-light)">${f.claims_generated} claims generated → ${f.claims_deleted} deleted → ${f.claims_kept} shown</div>`;
+    const deletionTags = Object.entries(f.by_reason || {}).map(([reason, count]) =>
+      `<span class="tag tag-outline deletion-tag">${count}× ${escHtml(reason)}</span>`
+    ).join('');
+    html += `<div class="evidence-funnel-strip">${f.claims_generated} claims generated → ${f.claims_deleted} deleted → ${f.claims_kept} shown${deletionTags ? '<br>' + deletionTags : ''}</div>`;
   }
+
+  if (shownClaims.length) {
+    html += `<details class="evidence-section"><summary>Claims and citations (${shownClaims.length})</summary>
+      ${shownClaims.map(renderEvidenceClaimRow).join('')}
+    </details>`;
+  }
+
+  if (sources.length) {
+    html += `<details class="evidence-section"><summary>Ranked sources (${sources.length})</summary>
+      ${sources.map(renderEvidenceSourceCard).join('')}
+    </details>`;
+  }
+
   if (report.unanswered_aspects && report.unanswered_aspects.length) {
-    html += `<div class="t-xs" style="margin-top:6px;color:var(--amber)">Not addressed by the evidence: ${escHtml(report.unanswered_aspects.join('; '))}</div>`;
+    html += `<div class="t-xs" style="margin-top:10px;color:var(--amber)">Not addressed by the evidence: ${escHtml(report.unanswered_aspects.join('; '))}</div>`;
   }
   if (report.disclaimer) {
     html += `<div class="t-xs" style="margin-top:8px;color:var(--text-light);font-style:italic">${escHtml(report.disclaimer)}</div>`;
   }
-  evidenceBubble('bot', html);
+  const row = evidenceBubble('bot', html, 'evidence-answer-bubble');
+  row.querySelectorAll('.evidence-abstract-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const el = document.getElementById(btn.dataset.target);
+      const expanded = el.classList.toggle('expanded');
+      btn.textContent = expanded ? 'Show less' : 'Show full abstract';
+    });
+  });
 }
 
 // Real per-stage labels for EvidenceBoard's actual pipeline (see its own
@@ -2343,6 +3014,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initComposer();
   initUpload();
   initPrescriptionUpload();
+  initLabReportUpload();
   initConnectionsPage();
   initEvidenceComposer();
 

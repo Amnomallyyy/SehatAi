@@ -369,3 +369,131 @@ class LabReportUploadOut(BaseModel):
     document_id: Optional[int] = None
     status: str
     detail: Optional[str] = None
+
+
+# ── Structured lab data (routers/structured_reports.py) ──────────────────
+# Read API over DataFetch's extracted_data/documents tables -- see that
+# router's module docstring for the full design (Phase 1 of the reports
+# rebuild). Kept in a separate block since these mirror a different data
+# source than everything above (CareLink's own `reports` table).
+
+class MarkerOut(BaseModel):
+    test_name: str  # original, for display
+    normalized_name: str  # marker_names.normalize_marker() output, for grouping/history
+    value: str
+    value_numeric: Optional[float] = None
+    unit: Optional[str] = None
+    normal_range: Optional[str] = None
+    ref_low: Optional[float] = None
+    ref_high: Optional[float] = None
+    flag: Optional[str] = None
+    operator: Optional[str] = None
+    delta_value: Optional[float] = None
+    delta_since: Optional[date] = None
+    is_abnormal: bool = False
+    needs_review: bool = False
+    confidence: Optional[float] = None
+
+
+class ExtractionAuditOut(BaseModel):
+    markers_found: int
+    high_confidence: int
+    needs_review: int
+    verification_status: str = "not_run"  # not_run | running | complete | failed | no_source
+    verified_at: Optional[datetime] = None
+    model: Optional[str] = None
+    error: Optional[str] = None
+
+
+class StructuredDocumentSummaryOut(BaseModel):
+    document_id: str
+    category: Optional[str] = None
+    document_date: Optional[date] = None
+    uploaded_at: Optional[datetime] = None
+    status: Optional[str] = None
+    original_filename: Optional[str] = None
+    marker_count: int = 0
+    abnormal_count: int = 0
+    spark: List[float] = []
+    linked_report_id: Optional[int] = None
+    has_source_file: bool = False
+    doctor_reviewed: bool = False
+    retracted: bool = False
+
+
+class StructuredDocumentDetailOut(StructuredDocumentSummaryOut):
+    markers: List[MarkerOut] = []
+    audit: ExtractionAuditOut
+    default_trend_marker: Optional[str] = None
+
+
+class MarkerHistoryPointOut(BaseModel):
+    document_id: str
+    document_date: Optional[date] = None
+    value: str
+    value_numeric: Optional[float] = None
+    unit: Optional[str] = None
+    flag: Optional[str] = None
+
+
+class DocumentNoteIn(BaseModel):
+    content: str = ""  # empty/whitespace means "delete my note" -- see PUT /structured/documents/{id}/notes
+    retracted: bool = False  # requires non-empty content -- see upsert_document_note's validation
+
+
+class DocumentNoteOut(BaseModel):
+    id: int
+    document_id: str
+    doctor_id: int
+    doctor_name: str
+    content: str
+    retracted: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class VerificationFindingOut(BaseModel):
+    normalized_marker_name: str
+    primary_value: Optional[str] = None
+    primary_unit: Optional[str] = None
+    verified_value: Optional[str] = None
+    verified_unit: Optional[str] = None
+    agrees: bool
+
+
+class VerificationOut(BaseModel):
+    status: str  # running | complete | failed | no_source
+    model_used: Optional[str] = None
+    agreement_count: int = 0
+    disagreement_count: int = 0
+    error: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    findings: List[VerificationFindingOut] = []
+
+
+class DoctorNotificationOut(BaseModel):
+    """One row per unreviewed lab document, across every patient who has
+    both accepted this doctor's connection AND granted reports access --
+    the doctor-side upload notification (structured_reports.py's
+    GET /structured/notifications)."""
+    document_id: str
+    patient_id: int  # CareLink user id, not the shared patients.id UUID
+    patient_name: str
+    category: Optional[str] = None
+    document_date: Optional[date] = None
+    uploaded_at: Optional[datetime] = None
+
+
+class UnifiedReportItemOut(BaseModel):
+    kind: str  # "report" | "document" | "linked"
+    report_id: Optional[int] = None
+    document_id: Optional[str] = None
+    title: str
+    subtitle: Optional[str] = None
+    date: Optional[datetime] = None
+    category: Optional[str] = None
+    status: Optional[str] = None
+    marker_count: int = 0
+    abnormal_count: int = 0
+    spark: List[float] = []

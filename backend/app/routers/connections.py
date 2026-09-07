@@ -174,3 +174,50 @@ def set_patient_nickname(
     db.commit()
     db.refresh(connection)
     return _serialize_connection(connection, current_user)
+
+
+@router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_connection(
+    connection_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Two distinct real-world actions share this one DELETE, split by the
+    row's current status:
+      - 'pending': the SENDER withdraws a request they no longer want
+        outstanding (e.g. a typo'd email) -- the recipient should use
+        PATCH .../respond (accept/reject) instead, not this.
+      - 'accepted': EITHER party ends the relationship. Any
+        reports-access grant between the same pair is revoked at the
+        same time -- otherwise a later re-connection would silently
+        reinstate report sharing the patient never re-approved, since
+        the grant row is keyed on (patient_id, doctor_id), not on this
+        connection's id.
+    A 'rejected' row may also be deleted by either party, for the same
+    reason request_connection() is willing to flip one back to
+    'pending' -- it's just cleanup, nothing sensitive hinges on it.
+
+    Deleting (not soft-marking 'disconnected') is deliberate: it lets a
+    fresh POST /connections after this start a clean new 'pending' row,
+    exactly the same path as two people who were never connected --
+    there is no distinct "we used to be connected" state anywhere else
+    in the app to preserve.
+    """
+    connection = get_connection_or_404(db, connection_id)
+    if current_user.id not in (connection.patient_id, connection.doctor_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this connection")
+
+    if connection.status == models.ConnectionStatus.pending and current_user.id != connection.requested_by_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the sender can cancel a pending request -- accept or reject it instead",
+        )
+
+    if connection.status == models.ConnectionStatus.accepted:
+        db.query(models.ReportAccessGrant).filter(
+            models.ReportAccessGrant.patient_id == connection.patient_id,
+            models.ReportAccessGrant.doctor_id == connection.doctor_id,
+        ).update({"status": models.ReportAccessStatus.revoked})
+
+    db.delete(connection)
+    db.commit()

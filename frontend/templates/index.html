@@ -6,7 +6,7 @@
   <title>SehatAI — Doctor-Patient Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
@@ -18,10 +18,27 @@
      AUTH PAGE (shown when logged out)
 ═══════════════════════════════════════════════════════════ -->
 <div id="auth-page" style="display:none">
-  <div class="auth-card">
+  <div class="auth-split">
+
+    <!-- Left: dark hero panel with the 3D scan visual -->
+    <div class="auth-hero">
+      <div class="wordmark-row">
+        <span class="ring-icon ring-icon-light" aria-hidden="true"></span>
+        <div class="auth-hero-wordmark">SEHATAI</div>
+      </div>
+      <div class="auth-hero-scan"><div class="auth-hero-scan-box" id="auth-scan"></div></div>
+      <div class="auth-hero-copy">
+        <h2>Every marker, in the same room as your doctor.</h2>
+        <p>Reports parsed on upload, annotated by the clinician who ordered them, and kept end-to-end encrypted between the two of you.</p>
+      </div>
+    </div>
+
+    <!-- Right: sign-in form -->
+    <div class="auth-form-panel">
+    <div class="auth-card">
     <div class="auth-logo">
-      <div class="wordmark">SehatAI</div>
-      <div class="tagline">Secure doctor-patient communication</div>
+      <div class="auth-kicker">Secure sign-in</div>
+      <h1 class="auth-welcome">Welcome back</h1>
     </div>
 
     <div class="auth-tabs">
@@ -64,14 +81,14 @@
           <div class="role-option">
             <input type="radio" id="role-doctor" name="role" value="doctor">
             <label for="role-doctor">
-              <div class="role-label-title">🩺 Doctor</div>
+              <div class="role-label-title"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Doctor</div>
               <div class="role-label-desc">Review and respond to patient reports</div>
             </label>
           </div>
           <div class="role-option">
             <input type="radio" id="role-patient" name="role" value="patient">
             <label for="role-patient">
-              <div class="role-label-title">👤 Patient</div>
+              <div class="role-label-title"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Patient</div>
               <div class="role-label-desc">Share reports and message your care team</div>
             </label>
           </div>
@@ -95,6 +112,14 @@
       </div>
       <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Create account</button>
     </form>
+
+    <div class="auth-compliance">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      PMDC-compliant · records never leave the region
+    </div>
+    </div>
+    </div>
+
   </div>
 </div>
 
@@ -107,7 +132,10 @@
     <!-- Sidebar -->
     <nav id="sidebar">
       <div class="sidebar-brand">
-        <div class="wordmark">SehatAI</div>
+        <div class="wordmark-row">
+          <span class="ring-icon" aria-hidden="true"></span>
+          <div class="wordmark">SehatAI</div>
+        </div>
         <div class="tagline">Doctor-patient portal</div>
       </div>
       <div class="sidebar-user">
@@ -141,6 +169,7 @@
             <line x1="16" y1="17" x2="8" y2="17"/>
           </svg>
           <span>Reports</span>
+          <div class="nav-badge" id="reports-badge" style="display:none">0</div>
         </a>
         <a href="#" class="nav-link" data-page="calendar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -229,7 +258,8 @@
             <div class="connections-section-header">
               <h2>Send a request</h2>
             </div>
-            <div class="send-request-form">
+            <div class="blueprint send-request-form">
+              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
               <div class="error-banner" id="send-request-error" style="display:none"></div>
               <form id="send-request-form">
                 <div class="form-row">
@@ -319,14 +349,14 @@
       <!-- ── AI Assistant page (patient-only) ── -->
       <div id="assistant-page" class="page" style="flex-direction:column">
         <div class="conv-header">
-          <div class="avatar" id="assistant-avatar">🩺</div>
+          <div class="avatar" id="assistant-avatar"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
           <div style="flex:1">
             <div class="t-md" id="assistant-title">SehatAI Assistant</div>
             <div class="t-xs" id="assistant-status">Connecting…</div>
           </div>
           <div class="mode-toggle" id="assistant-mode-toggle" role="group" aria-label="Assistant mode">
-            <button type="button" class="mode-toggle-btn active" data-mode="symptom">🩺 Symptoms</button>
-            <button type="button" class="mode-toggle-btn" data-mode="diet">🥗 Diet</button>
+            <button type="button" class="mode-toggle-btn active" data-mode="symptom"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Symptoms</button>
+            <button type="button" class="mode-toggle-btn" data-mode="diet"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg> Diet</button>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" id="assistant-new-session-btn" title="Start a fresh session in this mode">↺ New session</button>
         </div>
@@ -347,7 +377,7 @@
       <!-- ── Clinical Evidence page (doctor-only) ── -->
       <div id="evidence-page" class="page" style="flex-direction:column">
         <div class="conv-header">
-          <div class="avatar" id="evidence-avatar">📚</div>
+          <div class="avatar" id="evidence-avatar"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></div>
           <div>
             <div class="t-md">EvidenceBoard</div>
             <div class="t-xs">Verification-first clinical evidence search — not a diagnosis tool</div>
@@ -378,9 +408,15 @@
 
       <!-- ── Reports page (cross-conversation history) ── -->
       <div id="reports-page" class="page">
-        <div class="page-header" style="padding-top:28px">
-          <h1>Reports</h1>
-          <p>Reports and prescriptions shared across all your conversations.</p>
+        <div class="page-header" style="padding-top:28px;display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <h1>Reports</h1>
+            <p>Documents shared across every conversation, and lab reports parsed into structured markers.</p>
+          </div>
+          <div id="upload-lab-report-wrap" style="display:none">
+            <input type="file" id="lab-report-file-input" accept=".pdf,.jpg,.jpeg,.png,.gif,.tif,.tiff,.bmp" style="display:none">
+            <button class="btn btn-primary btn-sm" id="upload-lab-report-btn">+ Add report</button>
+          </div>
         </div>
         <div class="reports-layout" id="reports-layout">
           <!-- Dynamically rendered -->
@@ -413,6 +449,7 @@
   </div>
 </div>
 
+<script src="/static/js/scan3d.js"></script>
 <script src="/static/js/app.js"></script>
 </body>
 </html>

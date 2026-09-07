@@ -56,6 +56,15 @@ def extract_text_with_pdfplumber(file_bytes: bytes) -> Tuple[str, float, str]:
         return "", 0.0, "pdfplumber_error"
 
 def detect_file_type(file_path: str) -> str:
+    # EXTENDED (2026-09-06): was PDF/JPG/PNG only. GIF/TIFF/BMP added to
+    # match OCR.space's own actually-supported formats (confirmed against
+    # their public API docs) -- previously any of these silently became
+    # 'UNKNOWN', which OCRspaceClient.extract() would then submit as a
+    # bogus 'image/unknown' mime type. HEIC (the default iPhone camera
+    # format) is deliberately NOT included -- OCR.space doesn't support
+    # it and this pipeline has no HEIC->JPEG conversion step; WhatsApp
+    # re-encodes photos to JPEG before sending, so this only matters for
+    # a raw camera-roll export, not "pics from WhatsApp".
     ext = Path(file_path).suffix.lower()
     if ext in ['.jpg', '.jpeg']:
         return 'JPG'
@@ -63,6 +72,12 @@ def detect_file_type(file_path: str) -> str:
         return 'PNG'
     elif ext == '.pdf':
         return 'PDF'
+    elif ext == '.gif':
+        return 'GIF'
+    elif ext in ['.tif', '.tiff']:
+        return 'TIF'
+    elif ext == '.bmp':
+        return 'BMP'
     return 'UNKNOWN'
 
 
@@ -206,33 +221,27 @@ def process_document(
                 print(f"[WARN] OCR.space failed: {e}")
 
         if not raw_text:
+            # CHANGED (found live 2026-09-06): this used to submit to
+            # Gemini's async Batch API and queue a `processing_queue` row
+            # for later pickup -- confirmed broken two ways at once (see
+            # GeminiClient.extract_text_sync's own doc comment: the batch
+            # payload shape 400s on every call, and nothing ever consumes
+            # `processing_queue` regardless). A synchronous vision call on
+            # the same model, used the same way OCR.space is used just
+            # above, actually works -- confirmed live against a real
+            # camera-photo-quality image that OCR.space's free engine
+            # couldn't read enough text from to pass the check below.
             try:
-                print("[OK] Submitting to Gemini Batch API...")
-                batch_id = gemini_client.submit_batch([{
-                    'image_bytes': file_bytes,
-                    'file_type': file_type
-                }])
-                queue_data = {
-                    'document_id': None,
-                    'patient_id': patient_id,
-                    'file_path': file_path,
-                    'file_type': file_type,
-                    'file_size_bytes': len(file_bytes),
-                    'status': 'pending_batch',
-                    'batch_job_id': batch_id,
-                    'input_data': {'file_hash': file_hash, 'file_url': file_url}
-                }
-                supabase.client.table('processing_queue').insert(queue_data).execute()
-                return {
-                    "status": "queued",
-                    "document_id": None,
-                    "error": None,
-                    "message": "Document queued for Gemini Batch OCR. Check back later.",
-                    "batch_job_id": batch_id
-                }
+                print("[OK] Falling back to Gemini synchronous vision OCR...")
+                text, conf, engine = gemini_client.extract_text_sync(file_bytes, file_type)
+                if text and len(text) > 10:
+                    raw_text = text
+                    ocr_engine = engine
+                    ocr_confidence = conf
+                    print(f"[OK] Text extracted via {engine}")
             except Exception as e:
-                logger.error(f"Gemini Batch submission failed: {e}")
-                return {"status": "failed_ocr", "document_id": None, "error": f"OCR fallback failed: {str(e)}"}
+                logger.error(f"Gemini vision OCR failed: {e}")
+                print(f"[WARN] Gemini vision OCR failed: {e}")
 
         if not raw_text or len(raw_text) < 10:
             return {"status": "failed_ocr", "document_id": None, "error": "No text could be extracted from the document."}

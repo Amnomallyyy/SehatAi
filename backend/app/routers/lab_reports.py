@@ -32,6 +32,7 @@ password onto that patients row immediately before each pipeline run,
 uses it once, and never persists or shows it anywhere. That satisfies the
 gate without pretending this is a credential the patient should know.
 """
+import json
 import os
 import secrets
 import subprocess
@@ -40,13 +41,14 @@ import uuid as uuid_module
 from pathlib import Path
 
 from dotenv import dotenv_values
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
 from ..dependencies import LAB_REPORT_STAGING_DIR, get_or_create_sehatai_patient_id
 from ..security import get_current_user, hash_password, require_patient_role
+from ..verification import run_verification
 
 router = APIRouter(prefix="/me", tags=["lab-reports"])
 
@@ -70,12 +72,19 @@ DATAFETCH_SUPABASE_KEY = _ROOT_ENV.get("SUPABASE_KEY") or _ROOT_ENV.get("SUPABAS
 # it OCR_API_KEY. Same fix, same reasoning.
 DATAFETCH_OCR_KEY = _ROOT_ENV.get("OCRSPACE_API_KEY") or _ROOT_ENV.get("OCR_API_KEY", "")
 
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+# EXTENDED (2026-09-06) to match datafetch/pipeline.py's detect_file_type
+# -- GIF/TIFF/BMP are all formats OCR.space's API genuinely supports.
+# HEIC deliberately excluded: OCR.space doesn't support it and this
+# pipeline has no HEIC->JPEG conversion step (see detect_file_type's own
+# comment on why that matters less than it sounds for "photos from a
+# phone" specifically -- WhatsApp already re-encodes to JPEG).
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".bmp"}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 @router.post("/lab-reports", response_model=schemas.LabReportUploadOut, status_code=status.HTTP_202_ACCEPTED)
 async def upload_lab_report(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -168,5 +177,28 @@ async def upload_lab_report(
                 f"| stderr: {result.stderr.strip()[-300:] or '(empty)'}"
             ),
         )
+
+    # main.py --json prints its progress log AND the result dict as JSON
+    # to stdout -- TWICE, in fact (once inside process_single_file's own
+    # "📊 Result:" box, again right after because of main()'s own `if
+    # args.json: print(json.dumps(result))`). A greedy `\{.*\}` regex
+    # across the whole of stdout would span both blocks and produce
+    # invalid JSON (confirmed live -- silently swallowed by the
+    # try/except below before this fix, so verification never ran).
+    # json.JSONDecoder().raw_decode() from the first "{" is immune to
+    # that: it stops at the end of the FIRST complete JSON value
+    # regardless of what text (a second block, a separator line) follows.
+    # Best-effort only -- a parse miss here just means no verification
+    # runs for this upload; the upload itself already succeeded and its
+    # response is unaffected.
+    brace_idx = result.stdout.find("{")
+    if brace_idx != -1:
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(result.stdout[brace_idx:])
+            document_id = parsed.get("document_id")
+            if document_id:
+                background_tasks.add_task(run_verification, uuid_module.UUID(document_id))
+        except (json.JSONDecodeError, ValueError):
+            pass
 
     return schemas.LabReportUploadOut(status="processed", detail=result.stdout.strip()[-1000:])

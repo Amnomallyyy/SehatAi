@@ -171,6 +171,74 @@ def has_reports_access_grant(db: Session, patient_id: int, doctor_id: int) -> bo
     )
 
 
+def resolve_structured_patient(target_user_id: int, current_user: models.User, db: Session) -> uuid.UUID:
+    """Resolves a CareLink `patient_id: int` (never a raw SehatAI UUID --
+    see routers/structured_reports.py's module docstring for why the
+    client must never send one directly) to the shared `patients.id` UUID
+    that DataFetch's extracted_data/documents tables key on, for a GET
+    request specifically.
+
+    Deliberately does NOT call get_or_create_sehatai_patient_id: that
+    function WRITES a new Patient row as a side effect, which is correct
+    for an action that's about to create data (opening the AI Assistant,
+    uploading a lab report) but wrong for a plain read -- a patient who's
+    never touched either of those features should see "no data yet", not
+    silently get an empty Patient row created just by loading the Reports
+    page.
+
+    Patient: may only resolve themselves. Doctor: gated by the identical
+    double check list_reports_for_patient already applies to
+    GET /reports?patient_id= (accepted connection AND an explicit reports-
+    access grant) -- structured lab data is exactly as protected as report
+    history, not looser.
+    """
+    if current_user.role == models.UserRole.patient:
+        if current_user.id != target_user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your own lab data")
+        target_user = current_user
+    else:
+        target_user = db.query(models.User).filter(models.User.id == target_user_id).first()
+        if target_user is None or target_user.role != models.UserRole.patient:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
+        if not (
+            has_accepted_connection(db, patient_id=target_user_id, doctor_id=current_user.id)
+            and has_reports_access_grant(db, patient_id=target_user_id, doctor_id=current_user.id)
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No reports-access grant for this patient")
+
+    if target_user.sehatai_patient_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No structured lab data yet")
+    return target_user.sehatai_patient_id
+
+
+def list_granted_patients_for_doctor(db: Session, doctor_id: int) -> list:
+    """Patients with BOTH an accepted connection and a granted reports-
+    access to this doctor -- the same double gate resolve_structured_patient
+    checks per-patient, applied here as one set intersection so the
+    doctor's cross-patient notification feed (GET /structured/notifications)
+    doesn't need a round trip per connected patient."""
+    accepted_patient_ids = {
+        c.patient_id
+        for c in db.query(models.Connection).filter(
+            models.Connection.doctor_id == doctor_id,
+            models.Connection.status == models.ConnectionStatus.accepted,
+        )
+    }
+    if not accepted_patient_ids:
+        return []
+    granted_patient_ids = {
+        g.patient_id
+        for g in db.query(models.ReportAccessGrant).filter(
+            models.ReportAccessGrant.doctor_id == doctor_id,
+            models.ReportAccessGrant.status == models.ReportAccessStatus.granted,
+            models.ReportAccessGrant.patient_id.in_(accepted_patient_ids),
+        )
+    }
+    if not granted_patient_ids:
+        return []
+    return db.query(models.User).filter(models.User.id.in_(granted_patient_ids)).all()
+
+
 def compute_active_reminder(scheduled_at: datetime) -> Optional[str]:
     """Pure function of "now" vs. an appointment's scheduled_at -- no stored
     dismissal/read state. Returns the closest matching threshold (a "2h"-out

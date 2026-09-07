@@ -21,6 +21,7 @@ from .routers import (
     report_comments,
     reports,
     sehatai_bridge,
+    structured_reports,
     users,
 )
 
@@ -70,6 +71,7 @@ app.include_router(prescriptions.router)
 app.include_router(appointments.router)
 app.include_router(sehatai_bridge.router)
 app.include_router(lab_reports.router)
+app.include_router(structured_reports.router)
 
 
 @app.get("/health", tags=["health"])

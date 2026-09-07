@@ -18,8 +18,25 @@ pydantic
 # schemas.py uses to validate signup/login emails. Swap EmailStr for a plain
 # str in schemas.py if you'd rather not add this dependency.
 email-validator
-# AI report summaries, via Groq (see app/ai.py):
-groq            # Groq's official client -- talks to their chat completions API
-pypdf           # extracts plain text from the uploaded PDF (Groq's free-tier
-                # chat models take text only, not PDF files directly)
-python-dotenv   # loads GROQ_API_KEY out of a .env file at startup
+# AI report summaries -- multi-provider fallback via OpenAI-compatible
+# endpoints (Groq, AionLabs, Gemini, NVIDIA NIM all speak this same shape;
+# see app/ai.py). Replaced the dedicated `groq` package with the generic
+# `openai` client so one code path covers every provider, same reasoning
+# as sehatai/callAi.js's makeOpenAICompatibleProvider.
+openai
+pypdf           # extracts plain text from the uploaded PDF (none of the
+                # configured providers' free tiers take PDF files directly)
+python-dotenv   # loads provider API keys out of a .env file at startup
+# Service-role Storage access for structured lab documents (see
+# routers/structured_reports.py's download route) -- was already present
+# transitively before this, made explicit since it's now a real dependency.
+supabase==2.31.0  # >=2.31.0 required for the sb_secret_-style service key
+                  # format -- older versions reject it client-side as
+                  # "Invalid API key" before ever making a request
+                  # (confirmed live elsewhere in this project).
+# Phase 2 verification (app/verification.py): NVIDIA's vision model
+# rejects a PDF passed directly as image data ("cannot identify image
+# file") -- confirmed live -- so a PDF's first page is rasterized to PNG
+# first. Was already present transitively; made explicit now that it's a
+# real, load-bearing dependency.
+PyMuPDF

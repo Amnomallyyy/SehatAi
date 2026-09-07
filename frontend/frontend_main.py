@@ -1,6 +1,8 @@
 """
 frontend_main.py — Drop this into the project root alongside app/.
-Run with: uvicorn frontend_main:app --reload --port 3000
+Run with: uvicorn frontend_main:app --reload --port 3002
+(3002 per docker-compose.yml/Dockerfile's port assignment -- 3000 is
+sehatai's own webserver, a different service entirely.)
 
 This mounts the Jinja2 template + static files so the browser can reach:
   GET /          → serves templates/index.html

@@ -214,27 +214,84 @@ def get_settings() -> Settings:
     return _settings
 
 
+#: Backup-provider specs tried AFTER NVIDIA (last resort, only if all
+#: NVIDIA keys fail): (name, api-key env var, base_url, model env var,
+#: default model). Same keys already used elsewhere in this repo (root
+#: .env) -- see sehatai/callAi.js and backend/app/ai.py for the identical
+#: pattern. A provider with no key configured is skipped entirely.
+#:
+#: NOT tried first, unlike the equivalent chains in dietbot/backend:
+#: this pipeline's prompts run large (up to 240K chars of evidence, up to
+#: 16000 max_tokens per call) -- confirmed live 2026-09-04, Groq's own
+#: rate limit here is only 8000 TOKENS/MINUTE total, so a single one of
+#: this app's calls can exhaust it outright, and it was failing (429)
+#: before ever helping. NVIDIA already has 3 dedicated keys sized for
+#: this workload's actual context/token budget, so it leads instead.
+_BACKUP_LLM_PROVIDERS: list[tuple[str, str, str, str, str]] = [
+    ("groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1", "GROQ_MODEL", "openai/gpt-oss-120b"),
+    ("aionlabs", "AIONLABS_API_KEY", "https://api.aionlabs.ai/v1", "AIONLABS_MODEL", "aion-labs/aion-3.0-mini"),
+    ("gemini", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_MODEL", "gemini-3.5-flash-lite"),
+]
+
+#: Per-attempt timeout for the backup providers above -- deliberately
+#: much shorter than settings.llm_timeout (300s), which is calibrated for
+#: NVIDIA's reasoning models specifically (see Settings.llm_timeout's own
+#: comment). Reusing that 300s here would let a stuck backup provider
+#: block for 5 minutes before ever giving up.
+_BACKUP_LLM_TIMEOUT = 25
+
+#: Backup providers' own rate limits are much smaller than NVIDIA's (see
+#: _BACKUP_LLM_PROVIDERS' comment) -- capping well under Groq's 8000
+#: tokens/minute budget instead of reusing settings.llm_max_tokens
+#: (16000) so a single backup-provider call doesn't exhaust it by itself.
+_BACKUP_LLM_MAX_TOKENS = 4000
+
+
 def build_llm_clients(settings: Settings, model_override: Optional[str] = None) -> "list[LLMClient]":
-    """Build one LLMClient per configured API key.
+    """Build the fallback chain: one LLMClient per configured NVIDIA key
+    (settings.llm_api_keys, in order, tried FIRST) -> Groq -> AionLabs ->
+    Gemini (last resort). Returns an empty list when nothing at all is
+    configured (the caller decides how to handle that). LLMClient
+    construction performs no network I/O.
 
-    All clients share the settings' base_url/model/timeout. Returns an
-    empty list when no keys are configured (the caller decides how to
-    handle that). LLMClient construction performs no network I/O.
+    Originally NVIDIA-only -- confirmed live 2026-09-04 that NVIDIA's
+    free tier can stall for many seconds per call with nothing else to
+    fall back to, so backup providers were added. FailoverLLMClient is
+    provider-agnostic (just calls .complete/.complete_json on whatever
+    it's given), so mixing providers here needed no changes there.
 
-    When ``model_override`` is given, that model is used instead of
-    ``settings.llm_model`` (e.g. for the sensitive/heavier model).
+    When ``model_override`` is given, it only overrides NVIDIA's model
+    (this is how the "sensitive"/heavier-model pipeline stage is wired,
+    via LLM_SENSITIVE_MODEL) -- the backup providers below keep their own
+    normal model, since there's no per-provider "sensitive model" concept
+    configured for them.
     """
-    model = model_override or settings.llm_model
-    return [
+    nvidia_model = model_override or settings.llm_model
+    clients: "list[LLMClient]" = [
         LLMClient(
             base_url=settings.llm_base_url,
             api_key=key,
-            model=model,
+            model=nvidia_model,
             time_out=settings.llm_timeout,
             max_tokens=settings.llm_max_tokens,
         )
         for key in settings.llm_api_keys
     ]
+
+    for _name, key_env, base_url, model_env, default_model in _BACKUP_LLM_PROVIDERS:
+        key = os.getenv(key_env)
+        if not key:
+            continue
+        model = os.getenv(model_env) or default_model
+        clients.append(LLMClient(
+            base_url=base_url,
+            api_key=key,
+            model=model,
+            time_out=_BACKUP_LLM_TIMEOUT,
+            max_tokens=_BACKUP_LLM_MAX_TOKENS,
+        ))
+
+    return clients
 
 
 # --- failover wrapper ------------------------------------------------------------

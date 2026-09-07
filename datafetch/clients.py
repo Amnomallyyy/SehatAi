@@ -150,10 +150,18 @@ class OCRspaceClient:
         if not parsed_results:
             raise RuntimeError("No parsed results returned from OCR.space")
 
-        text = parsed_results[0].get('ParsedText', '')
-        confidence = 100.0 if parsed_results[0].get('FileParseExitCode') == 1 else 50.0
+        # FIXED (found live 2026-09-06): only page 1 (index [0]) was ever
+        # read here. OCR.space returns one ParsedResults entry per PAGE
+        # for a multi-page PDF -- a real 2-3 page lab report was silently
+        # losing every page after the first, with no error, nothing in
+        # the logs. Concatenating every page (in order) is the actual fix;
+        # a single-page image still just returns a one-entry list, so this
+        # is a strict superset of the old behavior, not a behavior change
+        # for images.
+        text = "\n\n".join(r.get('ParsedText', '') for r in parsed_results).strip()
+        confidence = 100.0 if all(r.get('FileParseExitCode') == 1 for r in parsed_results) else 50.0
 
-        print("[OK] OCR.space returned text")
+        print(f"[OK] OCR.space returned text ({len(parsed_results)} page(s))")
         return text, confidence, "ocrspace"
 
     def __repr__(self):
@@ -244,6 +252,53 @@ class GeminiClient:
             except (KeyError, IndexError):
                 results.append(("", 0.0, "gemini_error"))
         return results
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((requests.exceptions.RequestException,))
+    )
+    def extract_text_sync(self, image_bytes: bytes, file_type: str = "JPG") -> Tuple[str, float, str]:
+        """
+        Synchronous vision OCR fallback -- CONFIRMED LIVE 2026-09-06 this is
+        needed: a real camera/WhatsApp photo routinely produces too little
+        text from OCR.space's free engine (poor lighting/angle/compression,
+        unlike a clean scanned/digital PDF) to pass process_document()'s
+        len(text) > 10 check, and submit_batch() above -- the async
+        Batch API path this used to fall back to -- was never actually
+        reachable: its payload shape 400s on every call ("Unknown name
+        'requests': Cannot find field"), confirmed against Gemini's real
+        API directly, and even a successful submission would have landed
+        in `processing_queue` with no worker to ever pick it up (see the
+        architecture doc's own note that a queue worker was deliberately
+        deferred). A single interactive upload doesn't need async batching
+        anyway -- this hits the same model's plain generateContent endpoint
+        directly and returns the transcription synchronously, exactly like
+        OCRspaceClient.extract() and extract_text_with_pdfplumber() above.
+        """
+        print("[INFO] Sending image to Gemini for synchronous vision OCR...")
+        mime_type = "application/pdf" if file_type.upper() == "PDF" else f"image/{file_type.lower()}"
+        base64_data = base64.b64encode(image_bytes).decode('utf-8')
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": "Transcribe this medical document faithfully. Preserve all numbers, tables, and handwriting. Do not summarize. Return only the raw text."},
+                    {"inline_data": {"mime_type": mime_type, "data": base64_data}}
+                ]
+            }]
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        response = requests.post(url, json=payload, params={"key": self.api_key}, timeout=60)
+        response.raise_for_status()
+        result = response.json()
+
+        try:
+            text = result["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            raise RuntimeError(f"Unexpected Gemini response shape: {result}")
+
+        print("[OK] Gemini vision OCR returned text")
+        return text, 85.0, "gemini_vision"
 
     def __repr__(self):
         return f"GeminiClient(api_key='{self.api_key[:4]}...')"

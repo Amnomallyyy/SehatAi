@@ -481,39 +481,92 @@ class TheMealDBClient:
         return curated["lunch"]
 
 # ============================================================
-# 7. NVIDIA Client (for LLM calls)
+# 7. LLM Client (for chat completions -- multi-provider fallback)
 # ============================================================
 class NVIDIAClient:
+    """Class name kept as-is (recommender.py/safety.py construct this as
+    `self.nvidia = NVIDIAClient()` and call `self.nvidia._chat(...)` --
+    keeping the name and the _chat(messages) -> str interface means
+    neither of those files needs to change).
+
+    Despite the name, this is now a fast-first multi-provider cascade:
+    Groq -> AionLabs -> Gemini -> NVIDIA, same pattern as
+    sehatai/callAi.js and backend/app/ai.py. Confirmed live 2026-09-04:
+    NVIDIA's free "Prototype" tier can stall for MINUTES on a single
+    call -- the old single-provider @retry(stop_after_attempt(3)) wrapped
+    around a 60s-timeout request meant one bad NVIDIA call could take
+    3+ minutes before finally falling through to the hardcoded fallback
+    recommendation, with no faster option ever tried. A provider with no
+    key configured is skipped entirely. NVIDIA is kept as the last rung
+    (not removed) since its key is still valid when it does respond.
+    """
+
+    _PROVIDER_SPECS = [
+        ("groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
+        ("aionlabs", "AIONLABS_API_KEY", "https://api.aionlabs.ai/v1", "aion-labs/aion-3.0-mini"),
+        ("gemini", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-3.5-flash-lite"),
+        ("nvidia", "NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-lightning-30b-a3b"),
+    ]
+
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or ENV.get("NVIDIA_API_KEY") or os.getenv("NVIDIA_API_KEY")
-        if not self.api_key:
-            raise ValueError("NVIDIA_API_KEY not set in .env")
-        self.base_url = "https://integrate.api.nvidia.com/v1"
-        self.model = "nvidia/nemotron-3-super-120b-a12b"
         self.temperature = 0.0
         self.max_tokens = 16384
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        print("✅ NVIDIAClient initialized")
+        self._providers = self._build_providers(api_key)
+        if not self._providers:
+            raise ValueError(
+                "No LLM provider configured -- set GROQ_API_KEY, AIONLABS_API_KEY, "
+                "GEMINI_API_KEY, and/or NVIDIA_API_KEY in .env"
+            )
+        self.api_key = self._providers[0]["api_key"]  # kept for __repr__
+        print(f"✅ LLM client initialized -- fallback chain: {' -> '.join(p['name'] for p in self._providers)}")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _build_providers(self, override_key: Optional[str]) -> List[Dict[str, str]]:
+        providers = []
+        for name, env_var, base_url, default_model in self._PROVIDER_SPECS:
+            # override_key (the constructor's api_key param) only ever
+            # meant the NVIDIA key historically -- preserve that for
+            # any external caller that still passes one explicitly.
+            key = override_key if (name == "nvidia" and override_key) else (ENV.get(env_var) or os.getenv(env_var))
+            if not key:
+                continue
+            model_env = f"{name.upper()}_MODEL"
+            model = os.getenv(model_env) or ENV.get(model_env) or default_model
+            providers.append({"name": name, "api_key": key, "base_url": base_url, "model": model})
+        return providers
+
     def _chat(self, messages: List[Dict[str, str]]) -> str:
-        url = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-        response = requests.post(url, json=payload, headers=self.headers, timeout=60)
-        response.raise_for_status()
-        result = response.json()
-        return result['choices'][0]['message']['content']
+        failures = []
+        for provider in self._providers:
+            try:
+                url = f"{provider['base_url'].rstrip('/')}/chat/completions"
+                payload = {
+                    "model": provider["model"],
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                }
+                headers = {
+                    "Authorization": f"Bearer {provider['api_key']}",
+                    "Content-Type": "application/json",
+                }
+                # 20s per attempt, ONE attempt per provider (no per-provider
+                # retry loop) -- a stuck provider fails over to the next one
+                # quickly instead of multiplying a long timeout by 3 retries
+                # the way the old single-provider version did.
+                response = requests.post(url, json=payload, headers=headers, timeout=20)
+                response.raise_for_status()
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                if not content:
+                    raise ValueError("empty response content")
+                return content
+            except Exception as exc:
+                failures.append(f"{provider['name']}: {exc}")
+                print(f"⚠️ LLM provider '{provider['name']}' failed — trying next: {exc}")
+        raise RuntimeError(f"LLM call failed on every configured provider — {' | '.join(failures)}")
 
     def __repr__(self):
-        return f"NVIDIAClient(api_key='{self.api_key[:8]}...')"
+        return f"NVIDIAClient(providers={[p['name'] for p in self._providers]})"
 
 # ============================================================
 # TEST – Run this file directly to verify all clients
