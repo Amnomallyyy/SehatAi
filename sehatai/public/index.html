@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SehatAI — Symptom Console</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel-2: #273449; --border: #334155;
+    --text: #e2e8f0; --dim: #94a3b8; --accent: #38bdf8; --accent-2: #22c55e;
+    --danger: #ef4444; --warn: #f59e0b; --user-bubble: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 span { color: var(--dim); font-weight: 400; }
+
+  .toolbar { padding: 10px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .toolbar label { font-size: 12px; color: var(--dim); }
+  .toolbar input[type=text], .toolbar input[type=password] {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 6px; font-size: 13px; width: 260px;
+  }
+  .toolbar input.bad { border-color: var(--danger); }
+  .toolbar button {
+    padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px;
+  }
+  .toolbar button:hover { border-color: var(--accent); }
+  #rawToggle.active { background: var(--accent); color: #04202e; border-color: var(--accent); }
+
+  main { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 72%; padding: 10px 14px; border-radius: 12px; line-height: 1.45; font-size: 14px; }
+  .msg.user { align-self: flex-end; background: var(--user-bubble); color: white; border-bottom-right-radius: 2px; }
+  .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
+
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px; margin-bottom: 6px;
+  }
+  .badge.emergency { background: #7f1d1d; color: #fecaca; }
+  .badge.off_topic, .badge.diagnosis_declined, .badge.dependent_declined { background: #78350f; color: #fde68a; }
+  .badge.clarification { background: #1e3a8a; color: #bfdbfe; }
+  .badge.recommendation { background: #14532d; color: #bbf7d0; }
+  .badge.diet { background: #164e63; color: #a5f3fc; }
+  .badge.diet_error, .badge.error { background: #7f1d1d; color: #fecaca; }
+  .badge.emotional_support { background: #581c87; color: #e9d5ff; }
+
+  .meta { margin-top: 8px; font-size: 11.5px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .meta .chip { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+  .meta .chip.warn { color: var(--warn); border-color: var(--warn); }
+  .meta .chip.bad { color: var(--danger); border-color: var(--danger); }
+  .meta .chip.good { color: var(--accent-2); border-color: var(--accent-2); }
+
+  /* Emergency-acknowledgment buttons — see processMessage.js's
+     markEmergencyAcknowledgeable. Physical emergencies only, never
+     rendered on a crisis/mental-health reply (that kind never carries
+     result.actions at all). */
+  .actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-btn {
+    padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  .action-btn:hover { border-color: var(--accent); }
+  .action-btn.continue { border-color: var(--accent-2); color: var(--accent-2); }
+  .action-btn.notify { border-color: var(--danger); color: #fecaca; }
+  .action-btn:disabled { opacity: 0.5; cursor: default; }
+
+  pre.raw {
+    margin-top: 8px; font-size: 11px; background: #0b1220; border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px; overflow-x: auto; color: var(--dim); max-width: 100%;
+  }
+
+  footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; background: var(--panel); }
+  footer textarea {
+    flex: 1; resize: none; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 10px 12px; font-size: 14px; font-family: inherit; height: 44px;
+  }
+  footer button#sendBtn {
+    padding: 0 22px; border-radius: 8px; border: none; background: var(--accent); color: #04202e;
+    font-weight: 600; cursor: pointer; font-size: 14px;
+  }
+  footer button#sendBtn:disabled { opacity: 0.5; cursor: default; }
+
+  .hint { color: var(--dim); font-size: 12.5px; text-align: center; padding: 30px 10px; }
+
+  /* "Thinking…" indicator — shown while waiting on the server's reply.
+     Symptom-triage AI calls can legitimately take several seconds (or,
+     on a slow provider fallback, longer), so without this the UI just
+     looks frozen/broken for that whole stretch. Purely cosmetic: it's
+     added right before the fetch() call and removed in the finally
+     block, so it always disappears whether the request succeeds,
+     errors, or times out. */
+  .msg.bot.thinking { display: flex; align-items: center; gap: 4px; padding: 14px; }
+  .msg.bot.thinking .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--dim);
+    animation: thinking-bounce 1.2s infinite ease-in-out;
+  }
+  .msg.bot.thinking .dot:nth-child(2) { animation-delay: 0.15s; }
+  .msg.bot.thinking .dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes thinking-bounce {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SehatAI <span>🩺 symptom console</span></h1>
+  <a href="/diet" style="color: var(--dim); font-size: 13px; text-decoration: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px;">🥗 Switch to diet console →</a>
+</header>
+
+<div class="toolbar">
+  <label>API token</label>
+  <input type="password" id="apiToken" placeholder="paste token from: node issueToken.js <patientId>" />
+  <button id="saveTokenBtn">Save token</button>
+  <button id="newSessionBtn">↺ New session</button>
+  <button id="rawToggle">{ } Raw envelope</button>
+  <span style="flex:1"></span>
+  <span id="sessionLabel" style="font-size:12px;color:var(--dim);"></span>
+</div>
+
+<main id="log">
+  <div class="hint">Every request now needs an API token bound to a specific patient — run <code>node issueToken.js &lt;patientId&gt;</code> on the server, paste the token above, then send a message. This talks to the exact same processPatientMessage() / processDietMessage() pipeline as `npm run chat` and `npm run test:edge`, just from a browser instead of a terminal. (Token is kept only in this browser's local storage — it's never sent anywhere except this server.)</div>
+</main>
+
+<footer>
+  <textarea id="input" placeholder="Describe a symptom… (Enter to send, Shift+Enter for newline)"></textarea>
+  <button id="sendBtn">Send</button>
+</footer>
+
+<script>
+  const mode = 'symptom'; // fixed — this page never talks to the diet bot, see /diet for that
+  let sessionId = null;
+  let showRaw = false;
+  const botMessages = []; // { el, result } for every bot bubble rendered — see rawToggle's click handler
+
+  const log = document.getElementById('log');
+  const input = document.getElementById('input');
+  const sendBtn = document.getElementById('sendBtn');
+  const apiTokenInput = document.getElementById('apiToken');
+  const saveTokenBtn = document.getElementById('saveTokenBtn');
+  const newSessionBtn = document.getElementById('newSessionBtn');
+  const rawToggle = document.getElementById('rawToggle');
+  const sessionLabel = document.getElementById('sessionLabel');
+
+  // The token is a per-patient credential (see auth.js) — kept only in
+  // this browser's own localStorage, never logged or sent anywhere but
+  // this server's Authorization header. It deliberately does NOT ship
+  // with a default value the way the old patientId field did — there is
+  // no "default token" that would make sense, since a token IS the
+  // identity claim now, not a hint the server used to trust blindly.
+  try {
+    const saved = localStorage.getItem('sehatai_api_token');
+    if (saved) apiTokenInput.value = saved;
+  } catch (err) {
+    // localStorage can throw in some contexts (private browsing, etc.)
+    // — non-fatal, the user just has to paste the token again.
+  }
+
+  saveTokenBtn.addEventListener('click', () => {
+    try {
+      localStorage.setItem('sehatai_api_token', apiTokenInput.value.trim());
+    } catch (err) {
+      // ignore — see note above
+    }
+    apiTokenInput.classList.remove('bad');
+  });
+
+  newSessionBtn.addEventListener('click', () => {
+    sessionId = null;
+    updateSessionLabel();
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = '— started a fresh session —';
+    log.appendChild(hint);
+    log.scrollTop = log.scrollHeight;
+  });
+
+  // FIXED: this used to only flip the `showRaw` flag for whatever bot
+  // message renders NEXT — clicking it after already seeing a reply (the
+  // natural way to use it: see something interesting, THEN inspect it)
+  // visibly did nothing at all, since nothing already on screen ever
+  // got re-rendered. botMessages tracks every bot bubble's element
+  // alongside the raw result that produced it, so toggling can add or
+  // remove the raw-JSON panel on EVERY message already in the log, not
+  // just future ones.
+  rawToggle.addEventListener('click', () => {
+    showRaw = !showRaw;
+    rawToggle.classList.toggle('active', showRaw);
+    for (const { el, result } of botMessages) {
+      const existing = el.querySelector('pre.raw');
+      if (showRaw && !existing) {
+        const pre = document.createElement('pre');
+        pre.className = 'raw';
+        pre.textContent = JSON.stringify(result, null, 2);
+        el.appendChild(pre);
+      } else if (!showRaw && existing) {
+        existing.remove();
+      }
+    }
+  });
+
+  function updateSessionLabel() {
+    sessionLabel.textContent = sessionId ? `session: ${sessionId.slice(0, 8)}…` : 'no session yet';
+  }
+  updateSessionLabel();
+
+  function addUserBubble(text) {
+    const el = document.createElement('div');
+    el.className = 'msg user';
+    el.textContent = text;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function chip(label, cls) {
+    return `<span class="chip ${cls || ''}">${label}</span>`;
+  }
+
+  function addBotBubble(result) {
+    const el = document.createElement('div');
+    el.className = 'msg bot';
+
+    const kind = result.kind || 'unknown';
+    let html = `<span class="badge ${kind}">${kind.replace(/_/g, ' ')}</span><div>${escapeHtml(result.reply || '(no reply)')}</div>`;
+
+    const chips = [];
+    if (result.source === 'dietbot') chips.push(chip('source: dietbot'));
+    if (result.urgency && result.urgency !== 'routine') {
+      chips.push(chip(`urgency: ${result.urgency}`, result.urgency === 'emergency' ? 'bad' : 'warn'));
+    }
+    if (result.triageLevel) chips.push(chip(`triageLevel: ${result.triageLevel}`, result.triageLevel.includes('emergency') ? 'bad' : ''));
+    if (result.recommendedChannel) chips.push(chip(`channel: ${result.recommendedChannel}`));
+    if (result.clarificationRound) chips.push(chip(`clarification: ${result.clarificationRound}/${result.maxClarificationRounds}`, 'warn'));
+    if (result.subject && result.subject.subject) {
+      chips.push(chip(`subject: ${result.subject.subject}${result.subject.relation ? ' (' + result.subject.relation + ')' : ''}`));
+    }
+    if (result.isDiagnosisRequest) chips.push(chip('diagnosis request declined', 'warn'));
+    if (result.matchedSymptoms && result.matchedSymptoms.length) {
+      chips.push(chip(`symptoms: ${result.matchedSymptoms.map(s => s.name).join(', ')}`));
+    }
+    if (result.recommendation) {
+      chips.push(chip(`specialist: ${result.recommendation.specialist_recommended}`, 'good'));
+      if (result.secondarySpecialist) {
+        chips.push(chip(`also see: ${result.secondarySpecialist}`, 'good'));
+      }
+      if (result.verification) {
+        // Use verification.ok directly — the backend's own authoritative
+        // answer for whether the recommendation actually shown is
+        // grounded — rather than re-deriving it from violations here. A
+        // violations entry from a FIRST attempt that a retry then fixed
+        // is marked corrected:true (not repaired:true, which means
+        // something else — see groundingVerifier.js): filtering on only
+        // !v.repaired missed that case and showed "BLOCKED" on a
+        // recommendation that was actually successfully corrected and
+        // already grounded by the time it reached this reply.
+        if (!result.verification.ok) {
+          const blocking = (result.verification.violations || []).filter(v => !v.repaired && !v.corrected);
+          chips.push(chip(`BLOCKED: ${blocking.map(v => v.code).join(', ')}`, 'bad'));
+        } else {
+          chips.push(chip(`verified ✓${result.verification.retried ? ' (retried)' : ''}`, 'good'));
+        }
+      }
+    }
+
+    if (chips.length) {
+      html += `<div class="meta">${chips.join('')}</div>`;
+    }
+
+    // Emergency-acknowledgment buttons — see processMessage.js's
+    // markEmergencyAcknowledgeable. Only ever present on a PHYSICAL
+    // emergency reply (result.actions), never on a crisis/mental-health
+    // one, which carries no `actions` field at all.
+    if (result.actionable && Array.isArray(result.actions) && result.actions.length) {
+      html += `<div class="actions">${result.actions.map(a =>
+        `<button class="action-btn ${a.id}" data-action="${escapeHtml(a.id)}">${escapeHtml(a.label)}</button>`
+      ).join('')}</div>`;
+    }
+
+    if (showRaw) {
+      html += `<pre class="raw">${escapeHtml(JSON.stringify(result, null, 2))}</pre>`;
+    }
+
+    el.innerHTML = html;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    botMessages.push({ el, result });
+
+    const actionsEl = el.querySelector('.actions');
+    if (actionsEl) {
+      actionsEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.action-btn');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        // Disable both immediately so a double-click can't send twice
+        // or fire "notify" after "continue" was already chosen.
+        actionsEl.querySelectorAll('.action-btn').forEach(b => (b.disabled = true));
+        if (action === 'continue') {
+          // Matches EMERGENCY_CONTINUE_RE in processMessage.js exactly.
+          send('Continue with this chat');
+        } else if (action === 'notify') {
+          // Deliberately does NOT call the backend — this demo has no
+          // real integration to emergency services or contacts, so
+          // "Notify someone" can't actually notify anyone. It just
+          // acknowledges the choice and stops here.
+          actionsEl.innerHTML = '<span style="color: var(--dim); font-size: 13px;">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
+        }
+      });
+    }
+  }
+
+  function addThinkingBubble() {
+    const el = document.createElement('div');
+    el.className = 'msg bot thinking';
+    el.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  function addErrorBubble(text) {
+    const el = document.createElement('div');
+    el.className = 'msg bot';
+    el.innerHTML = `<span class="badge error">error</span><div>${escapeHtml(text)}</div>`;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function send(explicitText) {
+    // explicitText: used by the emergency-acknowledgment "Continue"
+    // button (see addBotBubble below) to send its fixed phrase without
+    // needing to fake-populate the visible input box first.
+    const text = explicitText != null ? explicitText : input.value.trim();
+    if (!text) return;
+    const token = apiTokenInput.value.trim();
+    if (!token) {
+      apiTokenInput.classList.add('bad');
+      addErrorBubble('Paste an API token above first (run: node issueToken.js <patientId>).');
+      return;
+    }
+    if (explicitText == null) input.value = ''; // don't clobber a mid-typed draft when triggered by a button
+    sendBtn.disabled = true;
+    addUserBubble(text);
+    const thinkingEl = addThinkingBubble();
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        // Note: no patientId here anymore — the server derives it from
+        // the token above, never from anything the client sends. See
+        // webServer.js / auth.js.
+        body: JSON.stringify({ mode, message: text, sessionId }),
+      });
+      const result = await res.json();
+      thinkingEl.remove();
+      if (!res.ok) {
+        if (res.status === 401) apiTokenInput.classList.add('bad');
+        addErrorBubble(result.error || `HTTP ${res.status}`);
+      } else {
+        sessionId = result.sessionId || sessionId;
+        updateSessionLabel();
+        addBotBubble(result);
+      }
+    } catch (err) {
+      thinkingEl.remove();
+      addErrorBubble('Request failed: ' + err.message);
+    } finally {
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  sendBtn.addEventListener('click', send);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+</script>
+
+</body>
+</html>

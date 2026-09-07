@@ -1,0 +1,42 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+# Postgres driver -- added when database.py moved off local SQLite onto
+# the shared Supabase project (architecture doc §02).
+psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]
+# Pinned: passlib 1.7.4 (its latest release) crashes on bcrypt>=4.1 with
+# "AttributeError: module 'bcrypt' has no attribute '__about__'", because it
+# reads a version attribute bcrypt removed. This isn't cosmetic -- password
+# hashing raises on every signup/login without this pin. bcrypt 4.0.1 is the
+# newest release that still works with passlib.
+bcrypt==4.0.1
+python-multipart
+pydantic
+# Added beyond the original list: required by Pydantic's EmailStr, which
+# schemas.py uses to validate signup/login emails. Swap EmailStr for a plain
+# str in schemas.py if you'd rather not add this dependency.
+email-validator
+# AI report summaries -- multi-provider fallback via OpenAI-compatible
+# endpoints (Groq, AionLabs, Gemini, NVIDIA NIM all speak this same shape;
+# see app/ai.py). Replaced the dedicated `groq` package with the generic
+# `openai` client so one code path covers every provider, same reasoning
+# as sehatai/callAi.js's makeOpenAICompatibleProvider.
+openai
+pypdf           # extracts plain text from the uploaded PDF (none of the
+                # configured providers' free tiers take PDF files directly)
+python-dotenv   # loads provider API keys out of a .env file at startup
+# Service-role Storage access for structured lab documents (see
+# routers/structured_reports.py's download route) -- was already present
+# transitively before this, made explicit since it's now a real dependency.
+supabase==2.31.0  # >=2.31.0 required for the sb_secret_-style service key
+                  # format -- older versions reject it client-side as
+                  # "Invalid API key" before ever making a request
+                  # (confirmed live elsewhere in this project).
+# Phase 2 verification (app/verification.py): NVIDIA's vision model
+# rejects a PDF passed directly as image data ("cannot identify image
+# file") -- confirmed live -- so a PDF's first page is rasterized to PNG
+# first. Was already present transitively; made explicit now that it's a
+# real, load-bearing dependency.
+PyMuPDF

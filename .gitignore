@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+
+# Python venvs -- reproducible from each project's requirements.txt,
+# not source. backend/ has its own .gitignore already covering its venv;
+# these cover the two added when wiring DataFetch/EvidenceBoard in.
+venv/
+datafetch_venv/
+__pycache__/
+*.pyc
+
+# EvidenceBoard's local SQLite cache -- real question history, never committed.
+sehatEvidence/evidenceboard.db
