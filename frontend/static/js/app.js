@@ -720,6 +720,9 @@ async function openConvById(conv, other) {
 
   document.getElementById('conv-other-name').textContent = other.name;
   document.getElementById('conv-other-role').textContent = other.role;
+  // The header avatar was never filled in -- it showed the template's "?"
+  // placeholder for every conversation.
+  loadAvatarInto(document.getElementById('conv-avatar'), other);
 
   const thread = document.getElementById('conv-thread');
   thread.innerHTML = '<div class="skeleton skeleton-line w60" style="margin:20px auto"></div>';
@@ -2631,11 +2634,20 @@ async function sendAssistantMessage(explicitText) {
     // client doesn't already hold a session id for this mode, keeps the
     // server's state honest with what's actually visible on screen.
     const isFirstMessageThisMode = !sehataiSessionIds[assistantMode];
-    const res = await fetch(`${SEHATAI_API}/api/chat`, {
+    const sendChat = (bearer) => fetch(`${SEHATAI_API}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearer}` },
       body: JSON.stringify({ mode: assistantMode, message: text, newSession: isFirstMessageThisMode }),
     });
+    let res = await sendChat(token);
+    if (res.status === 401) {
+      // Each mint revokes the patient's previous token (sehatai_bridge.py),
+      // so opening the assistant in a second tab silently invalidated the
+      // first tab's cached one -- every later message there failed until
+      // a full reload. Re-mint once and retry instead.
+      sehataiToken = null;
+      res = await sendChat(await ensureSehataiToken());
+    }
     const result = await res.json();
     stopThinking();
     thinking.remove();

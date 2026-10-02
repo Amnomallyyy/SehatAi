@@ -248,9 +248,18 @@ const server = http.createServer({
     }
 
     if (req.method === 'POST' && req.url === '/api/chat') {
-      const patientId = await authenticate(req);
+      let patientId;
+      try {
+        patientId = await authenticate(req);
+      } catch (err) {
+        if (err.statusCode !== 503) throw err;
+        sendJson(res, 503, { error: 'The assistant is temporarily unavailable. Please try again in a moment.' });
+        return;
+      }
       if (!patientId) {
-        sendJson(res, 401, { error: 'Missing or invalid API token. See issuetoken.js.' });
+        // Plain-language for the patient; the CareLink frontend reacts to
+        // the 401 itself by minting a fresh token and retrying once.
+        sendJson(res, 401, { error: 'Your assistant session expired. Please try again.' });
         return;
       }
 

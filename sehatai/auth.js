@@ -107,14 +107,22 @@ export async function verifyApiToken(rawToken) {
 
     if (error) {
       console.error('[auth] token lookup failed:', error.message);
-      return null;
+      throw authUnavailable();
     }
     if (!data || data.revoked) return null;
     return data.patient_id;
   } catch (err) {
+    if (err.statusCode === 503) throw err;
     console.error('[auth] token lookup threw:', err.message);
-    return null;
+    throw authUnavailable();
   }
+}
+
+// A database outage is NOT an invalid token: returning null here used to
+// tell a patient "Missing or invalid API token" while the real problem was
+// that Supabase was unreachable. The caller maps this to a 503.
+function authUnavailable() {
+  return Object.assign(new Error('Token store unavailable'), { statusCode: 503 });
 }
 
 /**
