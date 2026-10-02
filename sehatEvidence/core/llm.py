@@ -128,8 +128,46 @@ class LLMclient():
             if m and m.group(2):
                 line = f"{m.group(1)}{json.dumps(m.group(2).strip())}{m.group(3) or ''}"
             lines.append(line)
-        body = "\n".join(lines)
-        return re.sub(r",(\s*[}\]])", r"\1", body)
+        body = re.sub(r",(\s*[}\]])", r"\1", "\n".join(lines))
+        try:
+            json.loads(body)
+            return body
+        except json.JSONDecodeError:
+            pass
+        # Same defect on ONE line (also seen live):
+        #   {"verdict": "SUPPORTS", ..., "reason": The evidence states X.}
+        return re.sub(r",(\s*[}\]])", r"\1", cls._quote_inline_bare_values(body))
+
+    _KEY_PREFIX = re.compile(r'"[^"\n]+"\s*:[ \t]*')
+    _NEXT_KEY = re.compile(r',\s*"[^"\n]+"\s*:')
+    _JSON_VALUE_START = re.compile(r'["\[{]|-?\d|true\b|false\b|null\b')
+
+    @classmethod
+    def _quote_inline_bare_values(cls, body: str) -> str:
+        """Quote a bare value that runs until the next `, "key":` or the
+        closing brace of its object, whichever comes first."""
+        pos = 0
+        while True:
+            m = cls._KEY_PREFIX.search(body, pos)
+            if not m:
+                return body
+            start = m.end()
+            if start >= len(body) or cls._JSON_VALUE_START.match(body, start):
+                pos = start
+                continue
+            next_key = cls._NEXT_KEY.search(body, start)
+            close = body.find("}", start)
+            ends = [i for i in (next_key.start() if next_key else -1, close) if i != -1]
+            if not ends:
+                return body
+            end = min(ends)
+            value = body[start:end].strip()
+            if not value:
+                pos = start
+                continue
+            quoted = json.dumps(value)
+            body = body[:start] + quoted + body[end:]
+            pos = start + len(quoted)
 
     @staticmethod
     def _strip_json_fences(text: str) -> str:
