@@ -5,6 +5,7 @@ recommender.py – Main recommendation engine with personalization & session sup
 
 import os
 import json
+import threading
 import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -66,7 +67,13 @@ class RecommendationGenerator:
 
         recommendation = self.personalization.process_query(patient_id, query, recommendation)
 
-        foods = [item.get('food') for item in recommendation.get('specific_foods', [])]
+        # The LLM sometimes returns plain strings instead of {"food": ...}
+        # objects; item.get() on a str used to 500 the whole request.
+        foods = [
+            item.get('food') if isinstance(item, dict) else str(item)
+            for item in (recommendation.get('specific_foods') or [])
+        ]
+        foods = [f for f in foods if f]
         if foods:
             food_safety = self.safety.screen_foods(
                 foods,
@@ -91,7 +98,7 @@ class RecommendationGenerator:
         labs_str = "\n".join([f"- {lab.get('test_name')}: {lab.get('value')} {lab.get('unit', '')}" for lab in patient.get('labs', [])])
         meds_str = "\n".join([f"- {med.get('name')} {med.get('dosage', '')}" for med in patient.get('medications', [])])
         allergies_str = ", ".join(patient.get('allergies', [])) or "None reported"
-        guidelines_str = "\n".join([f"- {g.get('source')}: {g.get('guideline')[:200]}..." for g in external.get('guidelines', [])])
+        guidelines_str = "\n".join([f"- {g.get('source')}: {(g.get('guideline') or '')[:200]}..." for g in external.get('guidelines', [])])
         interactions_str = "\n".join([f"- {i.get('drug')} + {i.get('food')}: {i.get('description')}" for i in external.get('interactions', [])])
         nutrition_str = ""
         for food, data in external.get('nutrition', {}).items():
@@ -209,28 +216,58 @@ Be practical, avoid medical jargon, and always advise consulting a doctor.
 # ============================================================
 # Helper for session auto‑save (local file)
 # ============================================================
+SESSION_DIR = os.getenv("DIETBOT_SESSION_DIR", ".")
 SESSION_FILE_PREFIX = ".session_"
 
+
+def _session_file(patient_id: str) -> str:
+    # uuid round-trip: the id becomes part of a filename, so anything that
+    # isn't a plain UUID ("../../etc/x") is rejected rather than written.
+    return os.path.join(SESSION_DIR, f"{SESSION_FILE_PREFIX}{uuid.UUID(str(patient_id))}")
+
+
 def get_stored_session_id(patient_id: str) -> Optional[str]:
-    filepath = f"{SESSION_FILE_PREFIX}{patient_id}"
+    filepath = _session_file(patient_id)
     if os.path.exists(filepath):
         with open(filepath, 'r') as f:
-            return f.read().strip()
+            return f.read().strip() or None
     return None
 
 def store_session_id(patient_id: str, session_id: str):
-    filepath = f"{SESSION_FILE_PREFIX}{patient_id}"
-    with open(filepath, 'w') as f:
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    with open(_session_file(patient_id), 'w') as f:
         f.write(session_id)
 
-def generate_recommendation(patient_id: str, query: str, session_id: Optional[str] = None, enable_ai_safety: bool = True) -> Dict:
+
+# One generator per safety setting, built on first use and reused: each
+# RecommendationGenerator opens four Supabase clients plus the LLM client,
+# and the old code rebuilt all of that on EVERY request -- several seconds
+# of pure setup before any real work. The clients hold no per-patient
+# state (everything per-request is passed into generate()).
+_generators: Dict[bool, "RecommendationGenerator"] = {}
+_generators_lock = threading.Lock()
+
+
+def _get_generator(enable_ai_safety: bool) -> "RecommendationGenerator":
+    generator = _generators.get(enable_ai_safety)
+    if generator is None:
+        with _generators_lock:
+            generator = _generators.get(enable_ai_safety)
+            if generator is None:
+                generator = RecommendationGenerator(enable_ai_safety=enable_ai_safety)
+                _generators[enable_ai_safety] = generator
+    return generator
+
+
+def generate_recommendation(patient_id: str, query: str, session_id: Optional[str] = None, enable_ai_safety: Optional[bool] = None) -> Dict:
+    if enable_ai_safety is None:
+        enable_ai_safety = os.getenv("ENABLE_AI_SAFETY", "true").strip().lower() != "false"
     if session_id is None:
         session_id = get_stored_session_id(patient_id)
         if session_id:
             print(f"ℹ️ Using existing session: {session_id}")
         else:
             print("ℹ️ No existing session found – will create a new one.")
-    generator = RecommendationGenerator(enable_ai_safety=enable_ai_safety)
-    result = generator.generate(patient_id, query, session_id)
+    result = _get_generator(enable_ai_safety).generate(patient_id, query, session_id)
     store_session_id(patient_id, result['session_id'])
     return result

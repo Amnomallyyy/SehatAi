@@ -1,0 +1,10 @@
+# Never bake local secrets, venvs or session pointers into the image.
+.env
+.env.*
+!.env.example
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.session_*
+.pytest_cache/
