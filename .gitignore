@@ -12,3 +12,10 @@ __pycache__/
 
 # EvidenceBoard's local SQLite cache -- real question history, never committed.
 sehatEvidence/evidenceboard.db
+
+# Node dependencies -- reproducible from package-lock.json (`npm ci`).
+node_modules/
+
+# Playwright output
+sehatEvidence/web/test-results/
+sehatEvidence/web/playwright-report/
