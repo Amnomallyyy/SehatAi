@@ -885,10 +885,12 @@ class Verifier:
         supports -- the same strict judge has to independently say
         SUPPORTS against a specific record. Returns the number repaired.
         """
-        repaired = 0
-        for row in rows:
-            if row["status"] != "deleted" or row["deletion_reason"] != "unsupported by cited evidence":
-                continue
+        targets = [
+            row for row in rows
+            if row["status"] == "deleted" and row["deletion_reason"] == "unsupported by cited evidence"
+        ]
+
+        def repair(row: dict) -> bool:
             candidates = _lexical_overlap_candidates(
                 row["text"], ev_by_sid, exclude=set(row["sids"])
             )
@@ -916,9 +918,13 @@ class Verifier:
                         f"[verifier] repaired {row['claim_id']}: reattributed "
                         f"from {original_sids} to {sid}"
                     )
-                    repaired += 1
-                    break
-        return repaired
+                    return True
+            return False
+
+        # Each claim only ever mutates its own row, so claims are repaired
+        # in parallel (the candidates within one claim stay sequential --
+        # the first SUPPORTS wins).
+        return sum(self._map_rows(repair, targets))
 
     # ------------------------------------------------------------------
     # Stage D -- supersession heuristic (fail-open)
@@ -937,9 +943,8 @@ class Verifier:
         reviews = self._fetch_supersession_reviews(question, queries, evidence)
         if not reviews:
             return
-        for row in rows:
-            if row["status"] == "deleted":
-                continue  # only surviving (kept/flagged) claims are checked
+
+        def check(row: dict) -> None:
             for pmid, title, abstract in reviews:
                 blocks = [(f"MED/{pmid}", f"MED/{pmid}", title, abstract)]
                 verdict = self._judge_entailment(row["claim_id"], row["text"], blocks)
@@ -951,7 +956,18 @@ class Verifier:
                     self._delete(
                         row, f"superseded by newer evidence (MED/{pmid})"
                     )
-                    break
+                    return
+
+        # only surviving (kept/flagged) claims are checked; one row each
+        self._map_rows(check, [row for row in rows if row["status"] != "deleted"])
+
+    def _map_rows(self, fn, rows: list[dict]) -> list:
+        """fn over rows, up to max_concurrency at a time, results in row
+        order. Every caller's fn touches only the row it is given."""
+        if self.max_concurrency > 1 and len(rows) > 1:
+            with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(rows))) as pool:
+                return list(pool.map(fn, rows))
+        return [fn(row) for row in rows]
 
     def _fetch_supersession_reviews(
         self, question: str, queries: list[str], evidence: list[dict]
