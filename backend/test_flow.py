@@ -4,11 +4,13 @@ deliverable -- just how I verified the API before handing it over.
 Run with the server already up on :8000.
 """
 import io
+import os
 import sys
 
 import requests
 
-BASE = "http://127.0.0.1:8000"
+# SEHAT_API_BASE=http://localhost:8080/api runs the same flow through the gateway.
+BASE = os.environ.get("SEHAT_API_BASE", "http://127.0.0.1:8000")
 failures = []
 
 

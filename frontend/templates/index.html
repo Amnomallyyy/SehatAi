@@ -7,7 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/app.css">
+  <meta name="description" content="SehatAI — a doctor-patient portal with structured lab reports, secure messaging, an AI symptom and diet assistant, and verified clinical evidence search.">
+  <meta name="theme-color" content="#1f2a36">
+  <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
 </head>
 <body>
 
@@ -449,7 +451,8 @@
   </div>
 </div>
 
-<script src="/static/js/scan3d.js"></script>
-<script src="/static/js/app.js"></script>
+<script>window.SEHAT_CONFIG = {{ sehat_config | tojson }};</script>
+<script src="/static/js/scan3d.js?v={{ asset_version }}"></script>
+<script src="/static/js/app.js?v={{ asset_version }}"></script>
 </body>
 </html>

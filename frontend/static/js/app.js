@@ -3,10 +3,15 @@
    Plain JS (no framework). All state in memory.
    ============================================================ */
 
-const API = 'http://localhost:8000';
-// See architecture doc §01/§04 -- separate services, not CareLink's own backend.
-const SEHATAI_API = 'http://localhost:3000';
-const EVIDENCE_API = 'http://localhost:8002';
+// Service base URLs come from window.SEHAT_CONFIG, which frontend_main.py
+// renders into index.html from its own env vars -- so the same build works
+// on localhost (separate ports, the defaults below) and behind the gateway
+// (same-origin paths like /api). See architecture doc §01/§04 -- these are
+// separate services, not CareLink's own backend.
+const SEHAT_CONFIG = window.SEHAT_CONFIG || {};
+const API = SEHAT_CONFIG.apiBase || 'http://localhost:8000';
+const SEHATAI_API = SEHAT_CONFIG.sehataiBase || 'http://localhost:3000';
+const EVIDENCE_API = SEHAT_CONFIG.evidenceBase || 'http://localhost:8002';
 
 /* ── Auth helpers ──
    sessionStorage, not localStorage, deliberately: localStorage is shared
@@ -2932,9 +2937,11 @@ async function sendEvidenceQuestion(explicitText) {
   const doneStages = [];
 
   try {
+    // The gateway only lets a signed-in doctor through to EvidenceBoard
+    // (auth_request against /auth/verify) -- it has no login of its own.
     const res = await fetch(`${EVIDENCE_API}/api/ask/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${auth.token()}` },
       body: JSON.stringify({ question: text }),
     });
     if (!res.ok) {
