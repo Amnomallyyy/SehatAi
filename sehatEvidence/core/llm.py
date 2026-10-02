@@ -78,11 +78,58 @@ class LLMclient():
         try:
             return json.loads(cleaned)
 
-        # 5. Catch the specific JSON failure
+        # 5. Catch the specific JSON failure -- but first try a conservative
+        # repair. Seen live from the Nemotron verifier, on most claims:
+        #     "reason": The evidence directly states ...
+        # (one bare, unquoted string value in otherwise valid JSON). Without
+        # the repair every such answer was thrown away and re-asked on the
+        # next failover key, multiplying a single Clinical Evidence question
+        # into 10+ minutes of retries.
         except json.JSONDecodeError as exc:
+            repaired = self._repair_json(cleaned)
+            if repaired is not None:
+                try:
+                    return json.loads(repaired)
+                except json.JSONDecodeError:
+                    pass
             # We slice raw[:500] so if the AI went crazy and wrote a 10-page essay,
             # we only print the first 500 characters to our error logs.
             raise LLMerror(f"LLM did not return valid JSON. Raw response:\n{raw[:500]}") from exc
+
+    # A line holding `"key": <value>` whose value is not already a JSON
+    # string/number/literal/object/array -- i.e. a bare sentence.
+    _BARE_VALUE_LINE = re.compile(
+        # (?=\S) pins the check to the value's first real character -- without
+        # it the regex backtracks into the whitespace and "re-quotes" values
+        # that were already valid.
+        r'^(\s*"[^"\n]+"\s*:[ \t]*)(?=\S)(?!["\[{]|-?\d|true\b|false\b|null\b)(.*?)(\s*,)?\s*$'
+    )
+
+    @classmethod
+    def _repair_json(cls, text: str) -> Optional[str]:
+        """Best-effort fixes for the near-JSON models actually emit: prose
+        around the value, bare unquoted string values (one per line), and
+        trailing commas. Returns None when there's nothing JSON-shaped to
+        repair. Never invents keys or values -- it only re-quotes and trims
+        what the model already wrote, so a repaired answer still has to pass
+        every downstream validator."""
+        starts = [i for i in (text.find("{"), text.find("[")) if i != -1]
+        if not starts:
+            return None
+        start = min(starts)
+        end = max(text.rfind("}"), text.rfind("]"))
+        if end <= start:
+            return None
+        body = text[start:end + 1]
+
+        lines = []
+        for line in body.split("\n"):
+            m = cls._BARE_VALUE_LINE.match(line)
+            if m and m.group(2):
+                line = f"{m.group(1)}{json.dumps(m.group(2).strip())}{m.group(3) or ''}"
+            lines.append(line)
+        body = "\n".join(lines)
+        return re.sub(r",(\s*[}\]])", r"\1", body)
 
     @staticmethod
     def _strip_json_fences(text: str) -> str:
