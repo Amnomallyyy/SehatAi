@@ -78,6 +78,12 @@ jobs:
   node:
     name: AI assistant + web UI (Node)
     runs-on: ubuntu-latest
+    env:
+      # supabaseClient.js builds its client at import time and supabase-js
+      # rejects an empty URL. The deterministic suite never makes a network
+      # call, so placeholders are enough.
+      SUPABASE_URL: https://ci-placeholder.supabase.co
+      SUPABASE_SERVICE_KEY: ci-placeholder
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

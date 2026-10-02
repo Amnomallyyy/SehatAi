@@ -153,6 +153,21 @@ supabase/        schema.sql: the full shared database schema
 docs/            architecture notes
 ```
 
+## Demo tips
+
+- **Pre-warm Clinical Evidence.** A fresh question runs the full pipeline
+  live (search, grading, synthesis, claim-by-claim verification) and takes
+  several minutes on free-tier models. Answers are cached by question in the
+  `evidenceboard-db` volume, so ask each demo question once beforehand; on
+  stage it replays instantly, with a "cached" marker.
+- **Speed knobs** (`.env`): `LLM_CONCURRENCY` (parallel LLM calls, default
+  4), `POOL_CAP` (evidence records kept after grading, default 50; 25 roughly
+  halves synthesis and verification), `LLM_ENABLE_THINKING` (default off for
+  every stage except claim verification).
+- **Seed believable data** with `npm run seed:data` and create one doctor
+  and one patient account, connected and with report access granted, before
+  you present.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
