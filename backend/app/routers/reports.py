@@ -9,6 +9,7 @@ from .. import models, schemas
 from ..database import get_db
 from ..dependencies import (
     UPLOAD_DIR,
+    looks_like_pdf_bytes,
     ensure_conversation_participant,
     ensure_report_participant,
     get_conversation_or_404,
@@ -72,9 +73,13 @@ async def upload_report(
     if not looks_like_pdf:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are accepted")
 
-    contents = await file.read()
+    # Read at most one byte past the cap -- never buffer an arbitrarily
+    # large upload into memory just to reject it afterwards.
+    contents = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File exceeds the 20 MB upload limit")
+    if not looks_like_pdf_bytes(contents):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are accepted")
 
     # Falls back to the uploaded file's own name if the uploader didn't
     # type one in -- better than a blank label, and closes the old gap

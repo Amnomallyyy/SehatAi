@@ -92,6 +92,28 @@ def sync_sehatai_profile(user: "models.User", db: Session) -> None:
     db.commit()
 
 
+def looks_like_pdf_bytes(contents: bytes) -> bool:
+    """Real PDFs start with "%PDF-" (a few writers prepend whitespace or a
+    BOM, hence the small search window). The client-supplied content type
+    and filename are just labels -- this is what actually stops arbitrary
+    files from being stored and later served back as application/pdf."""
+    return b"%PDF-" in contents[:1024]
+
+
+# Magic numbers for the avatar formats accepted in routers/users.py.
+_IMAGE_SIGNATURES = {
+    "jpg": b"\xff\xd8\xff",
+    "png": b"\x89PNG\r\n\x1a\n",
+}
+
+
+def looks_like_image_bytes(contents: bytes, ext: str) -> bool:
+    if ext == "webp":
+        return contents[:4] == b"RIFF" and contents[8:12] == b"WEBP"
+    signature = _IMAGE_SIGNATURES.get(ext)
+    return signature is not None and contents.startswith(signature)
+
+
 def get_conversation_or_404(db: Session, conversation_id: int) -> models.Conversation:
     conversation = db.query(models.Conversation).filter(models.Conversation.id == conversation_id).first()
     if conversation is None:

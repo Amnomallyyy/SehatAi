@@ -30,6 +30,7 @@ uses. Accepting a raw UUID would let any authenticated user enumerate
 the shared `patients` table, which other services (SehatAI's Node
 service, DietBot) also read.
 """
+import html
 import os
 import re
 import uuid
@@ -56,9 +57,15 @@ _ABNORMAL_FLAGS = {"high", "low", "abnormal", "critical"}
 # "> 5". Anything else (e.g. "Negative: ≤69", "90/60-120/80") returns
 # (None, None) on purpose -- the caller falls back to plain text, not a
 # guess.
-_RANGE_PAIR_RE = re.compile(r"^\s*([\d,]+\.?\d*)\s*-\s*([\d,]+\.?\d*)\s*$")
-_RANGE_LT_RE = re.compile(r"^\s*[<≤]\s*([\d,]+\.?\d*)\s*$")
-_RANGE_GT_RE = re.compile(r"^\s*[>≥]\s*([\d,]+\.?\d*)\s*$")
+# Also accepted: en/em dashes and "to" between the bounds ("3.5–5.0"), a
+# trailing unit ("70-110 mg/dL", "4.0-11.0 x10^3/uL"), and HTML-escaped
+# comparators ("&lt;69" -- unescaped first). A unit must start with a
+# letter/%/µ so "60-120/80" still doesn't parse as 60..120.
+_NUM = r"(\d[\d,]*(?:\.\d+)?|\.\d+)"
+_UNIT_TAIL = r"(?:\s*[A-Za-z%µμ].*)?"
+_RANGE_PAIR_RE = re.compile(rf"^\s*{_NUM}\s*(?:-|–|—|to)\s*{_NUM}{_UNIT_TAIL}$", re.IGNORECASE)
+_RANGE_LT_RE = re.compile(rf"^\s*(?:<=?|≤|up\s+to)\s*{_NUM}{_UNIT_TAIL}$", re.IGNORECASE)
+_RANGE_GT_RE = re.compile(rf"^\s*(?:>=?|≥)\s*{_NUM}{_UNIT_TAIL}$", re.IGNORECASE)
 
 
 def _parse_normal_range(text: Optional[str]):
@@ -67,7 +74,7 @@ def _parse_normal_range(text: Optional[str]):
     bar, not a 500."""
     if not text:
         return (None, None)
-    t = text.strip()
+    t = html.unescape(text).strip()
     m = _RANGE_PAIR_RE.match(t)
     if m:
         try:

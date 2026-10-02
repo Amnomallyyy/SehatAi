@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..dependencies import AVATAR_DIR, sync_sehatai_profile
+from ..dependencies import AVATAR_DIR, looks_like_image_bytes, sync_sehatai_profile
 from ..security import get_current_user
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -86,17 +86,25 @@ async def upload_my_avatar(
             detail="Only JPEG, PNG, or WebP images are accepted",
         )
 
-    contents = await file.read()
+    contents = await file.read(MAX_AVATAR_BYTES + 1)
     if len(contents) > MAX_AVATAR_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image exceeds the 2 MB upload limit")
+    if not looks_like_image_bytes(contents, ext):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only JPEG, PNG, or WebP images are accepted",
+        )
 
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     stored_filename = f"{uuid.uuid4().hex}.{ext}"
     with open(AVATAR_DIR / stored_filename, "wb") as f:
         f.write(contents)
 
+    previous = current_user.avatar_path
     current_user.avatar_path = stored_filename
     db.commit()
+    if previous and previous != stored_filename:
+        (AVATAR_DIR / previous).unlink(missing_ok=True)
     db.refresh(current_user)
     return current_user
 

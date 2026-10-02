@@ -48,7 +48,17 @@ if not SQLALCHEMY_DATABASE_URL:
 # every connection -- the old _enable_sqlite_foreign_keys PRAGMA listener
 # this file used to need is gone, not because it stopped mattering, but
 # because Postgres never needed it in the first place.
-engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+# pool_recycle: Supabase's pooler drops idle server connections; recycling
+# under that window avoids "server closed the connection unexpectedly" on
+# the first request after a quiet period (pool_pre_ping catches the rest).
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "10")),
+    pool_recycle=int(os.environ.get("DB_POOL_RECYCLE_SECONDS", "300")),
+    pool_timeout=int(os.environ.get("DB_POOL_TIMEOUT_SECONDS", "30")),
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

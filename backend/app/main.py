@@ -1,10 +1,17 @@
 """
 App entrypoint. Run with:  uvicorn app.main:app --reload
 """
+import logging
+import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from .database import Base, engine
 from .dependencies import AVATAR_DIR, UPLOAD_DIR
@@ -24,6 +31,13 @@ from .routers import (
     structured_reports,
     users,
 )
+
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("carelink")
 
 
 @asynccontextmanager
@@ -50,13 +64,41 @@ app = FastAPI(
 # auth is a Bearer token in an Authorization header, not a cookie --
 # allow_credentials stays False, so there's no CSRF-relevant credential
 # state for a wildcard origin to expose.
+#
+# CORS_ALLOW_ORIGINS narrows it (comma-separated) when the deployment wants
+# to -- behind the gateway everything is same-origin and CORS never fires.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
+# JSON lists (conversations, markers, history) compress ~5-10x.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """Request id + one access-log line with latency for every request, and
+    a clean JSON 500 (with that id) instead of a bare stack trace if a
+    route raises something unexpected."""
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled error [%s] %s %s", request_id, request.method, request.url.path)
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "request_id": request_id},
+        )
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    response.headers["X-Request-ID"] = request_id
+    logger.info("%s %s -> %s %.0fms [%s]", request.method, request.url.path, response.status_code, elapsed_ms, request_id)
+    return response
 
 app.include_router(auth.router)
 app.include_router(users.router)
@@ -74,6 +116,20 @@ app.include_router(lab_reports.router)
 app.include_router(structured_reports.router)
 
 
+@app.get("/health/live", tags=["health"])
+def liveness():
+    """Process is up -- no dependencies checked (container liveness)."""
+    return {"status": "ok"}
+
+
 @app.get("/health", tags=["health"])
 def health_check():
-    return {"status": "ok"}
+    """Readiness: the database answers. 503 when it doesn't, so the
+    gateway/orchestrator stops routing here instead of serving errors."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.warning("Health check: database unreachable: %s", exc)
+        return JSONResponse(status_code=503, content={"status": "degraded", "database": "unreachable"})
+    return {"status": "ok", "database": "ok"}

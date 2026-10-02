@@ -214,13 +214,35 @@ def _call_nvidia_vision(file_bytes: bytes, mime_type: str) -> List[Dict]:
 
 
 def _parse_json_array(text: str) -> List[Dict]:
+    """Models don't always follow "ONLY a JSON array": seen in practice are
+    markdown fences, a wrapping object ({"results": [...]}), and numbers
+    where strings were asked for. Normalize all of that to a list of dicts
+    with string test_name/value/unit, so the comparison loop in
+    run_verification never trips over a float's missing .strip()."""
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except json.JSONDecodeError:
         match = re.search(r"\[.*\]", text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
+        if not match:
+            raise RuntimeError(f"Verifier response was not a JSON array: {text[:200]}")
+        data = json.loads(match.group())
+
+    if isinstance(data, dict):
+        data = next((v for v in data.values() if isinstance(v, list)), [data])
+    if not isinstance(data, list):
         raise RuntimeError(f"Verifier response was not a JSON array: {text[:200]}")
+
+    items: List[Dict] = []
+    for item in data:
+        if not isinstance(item, dict) or not item.get("test_name"):
+            continue
+        items.append({
+            "test_name": str(item["test_name"]),
+            "value": None if item.get("value") is None else str(item["value"]),
+            "value_numeric": item.get("value_numeric") if isinstance(item.get("value_numeric"), (int, float)) else None,
+            "unit": None if item.get("unit") is None else str(item["unit"]),
+        })
+    return items
 
 
 def _mime_type_for(doc: models.Document) -> str:
