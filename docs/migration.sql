@@ -1,0 +1,2 @@
+-- Superseded: the full, tested schema lives in supabase/schema.sql.
+-- (This file was empty; kept only so old links don't 404.)

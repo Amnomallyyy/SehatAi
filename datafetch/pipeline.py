@@ -168,27 +168,19 @@ def process_document(
         error_msg = str(e)
         # Check for duplicate in storage (409 Conflict)
         if "409" in error_msg or "Duplicate" in error_msg or "already exists" in error_msg:
-            print(f"[WARN] File already exists in storage. Treating as duplicate.")
-            # Try to get the public URL anyway (it exists)
+            # Step 2 already confirmed there is NO documents row for this
+            # (patient, file_hash) -- so this object is an orphan left by an
+            # earlier run that uploaded the file and then failed (OCR,
+            # structuring, ...). Its storage path is content-addressed by the
+            # same hash, so it IS this file: reuse it and carry on. Returning
+            # "duplicate_storage" here used to block that patient from ever
+            # re-processing the file.
+            print("[WARN] File already in storage from an earlier incomplete run -- reusing it.")
             try:
-                # Construct URL manually or query bucket
-                public_url = supabase.client.storage.from_(supabase.storage_bucket).get_public_url(storage_path)
-                # Check if there is a document record with this file_hash? If not, we might need to create one.
-                # We'll return duplicate status and let user know.
-                return {
-                    "status": "duplicate_storage",
-                    "document_id": None,
-                    "error": None,
-                    "message": "File already exists in storage. If you believe this is an error, delete the file from storage and retry.",
-                    "file_url": public_url
-                }
-            except:
-                return {
-                    "status": "duplicate_storage",
-                    "document_id": None,
-                    "error": None,
-                    "message": "File already exists in storage but URL could not be constructed. Please check manually."
-                }
+                file_url = supabase.client.storage.from_(supabase.storage_bucket).get_public_url(storage_path)
+            except Exception as url_exc:
+                logger.error(f"Could not resolve existing storage object: {url_exc}")
+                return {"status": "failed_storage", "document_id": None, "error": "Upload failed: stored file could not be resolved"}
         else:
             logger.error(f"Upload failed: {e}")
             return {"status": "failed_storage", "document_id": None, "error": f"Upload failed: {error_msg}"}
