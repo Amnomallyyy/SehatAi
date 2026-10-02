@@ -4,11 +4,13 @@ deliverable -- just how I verified the API before handing it over.
 Run with the server already up on :8000.
 """
 import io
+import os
 import sys
 
 import requests
 
-BASE = "http://127.0.0.1:8000"
+# SEHAT_API_BASE=http://localhost:8080/api runs the same flow through the gateway.
+BASE = os.environ.get("SEHAT_API_BASE", "http://127.0.0.1:8000")
 failures = []
 
 
@@ -335,16 +337,21 @@ check("patient marks reviewed -> 403", r.status_code == 403, r.text)
 r = requests.patch(f"{BASE}/reports/{report_id}/status", json={"status": "reviewed"}, headers=auth_headers(doctor_token))
 check("doctor marks reviewed -> 200", r.status_code == 200 and r.json()["status"] == "reviewed", r.text)
 
+# Comments are the doctor's clinical-discussion thread: doctor-only to post,
+# both participants can read (see report_comments.add_report_comment).
 r = requests.post(f"{BASE}/reports/{report_id}/comments", json={"text": "What does this mean for my diet?"}, headers=auth_headers(patient_token))
+check("patient posts comment -> 403 (doctor-only thread)", r.status_code == 403, r.text)
+r = requests.post(f"{BASE}/reports/{report_id}/comments", json={"text": "Your LDL is a bit high."}, headers=auth_headers(doctor_token))
+check("doctor posts comment -> 201", r.status_code == 201, r.text)
 c1_id = r.json()["id"]
 r = requests.post(f"{BASE}/reports/{report_id}/comments", json={"text": "Cut back on red meat, otherwise fine."}, headers=auth_headers(doctor_token))
 c2_id = r.json()["id"]
 
 r = requests.get(f"{BASE}/reports/{report_id}/comments", headers=auth_headers(patient_token))
-check("list comments -> both, ascending", [c["id"] for c in r.json()] == [c1_id, c2_id], r.json())
+check("patient lists comments -> both, ascending", [c["id"] for c in r.json()] == [c1_id, c2_id], r.json())
 
-r = requests.post(f"{BASE}/reports/{report_id}/comments", json={"text": "hi"}, headers=auth_headers(patient2_token))
-check("add comment as non-participant -> 403", r.status_code == 403, r.text)
+r = requests.post(f"{BASE}/reports/{report_id}/comments", json={"text": "hi"}, headers=auth_headers(doctor2_token))
+check("add comment as non-participant doctor -> 403", r.status_code == 403, r.text)
 
 print()
 if failures:

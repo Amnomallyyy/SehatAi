@@ -611,11 +611,16 @@ def build_default_pipeline(settings: Optional[Settings] = None) -> EvidencePipel
     if settings is None:
         settings = get_settings()
     llm = FailoverLLMClient(settings=settings)
-    # Use heavier model for verifier (entailment/NLI) when configured
-    if settings.llm_sensitive_model:
+    # The Verifier's entailment judge is the one stage where step-by-step
+    # reasoning earns its latency (it decides which claims get deleted), so
+    # it keeps thinking ON -- and uses the heavier model when configured --
+    # even when every other stage runs with thinking off for speed.
+    if settings.llm_sensitive_model or not settings.llm_enable_thinking:
         from config import build_llm_clients
         sensitive_llm = FailoverLLMClient(
-            clients=build_llm_clients(settings, model_override=settings.llm_sensitive_model)
+            clients=build_llm_clients(
+                settings, model_override=settings.llm_sensitive_model, enable_thinking=True
+            )
         )
     else:
         sensitive_llm = llm
@@ -627,7 +632,7 @@ def build_default_pipeline(settings: Optional[Settings] = None) -> EvidencePipel
     return EvidencePipeline(
         strategist=Strategist(llm=llm),
         gather_fn=gather_evidence,
-        appraiser=Appraiser(pool_cap=settings.pool_cap, llm=llm),
+        appraiser=Appraiser(pool_cap=settings.pool_cap, llm=llm, max_concurrency=settings.llm_concurrency),
         synthesizer=Synthesizer(llm=llm),
         red_team=RedTeam(llm=llm),
         verifier=Verifier(
@@ -635,6 +640,7 @@ def build_default_pipeline(settings: Optional[Settings] = None) -> EvidencePipel
             pubmed=pubmed,
             enable_supersession=settings.enable_supersession,
             enable_citation_repair=settings.enable_citation_repair,
+            max_concurrency=settings.llm_concurrency,
         ),
         settings=settings,
     )

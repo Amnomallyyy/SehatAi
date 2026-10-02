@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main, final, "claude/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Core API (end-to-end smoke test)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: sehat
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:ci@127.0.0.1:5432/sehat
+      SECRET_KEY: ci-only-secret-not-used-anywhere-real-0123456789
+      SIGNUP_RATE_LIMIT_PER_HOUR: "1000"
+      LOGIN_RATE_LIMIT_PER_5_MIN: "1000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            datafetch/requirements.txt
+      - name: Install
+        run: pip install -r backend/requirements.txt -r datafetch/requirements.txt requests
+      - name: Compile all Python sources
+        run: python -m compileall -q backend/app datafetch dietbot frontend sehatEvidence
+      - name: Start API
+        working-directory: backend
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8000/health && exit 0; sleep 1; done
+          cat /tmp/api.log; exit 1
+      - name: Smoke test (auth, connections, chat, reports, comments)
+        working-directory: backend
+        run: python test_flow.py
+      - name: API log
+        if: always()
+        run: cat /tmp/api.log || true
+
+  evidence:
+    name: Clinical Evidence (offline suites)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sehatEvidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q -p no:cacheprovider --ignore=tests/live_test_pubmed.py --ignore=tests/live_test_europepmc.py --ignore=tests/live_test_clinicaltrials.py
+      - name: Plain-script suites
+        run: |
+          for t in test_agents test_clinicaltrials_parsing test_clinicaltrials_relaxation test_config \
+                   test_europepmc_parsing test_pubmed_parsing test_pubmed_relaxation test_query_relaxation \
+                   test_red_team test_store test_strategist test_synthesizer test_verifier; do
+            echo "::group::$t"; python -m tests.$t; echo "::endgroup::"
+          done
+
+  node:
+    name: AI assistant + web UI (Node)
+    runs-on: ubuntu-latest
+    env:
+      # supabaseClient.js builds its client at import time and supabase-js
+      # rejects an empty URL. The deterministic suite never makes a network
+      # call, so placeholders are enough.
+      SUPABASE_URL: https://ci-placeholder.supabase.co
+      SUPABASE_SERVICE_KEY: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Syntax check
+        run: for f in sehatai/*.js frontend/static/js/*.js; do node --check "$f"; done
+      - name: Deterministic safety regression suite
+        run: node sehatai/testEdgeCases.js
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose config --quiet
+      - run: docker compose build

@@ -3,10 +3,15 @@
    Plain JS (no framework). All state in memory.
    ============================================================ */
 
-const API = 'http://localhost:8000';
-// See architecture doc §01/§04 -- separate services, not CareLink's own backend.
-const SEHATAI_API = 'http://localhost:3000';
-const EVIDENCE_API = 'http://localhost:8002';
+// Service base URLs come from window.SEHAT_CONFIG, which frontend_main.py
+// renders into index.html from its own env vars -- so the same build works
+// on localhost (separate ports, the defaults below) and behind the gateway
+// (same-origin paths like /api). See architecture doc §01/§04 -- these are
+// separate services, not CareLink's own backend.
+const SEHAT_CONFIG = window.SEHAT_CONFIG || {};
+const API = SEHAT_CONFIG.apiBase || 'http://localhost:8000';
+const SEHATAI_API = SEHAT_CONFIG.sehataiBase || 'http://localhost:3000';
+const EVIDENCE_API = SEHAT_CONFIG.evidenceBase || 'http://localhost:8002';
 
 /* ── Auth helpers ──
    sessionStorage, not localStorage, deliberately: localStorage is shared
@@ -715,6 +720,9 @@ async function openConvById(conv, other) {
 
   document.getElementById('conv-other-name').textContent = other.name;
   document.getElementById('conv-other-role').textContent = other.role;
+  // The header avatar was never filled in -- it showed the template's "?"
+  // placeholder for every conversation.
+  loadAvatarInto(document.getElementById('conv-avatar'), other);
 
   const thread = document.getElementById('conv-thread');
   thread.innerHTML = '<div class="skeleton skeleton-line w60" style="margin:20px auto"></div>';
@@ -2626,11 +2634,20 @@ async function sendAssistantMessage(explicitText) {
     // client doesn't already hold a session id for this mode, keeps the
     // server's state honest with what's actually visible on screen.
     const isFirstMessageThisMode = !sehataiSessionIds[assistantMode];
-    const res = await fetch(`${SEHATAI_API}/api/chat`, {
+    const sendChat = (bearer) => fetch(`${SEHATAI_API}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearer}` },
       body: JSON.stringify({ mode: assistantMode, message: text, newSession: isFirstMessageThisMode }),
     });
+    let res = await sendChat(token);
+    if (res.status === 401) {
+      // Each mint revokes the patient's previous token (sehatai_bridge.py),
+      // so opening the assistant in a second tab silently invalidated the
+      // first tab's cached one -- every later message there failed until
+      // a full reload. Re-mint once and retry instead.
+      sehataiToken = null;
+      res = await sendChat(await ensureSehataiToken());
+    }
     const result = await res.json();
     stopThinking();
     thinking.remove();
@@ -2859,7 +2876,15 @@ function renderEvidenceAnswer(report) {
   // record") -- re-sorting here is just defensive, not load-bearing.
   const sources = [...(report.evidence || [])].sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
 
-  let html = `<div>${escHtml(report.answer_text || '')}</div>`;
+  // A thorough answer can run to 30+ verified claims; as one paragraph it
+  // pushed the scores, funnel and citations off-screen. Preview the
+  // opening lines and let the reader expand the rest.
+  const answerText = report.answer_text || '';
+  const answerId = `evidence-answer-${report.run_id || Date.now()}`;
+  let html = answerText.length > 600
+    ? `<div class="evidence-answer-text" id="${escHtml(answerId)}">${escHtml(answerText)}</div>
+       <span class="evidence-abstract-toggle" data-target="${escHtml(answerId)}" data-more="Read full answer">Read full answer</span>`
+    : `<div>${escHtml(answerText)}</div>`;
   html += renderEvidenceScoreRow(scores);
 
   if (f.claims_generated != null) {
@@ -2892,7 +2917,7 @@ function renderEvidenceAnswer(report) {
     btn.addEventListener('click', () => {
       const el = document.getElementById(btn.dataset.target);
       const expanded = el.classList.toggle('expanded');
-      btn.textContent = expanded ? 'Show less' : 'Show full abstract';
+      btn.textContent = expanded ? 'Show less' : (btn.dataset.more || 'Show full abstract');
     });
   });
 }
@@ -2932,9 +2957,11 @@ async function sendEvidenceQuestion(explicitText) {
   const doneStages = [];
 
   try {
+    // The gateway only lets a signed-in doctor through to EvidenceBoard
+    // (auth_request against /auth/verify) -- it has no login of its own.
     const res = await fetch(`${EVIDENCE_API}/api/ask/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${auth.token()}` },
       body: JSON.stringify({ question: text }),
     });
     if (!res.ok) {

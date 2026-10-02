@@ -192,19 +192,36 @@ const HEADERS_TIMEOUT_MS = 10 * 1000;
 // origin, not '*', since unlike a token-verified request this reflects
 // straight into a response header. Configure via CORS_ORIGIN in .env;
 // defaults to CareLink's planned dev port (see architecture doc §01).
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3002';
+// Comma-separated list is accepted (e.g. the dev frontend AND a deployed
+// one); the request's own Origin is echoed back only if it's on the list.
+// Behind the gateway everything is same-origin and this never matters.
+const CORS_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:3002')
+  .split(',').map((o) => o.trim()).filter(Boolean);
+
+function corsOriginFor(req) {
+  const origin = req.headers.origin;
+  if (origin && CORS_ORIGINS.includes(origin)) return origin;
+  return CORS_ORIGINS[0];
+}
 
 const server = http.createServer({
   requestTimeout: REQUEST_TIMEOUT_MS,
   headersTimeout: HEADERS_TIMEOUT_MS,
 }, async (req, res) => {
   try {
-    res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
+    res.setHeader('Access-Control-Allow-Origin', corsOriginFor(req));
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
+      return;
+    }
+
+    // Liveness probe for Docker/the gateway -- no auth, no DB, no AI call.
+    if ((req.method === 'GET' || req.method === 'HEAD') && req.url === '/health') {
+      sendJson(res, 200, { status: 'ok' });
       return;
     }
 
@@ -231,9 +248,18 @@ const server = http.createServer({
     }
 
     if (req.method === 'POST' && req.url === '/api/chat') {
-      const patientId = await authenticate(req);
+      let patientId;
+      try {
+        patientId = await authenticate(req);
+      } catch (err) {
+        if (err.statusCode !== 503) throw err;
+        sendJson(res, 503, { error: 'The assistant is temporarily unavailable. Please try again in a moment.' });
+        return;
+      }
       if (!patientId) {
-        sendJson(res, 401, { error: 'Missing or invalid API token. See issuetoken.js.' });
+        // Plain-language for the patient; the CareLink frontend reacts to
+        // the 401 itself by minting a fresh token and retrying once.
+        sendJson(res, 401, { error: 'Your assistant session expired. Please try again.' });
         return;
       }
 
@@ -308,3 +334,16 @@ server.listen(PORT, () => {
   }
   console.log('(same backend as `npm run chat` — this is just a browser front-end for it)');
 });
+
+// Graceful shutdown: `docker stop` sends SIGTERM -- stop accepting new
+// connections and let in-flight chat turns (which can take a while across
+// the AI provider chain) finish before exiting, instead of cutting a
+// patient's reply off mid-request. Hard exit after 25s (Docker's default
+// stop grace period is 10s; compose sets stop_grace_period: 30s).
+function shutdown(signal) {
+  console.log(`${signal} received — draining connections...`);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 25 * 1000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -29,7 +29,17 @@ from .database import get_db
 
 # For local hackathon use a fallback dev secret is fine. For anything beyond
 # your own machine, set a real SECRET_KEY env var before running uvicorn.
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-secret-change-me-3f8a9c2e1b7d")
+# With APP_ENV=production the fallback is refused outright: the dev secret
+# is public in this repo, so anyone could mint a valid token for any user.
+_DEV_SECRET_KEY = "dev-only-secret-change-me-3f8a9c2e1b7d"
+SECRET_KEY = os.environ.get("SECRET_KEY") or _DEV_SECRET_KEY
+if os.environ.get("APP_ENV", "").lower() == "production" and (
+    SECRET_KEY == _DEV_SECRET_KEY or len(SECRET_KEY) < 32
+):
+    raise RuntimeError(
+        "APP_ENV=production requires SECRET_KEY to be set to a random value of at least 32 characters "
+        "(e.g. `python -c \"import secrets; print(secrets.token_urlsafe(48))\"`)."
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24h -- long enough to not expire mid-demo
 

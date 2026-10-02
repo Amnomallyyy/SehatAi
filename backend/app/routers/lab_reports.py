@@ -10,17 +10,21 @@ patient uploading a report through this route, before this file existed,
 would have had no route to upload to at all for a *lab report* specifically
 -- CareLink's existing routers/reports.py is a different, deliberately
 untouched feature (a PDF shared inside one doctor-patient conversation
-thread, stored in CareLink's own SQLite-backed Report table).
+thread, stored in CareLink's own Report table).
 
-Fix, deliberately the simplest of the two options named in the
-architecture doc: save the upload to a short-lived local staging file,
-then shell out to DataFetch's own main.py exactly the way a human runs it
-today. DataFetch's pipeline.py already does the real work end-to-end --
-uploads to Supabase storage, inserts the `documents` row, runs OCR,
-inserts `extracted_data` -- so this route does not duplicate any of that;
-it only triggers it. (The other option in the doc, a processing_queue
-worker, is worth revisiting if extraction ever needs to survive a request
-timeout -- not needed for a first working version.)
+Fix: save the upload to a short-lived local staging file, then run
+DataFetch's own main.py exactly the way a human runs it today. DataFetch's
+pipeline.py already does the real work end-to-end -- uploads to Supabase
+storage, inserts the `documents` row, runs OCR, inserts `extracted_data` --
+so this route does not duplicate any of that; it only triggers it.
+
+The pipeline runs in a bounded worker pool, never on the event loop: the
+original `subprocess.run()` inside this async route froze the WHOLE API
+(every user, every route) for as long as OCR took -- up to three minutes.
+The request waits up to REQUEST_WAIT_SECONDS for the result; past that it
+answers "queued" and the extraction genuinely keeps going in the worker
+(the old timeout killed the child process while telling the user it was
+still running).
 
 The --password requirement: DataFetch's authenticate_patient() gates
 processing behind a bcrypt-hashed password on the `patients` row (see
@@ -32,16 +36,20 @@ password onto that patients row immediately before each pipeline run,
 uses it once, and never persists or shows it anywhere. That satisfies the
 gate without pretending this is a credential the patient should know.
 """
+import asyncio
 import json
+import logging
 import os
 import secrets
 import subprocess
 import sys
 import uuid as uuid_module
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import List, Optional
 
 from dotenv import dotenv_values
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -49,6 +57,8 @@ from ..database import get_db
 from ..dependencies import LAB_REPORT_STAGING_DIR, get_or_create_sehatai_patient_id
 from ..security import get_current_user, hash_password, require_patient_role
 from ..verification import run_verification
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/me", tags=["lab-reports"])
 
@@ -61,16 +71,26 @@ DATAFETCH_PYTHON = os.environ.get("DATAFETCH_PYTHON", sys.executable)
 # below) -- so most keys (SUPABASE_URL, GEMINI_API_KEY, ...) already
 # arrive correctly. The one mismatch: DataFetch reads SUPABASE_KEY, but
 # the root .env calls the same secret SUPABASE_SERVICE_KEY (every other
-# service in this repo reads it under that name). Read it directly from
-# the root .env file here -- NOT from CareLink's own os.environ, which
-# loads its own separate backend/.env and never has this value at all --
-# and hand it to the subprocess under the name DataFetch expects.
+# service in this repo reads it under that name). Read it from the root
+# .env file first, then fall back to this process's own environment (a
+# container configured purely through env vars has no .env file at all)
+# -- and hand it to the subprocess under the name DataFetch expects.
 _ROOT_ENV = dotenv_values(DATAFETCH_DIR / ".env")
-DATAFETCH_SUPABASE_KEY = _ROOT_ENV.get("SUPABASE_KEY") or _ROOT_ENV.get("SUPABASE_SERVICE_KEY", "")
+
+
+def _first_set(*names: str) -> str:
+    for name in names:
+        value = _ROOT_ENV.get(name) or os.environ.get(name)
+        if value:
+            return value
+    return ""
+
+
+DATAFETCH_SUPABASE_KEY = _first_set("SUPABASE_KEY", "SUPABASE_SERVICE_KEY")
 # Same class of mismatch, found live: DataFetch's clients.py reads
 # OCRSPACE_API_KEY specifically; whoever added it to the root .env named
 # it OCR_API_KEY. Same fix, same reasoning.
-DATAFETCH_OCR_KEY = _ROOT_ENV.get("OCRSPACE_API_KEY") or _ROOT_ENV.get("OCR_API_KEY", "")
+DATAFETCH_OCR_KEY = _first_set("OCRSPACE_API_KEY", "OCR_API_KEY")
 
 # EXTENDED (2026-09-06) to match datafetch/pipeline.py's detect_file_type
 # -- GIF/TIFF/BMP are all formats OCR.space's API genuinely supports.
@@ -81,10 +101,80 @@ DATAFETCH_OCR_KEY = _ROOT_ENV.get("OCRSPACE_API_KEY") or _ROOT_ENV.get("OCR_API_
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".bmp"}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
+# How long the upload request itself waits for the result before answering
+# "queued" (the frontend's button says "up to 3 min").
+REQUEST_WAIT_SECONDS = float(os.environ.get("LAB_REPORT_REQUEST_WAIT_SECONDS", "170"))
+# Hard ceiling for one pipeline run (OCR + Gemini batch fallback) -- only a
+# genuinely hung run ever reaches it.
+PIPELINE_HARD_TIMEOUT_SECONDS = float(os.environ.get("LAB_REPORT_PIPELINE_TIMEOUT_SECONDS", "900"))
+
+# Each run is a whole Python subprocess doing OCR, so a burst of uploads
+# queues here instead of forking without limit.
+_EXTRACTION_POOL = ThreadPoolExecutor(
+    max_workers=int(os.environ.get("LAB_REPORT_MAX_CONCURRENT", "2")),
+    thread_name_prefix="lab-extract",
+)
+
+
+def _parse_pipeline_result(stdout: str) -> Optional[dict]:
+    """main.py --json prints the result dict LAST, after a progress log that
+    can itself contain braces -- so decode from the last line that opens a
+    JSON object, falling back to the first '{' anywhere."""
+    for start in (stdout.rfind("\n{"), stdout.find("{")):
+        if start == -1:
+            continue
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(stdout[start:].lstrip())
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _run_extraction(cmd: List[str], env: dict, staged_path: Path) -> subprocess.CompletedProcess:
+    """Worker-thread body: run DataFetch's CLI to completion, always remove
+    the staged upload afterwards, then run the independent verification
+    pass for a newly stored document (still off the event loop)."""
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(DATAFETCH_DIR),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PIPELINE_HARD_TIMEOUT_SECONDS,
+            env=env,
+        )
+    finally:
+        staged_path.unlink(missing_ok=True)
+
+    if result.returncode != 0:
+        logger.warning(
+            "DataFetch pipeline exited %s: stdout=%s stderr=%s",
+            result.returncode, result.stdout[-1500:], result.stderr[-1500:],
+        )
+        return result
+
+    parsed = _parse_pipeline_result(result.stdout) or {}
+    document_id = parsed.get("document_id")
+    if document_id and parsed.get("status") == "stored":
+        try:
+            run_verification(uuid_module.UUID(str(document_id)))
+        except Exception:  # a review aid -- never fail the upload over it
+            logger.exception("Verification pass failed for document %s", document_id)
+    return result
+
+
+def _log_background_failure(fut: Future) -> None:
+    exc = fut.exception()
+    if exc is not None and not isinstance(exc, subprocess.TimeoutExpired):
+        logger.error("Lab report extraction crashed: %r", exc)
+
 
 @router.post("/lab-reports", response_model=schemas.LabReportUploadOut, status_code=status.HTTP_202_ACCEPTED)
 async def upload_lab_report(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -104,14 +194,16 @@ async def upload_lab_report(
             detail=f"Unsupported file type '{suffix or 'unknown'}' -- expected one of {sorted(ALLOWED_EXTENSIONS)}",
         )
 
-    contents = await file.read()
+    contents = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File exceeds the 20 MB upload limit")
+    if not contents:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is empty")
 
     sehatai_patient_id = get_or_create_sehatai_patient_id(current_user, db)
 
-    # Rotate a throwaway password onto this patient's SehatAI row -- see
-    # module doc comment for why this is correct rather than a hack.
+    # One-time, throwaway password for DataFetch's consent gate -- see the
+    # module doc comment. Never returned, logged, or reused.
     raw_password = secrets.token_urlsafe(24)
     patient_row = db.query(models.Patient).filter(models.Patient.id == sehatai_patient_id).first()
     if patient_row is None:
@@ -123,82 +215,58 @@ async def upload_lab_report(
     staged_path = LAB_REPORT_STAGING_DIR / f"{uuid_module.uuid4().hex}{suffix}"
     staged_path.write_bytes(contents)
 
+    cmd = [
+        DATAFETCH_PYTHON,
+        "datafetch/main.py",
+        "--file", str(staged_path),
+        "--patient-id", str(sehatai_patient_id),
+        "--password", raw_password,
+        "--json",
+    ]
+    # PYTHONIOENCODING/PYTHONUTF8: main.py prints emoji progress markers,
+    # and Windows' default console codec (cp1252) crashes on them
+    # otherwise. SUPABASE_KEY/OCRSPACE_API_KEY: see the module-level
+    # comments above -- only overridden when a value was actually found,
+    # so an empty string can never clobber a key the container already
+    # has in its own environment.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    if DATAFETCH_SUPABASE_KEY:
+        env["SUPABASE_KEY"] = DATAFETCH_SUPABASE_KEY
+    if DATAFETCH_OCR_KEY:
+        env["OCRSPACE_API_KEY"] = DATAFETCH_OCR_KEY
+
+    future = _EXTRACTION_POOL.submit(_run_extraction, cmd, env, staged_path)
+    future.add_done_callback(_log_background_failure)
+
     try:
-        result = subprocess.run(
-            [
-                DATAFETCH_PYTHON,
-                "datafetch/main.py",
-                "--file", str(staged_path),
-                "--patient-id", str(sehatai_patient_id),
-                "--password", raw_password,
-                "--json",
-            ],
-            cwd=str(DATAFETCH_DIR),
-            capture_output=True,
-            text=True,
-            timeout=180,  # OCR + batch fallback can be slow -- see DataFetch's own README on Gemini Batch latency
-            # Same fix startDietBot.js already needed for the identical
-            # reason: main.py prints emoji progress markers, and Windows'
-            # default console codec (cp1252) crashes on them otherwise.
-            # SUPABASE_KEY -- see the module-level comment on
-            # DATAFETCH_SUPABASE_KEY above for why this one has to be
-            # passed explicitly rather than relying on DataFetch's own
-            # load_dotenv() to find it under a name it never uses.
-            env={
-                **os.environ,
-                "PYTHONIOENCODING": "utf-8",
-                "PYTHONUTF8": "1",
-                "SUPABASE_KEY": DATAFETCH_SUPABASE_KEY,
-                "OCRSPACE_API_KEY": DATAFETCH_OCR_KEY,
-            },
-        )
-    except subprocess.TimeoutExpired:
+        # shield(): the request giving up waiting must not cancel the run.
+        result = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)), timeout=REQUEST_WAIT_SECONDS)
+    except asyncio.TimeoutError:
         return schemas.LabReportUploadOut(
             status="queued",
             detail="Upload received; extraction is still running and will finish in the background. Check back shortly.",
         )
-    finally:
-        staged_path.unlink(missing_ok=True)
-
-    if result.returncode != 0:
-        # Surface DataFetch's own output rather than a generic message --
-        # this is a hackathon-stage integration, a raw error is more useful
-        # to whoever's debugging it than a polished one that hides the cause.
-        # FOUND LIVE: main.py prints its actual result JSON (including the
-        # real "error" field) to STDOUT, not stderr -- stderr is only
-        # httpx/postgrest's own INFO-level request logging. Surfacing
-        # stderr alone showed a misleadingly truncated, uninformative
-        # message ending mid-log-line; both streams are needed to see
-        # what actually happened.
+    except subprocess.TimeoutExpired:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                f"Extraction pipeline failed. stdout: {result.stdout.strip()[-800:] or '(empty)'} "
-                f"| stderr: {result.stderr.strip()[-300:] or '(empty)'}"
-            ),
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Extraction took too long and was stopped. Please try again with a clearer or smaller file.",
         )
 
-    # main.py --json prints its progress log AND the result dict as JSON
-    # to stdout -- TWICE, in fact (once inside process_single_file's own
-    # "📊 Result:" box, again right after because of main()'s own `if
-    # args.json: print(json.dumps(result))`). A greedy `\{.*\}` regex
-    # across the whole of stdout would span both blocks and produce
-    # invalid JSON (confirmed live -- silently swallowed by the
-    # try/except below before this fix, so verification never ran).
-    # json.JSONDecoder().raw_decode() from the first "{" is immune to
-    # that: it stops at the end of the FIRST complete JSON value
-    # regardless of what text (a second block, a separator line) follows.
-    # Best-effort only -- a parse miss here just means no verification
-    # runs for this upload; the upload itself already succeeded and its
-    # response is unaffected.
-    brace_idx = result.stdout.find("{")
-    if brace_idx != -1:
-        try:
-            parsed, _ = json.JSONDecoder().raw_decode(result.stdout[brace_idx:])
-            document_id = parsed.get("document_id")
-            if document_id:
-                background_tasks.add_task(run_verification, uuid_module.UUID(document_id))
-        except (json.JSONDecodeError, ValueError):
-            pass
+    parsed = _parse_pipeline_result(result.stdout) or {}
+    if result.returncode != 0:
+        # DataFetch reports user-meaningful failures in the result dict's
+        # `error` field -- surface that, never raw stdout/stderr (internal
+        # paths, stack traces); those are logged server-side above.
+        reason = parsed.get("error") or parsed.get("message") or "the extraction pipeline could not process this file"
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Extraction failed: {reason}")
 
-    return schemas.LabReportUploadOut(status="processed", detail=result.stdout.strip()[-1000:])
+    document_id = str(parsed["document_id"]) if parsed.get("document_id") else None
+    if parsed.get("status") == "duplicate":
+        return schemas.LabReportUploadOut(
+            status="processed", document_id=document_id,
+            detail="This report was already uploaded -- showing the existing results.",
+        )
+    return schemas.LabReportUploadOut(
+        status="processed", document_id=document_id,
+        detail="Extraction complete -- markers are ready to review.",
+    )

@@ -321,11 +321,27 @@ class PrescriptionOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _to_naive_utc(v: Optional[datetime]) -> Optional[datetime]:
+    """Stored timestamps are naive UTC (models.utc_now). An offset-carrying
+    value ("...+05:00", "...Z") must be converted, not just stripped:
+    Postgres casts a timestamptz literal into a `timestamp` column by
+    DROPPING the offset, which would silently shift a 10:00 PKT appointment
+    to 10:00 UTC -- five hours late -- and skew every reminder window."""
+    if v is not None and v.tzinfo is not None:
+        v = v.astimezone(timezone.utc).replace(tzinfo=None)
+    return v
+
+
 class AppointmentCreate(BaseModel):
     patient_id: int
     doctor_id: int
     scheduled_at: datetime
     reason: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def _normalize_scheduled_at(cls, v: datetime) -> datetime:
+        return _to_naive_utc(v)
 
 
 class AppointmentUpdate(BaseModel):
@@ -335,6 +351,11 @@ class AppointmentUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
     reason: Optional[str] = Field(default=None, max_length=500)
     status: Optional[Literal["cancelled"]] = None
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def _normalize_scheduled_at(cls, v: Optional[datetime]) -> Optional[datetime]:
+        return _to_naive_utc(v)
 
 
 class AppointmentOut(BaseModel):
@@ -365,8 +386,9 @@ class SehatAITokenOut(BaseModel):
 class LabReportUploadOut(BaseModel):
     """See routers/lab_reports.py. `status` mirrors DataFetch's own
     documents.status column -- 'queued' means the extraction pipeline was
-    kicked off but hasn't necessarily finished yet."""
-    document_id: Optional[int] = None
+    kicked off but hasn't necessarily finished yet. document_id is
+    DataFetch's documents.id (a UUID string), set once extraction is done."""
+    document_id: Optional[str] = None
     status: str
     detail: Optional[str] = None
 

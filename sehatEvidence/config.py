@@ -13,6 +13,7 @@ keys. Shell-exported variables take precedence over ``.env`` values.
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -136,7 +137,9 @@ class Settings:
     """
 
     llm_base_url: str = "https://integrate.api.nvidia.com/v1"
-    llm_model: str = "meta/llama-3.3-70b-instruct"
+    # meta/llama-3.3-70b-instruct (the old default) was retired on NIM --
+    # it now answers 410 Gone, so an unset LLM_MODEL failed every call.
+    llm_model: str = "nvidia/nemotron-3-super-120b-a12b"
     llm_sensitive_model: Optional[str] = None  # heavier model for entailment/NLI
     llm_api_keys: list[str] = field(default_factory=list)
     ncbi_tool_name: Optional[str] = None
@@ -168,13 +171,21 @@ class Settings:
     server_host: str = "127.0.0.1"
     server_port: int = 8000
     db_path: str = "evidenceboard.db"  # history + response cache (core/store.py)
+    # NVIDIA reasoning models think before answering; measured live on a
+    # 10-abstract appraisal prompt: 17.5s with thinking vs 6.4s without,
+    # identical JSON validity. Off by default for every stage EXCEPT the
+    # Verifier's entailment judge (see pipeline.build_default_pipeline).
+    llm_enable_thinking: bool = False
+    # Independent LLM calls (appraisal batches, per-claim entailment
+    # checks) run this many at a time instead of strictly one by one.
+    llm_concurrency: int = 4
 
     @classmethod
     def from_env(cls) -> "Settings":
         """Build a Settings snapshot from the current environment."""
         return cls(
             llm_base_url=_env_str("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-            llm_model=_env_str("LLM_MODEL", "meta/llama-3.3-70b-instruct"),
+            llm_model=_env_str("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b"),
             llm_sensitive_model=_env_opt("LLM_SENSITIVE_MODEL"),
             llm_api_keys=_parse_api_keys(
                 os.getenv("LLM_API_KEYS"), os.getenv("LLM_API_KEY")
@@ -190,6 +201,8 @@ class Settings:
             server_host=_env_str("SERVER_HOST", "127.0.0.1"),
             server_port=_env_int("SERVER_PORT", 8000),
             db_path=_env_str("DB_PATH", "evidenceboard.db"),
+            llm_enable_thinking=_env_bool("LLM_ENABLE_THINKING", False),
+            llm_concurrency=max(1, _env_int("LLM_CONCURRENCY", 4)),
         )
 
     @property
@@ -247,7 +260,11 @@ _BACKUP_LLM_TIMEOUT = 25
 _BACKUP_LLM_MAX_TOKENS = 4000
 
 
-def build_llm_clients(settings: Settings, model_override: Optional[str] = None) -> "list[LLMClient]":
+def build_llm_clients(
+    settings: Settings,
+    model_override: Optional[str] = None,
+    enable_thinking: Optional[bool] = None,
+) -> "list[LLMClient]":
     """Build the fallback chain: one LLMClient per configured NVIDIA key
     (settings.llm_api_keys, in order, tried FIRST) -> Groq -> AionLabs ->
     Gemini (last resort). Returns an empty list when nothing at all is
@@ -267,6 +284,14 @@ def build_llm_clients(settings: Settings, model_override: Optional[str] = None) 
     configured for them.
     """
     nvidia_model = model_override or settings.llm_model
+    thinking = settings.llm_enable_thinking if enable_thinking is None else enable_thinking
+    # Only NVIDIA NIM understands chat_template_kwargs; any other primary
+    # endpoint (e.g. a local Ollama fallback) gets the plain payload.
+    extra_body = (
+        {"chat_template_kwargs": {"enable_thinking": False}}
+        if not thinking and "nvidia.com" in settings.llm_base_url
+        else None
+    )
     clients: "list[LLMClient]" = [
         LLMClient(
             base_url=settings.llm_base_url,
@@ -274,6 +299,7 @@ def build_llm_clients(settings: Settings, model_override: Optional[str] = None) 
             model=nvidia_model,
             time_out=settings.llm_timeout,
             max_tokens=settings.llm_max_tokens,
+            extra_body=extra_body,
         )
         for key in settings.llm_api_keys
     ]
@@ -329,6 +355,9 @@ class FailoverLLMClient:
         if not clients:
             raise ValueError("FailoverLLMClient requires at least one LLM client/key")
         self._clients: list = list(clients)
+        # Agents now issue independent calls concurrently (appraisal
+        # batches, entailment checks) through this one shared client.
+        self._lock = threading.Lock()
         self._active: int = 0  # index of the currently selected client
         self._rotations: int = 0  # total rotations, for diagnostics
         self._calls: int = 0  # successful complete()/complete_json() calls
@@ -391,19 +420,27 @@ class FailoverLLMClient:
         n = len(self._clients)
         exc: Optional[LLMError] = None
         for _attempt in range(n):
-            client = self._clients[self._active]
+            with self._lock:
+                index = self._active
+            client = self._clients[index]
             try:
                 result = getattr(client, method_name)(*args, **kwargs)
             except LLMError as failure:
                 exc = failure
-                self._call_failures += 1
+                with self._lock:
+                    self._call_failures += 1
+                    # Rotate only if no concurrent caller already moved
+                    # past this key -- otherwise two threads failing on the
+                    # same key would skip a healthy one.
+                    if self._active == index:
+                        self._rotations += 1
+                        self._active = (index + 1) % n
                 print(
-                    f"[config] LLM key {self._active + 1}/{n} failed "
+                    f"[config] LLM key {index + 1}/{n} failed "
                     f"({exc}); rotating..."
                 )
-                self._rotations += 1
-                self._active = (self._active + 1) % n
                 continue
-            self._calls += 1
+            with self._lock:
+                self._calls += 1
             return result
         raise LLMError(f"All {n} LLM keys failed; last error: {exc}")

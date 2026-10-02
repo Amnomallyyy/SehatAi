@@ -40,6 +40,12 @@ load_dotenv()
 # of text for a typical lab report or clinical note.
 MAX_REPORT_CHARS = 12000
 
+# Per-provider request ceiling. The OpenAI SDK's own default is 600s with 2
+# automatic retries -- a single hung provider could hold a request (and a
+# worker thread) for half an hour before the fallback chain ever moved on.
+# Same env var sehatai/callAi.js already reads, so one setting governs both.
+PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("AI_PROVIDER_TIMEOUT_MS", "60000")) / 1000
+
 
 def _make_provider(name: str, api_key_env: str, base_url: str, model_env: str,
                     default_model: str, system_prefix: Optional[str] = None,
@@ -58,7 +64,9 @@ def _make_provider(name: str, api_key_env: str, base_url: str, model_env: str,
     for i, key in enumerate(keys):
         providers.append({
             "name": name if len(keys) == 1 else f"{name}#{i + 1}",
-            "client": OpenAI(api_key=key, base_url=base_url),
+            # Failover to the next provider IS the retry strategy, so the
+            # SDK's own silent retries are turned off.
+            "client": OpenAI(api_key=key, base_url=base_url, timeout=PROVIDER_TIMEOUT_SECONDS, max_retries=0),
             "model": model,
             # NVIDIA's Nemotron models don't reliably honor json_object
             # mode -- they can write visible chain-of-thought ahead of the
@@ -95,6 +103,18 @@ _PROVIDER_FACTORIES = [
 # factory can now expand to several entries (one per key), so this is a
 # flatten, not a filter.
 _PROVIDERS = [p for factory in _PROVIDER_FACTORIES for p in factory()]
+
+
+def _as_str_list(value) -> list[str]:
+    """Models sometimes return a single string (or null) where a list was
+    asked for -- iterating a bare string would store one finding per
+    character."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None and str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
 
 
 def _extract_json(text: str) -> dict:
@@ -193,11 +213,14 @@ def generate_report_summary(pdf_path: Path) -> dict:
             failures.append(f"{provider['name']}: {exc}")
             continue
 
+        if not isinstance(data, dict):
+            failures.append(f"{provider['name']}: response was not a JSON object")
+            continue
         return {
-            "summary": str(data.get("summary", "")),
-            "key_findings": [str(item) for item in data.get("key_findings", [])],
-            "flagged_values": [str(item) for item in data.get("flagged_values", [])],
-            "recommendation": str(data.get("recommendation", "")),
+            "summary": str(data.get("summary") or ""),
+            "key_findings": _as_str_list(data.get("key_findings")),
+            "flagged_values": _as_str_list(data.get("flagged_values")),
+            "recommendation": str(data.get("recommendation") or ""),
         }
 
     raise ValueError(f"AI summary failed on every configured provider -- {' | '.join(failures)}")

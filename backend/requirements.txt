@@ -1,32 +1,35 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
+# Pinned to the versions verified together (backend smoke test + DataFetch
+# install in one environment) so a rebuild can't silently pick up a
+# breaking release the night before a demo.
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.2
 # Postgres driver -- added when database.py moved off local SQLite onto
 # the shared Supabase project (architecture doc §02).
-psycopg2-binary
-python-jose[cryptography]
-passlib[bcrypt]
+psycopg2-binary==2.9.13
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
 # Pinned: passlib 1.7.4 (its latest release) crashes on bcrypt>=4.1 with
 # "AttributeError: module 'bcrypt' has no attribute '__about__'", because it
 # reads a version attribute bcrypt removed. This isn't cosmetic -- password
 # hashing raises on every signup/login without this pin. bcrypt 4.0.1 is the
 # newest release that still works with passlib.
 bcrypt==4.0.1
-python-multipart
-pydantic
+python-multipart==0.0.32
+pydantic==2.11.9
 # Added beyond the original list: required by Pydantic's EmailStr, which
 # schemas.py uses to validate signup/login emails. Swap EmailStr for a plain
 # str in schemas.py if you'd rather not add this dependency.
-email-validator
+email-validator==2.3.0
 # AI report summaries -- multi-provider fallback via OpenAI-compatible
 # endpoints (Groq, AionLabs, Gemini, NVIDIA NIM all speak this same shape;
 # see app/ai.py). Replaced the dedicated `groq` package with the generic
 # `openai` client so one code path covers every provider, same reasoning
 # as sehatai/callAi.js's makeOpenAICompatibleProvider.
-openai
-pypdf           # extracts plain text from the uploaded PDF (none of the
+openai==3.23.0
+pypdf==6.19.0           # extracts plain text from the uploaded PDF (none of the
                 # configured providers' free tiers take PDF files directly)
-python-dotenv   # loads provider API keys out of a .env file at startup
+python-dotenv==1.0.1   # loads provider API keys out of a .env file at startup
 # Service-role Storage access for structured lab documents (see
 # routers/structured_reports.py's download route) -- was already present
 # transitively before this, made explicit since it's now a real dependency.
@@ -39,4 +42,4 @@ supabase==2.31.0  # >=2.31.0 required for the sb_secret_-style service key
 # file") -- confirmed live -- so a PDF's first page is rasterized to PNG
 # first. Was already present transitively; made explicit now that it's a
 # real, load-bearing dependency.
-PyMuPDF
+PyMuPDF==1.25.2
