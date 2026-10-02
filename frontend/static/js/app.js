@@ -2876,7 +2876,15 @@ function renderEvidenceAnswer(report) {
   // record") -- re-sorting here is just defensive, not load-bearing.
   const sources = [...(report.evidence || [])].sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
 
-  let html = `<div>${escHtml(report.answer_text || '')}</div>`;
+  // A thorough answer can run to 30+ verified claims; as one paragraph it
+  // pushed the scores, funnel and citations off-screen. Preview the
+  // opening lines and let the reader expand the rest.
+  const answerText = report.answer_text || '';
+  const answerId = `evidence-answer-${report.run_id || Date.now()}`;
+  let html = answerText.length > 600
+    ? `<div class="evidence-answer-text" id="${escHtml(answerId)}">${escHtml(answerText)}</div>
+       <span class="evidence-abstract-toggle" data-target="${escHtml(answerId)}" data-more="Read full answer">Read full answer</span>`
+    : `<div>${escHtml(answerText)}</div>`;
   html += renderEvidenceScoreRow(scores);
 
   if (f.claims_generated != null) {
@@ -2909,7 +2917,7 @@ function renderEvidenceAnswer(report) {
     btn.addEventListener('click', () => {
       const el = document.getElementById(btn.dataset.target);
       const expanded = el.classList.toggle('expanded');
-      btn.textContent = expanded ? 'Show less' : 'Show full abstract';
+      btn.textContent = expanded ? 'Show less' : (btn.dataset.more || 'Show full abstract');
     });
   });
 }
