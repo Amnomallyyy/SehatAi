@@ -47,6 +47,7 @@ never imported here, so this module stays offline-safe to import.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Optional
@@ -344,8 +345,13 @@ class Verifier:
         min_support_confidence: float = 0.70,
         max_claims: Optional[int] = None,
         enable_citation_repair: bool = True,
+        max_concurrency: int = 1,
     ) -> None:
         self.llm = llm or LLMClient()
+        # >1 runs the per-claim entailment judgments in parallel (the
+        # production pipeline sets it from LLM_CONCURRENCY); results are
+        # applied in claim order either way, so the report is identical.
+        self.max_concurrency = max(1, int(max_concurrency or 1))
         self.pubmed = pubmed
         self.enable_supersession = enable_supersession
         self.enable_citation_repair = enable_citation_repair
@@ -450,10 +456,22 @@ class Verifier:
 
         # Stage C -- entailment (one judge call per surviving claim).
         claim_count = len(rows)
+        judged = [row for row in rows if row["existence"] != "fail"]
+
+        def judge(row):
+            return self._judge_entailment(
+                row["claim_id"], row["text"], _evidence_blocks(row["sids"], ev_by_sid)
+            )
+
+        verdicts: dict = {}
+        if self.max_concurrency > 1 and len(judged) > 1:
+            with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(judged))) as pool:
+                for row, verdict in zip(judged, pool.map(judge, judged)):
+                    verdicts[id(row)] = verdict
+
         for claim_index, row in enumerate(rows, start=1):
             if row["existence"] != "fail":
-                blocks = _evidence_blocks(row["sids"], ev_by_sid)
-                verdict = self._judge_entailment(row["claim_id"], row["text"], blocks)
+                verdict = verdicts.get(id(row)) or judge(row)
                 row["verdict"] = verdict.verdict
                 row["confidence"] = verdict.confidence
                 row["quote"] = verdict.evidence_quote

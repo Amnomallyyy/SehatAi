@@ -59,6 +59,8 @@ from __future__ import annotations
 
 import math
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Optional
@@ -389,7 +391,10 @@ class Appraiser:
     """
 
     def __init__(
-        self, pool_cap: int = DEFAULT_POOL_CAP, llm: Optional[LLMClient] = None
+        self,
+        pool_cap: int = DEFAULT_POOL_CAP,
+        llm: Optional[LLMClient] = None,
+        max_concurrency: int = 1,
     ) -> None:
         """
         pool_cap: maximum number of records appraise() returns. None means
@@ -408,6 +413,10 @@ class Appraiser:
         # records instead of nothing.
         self.pool_cap = DEFAULT_POOL_CAP if pool_cap is None else max(0, int(pool_cap))
         self.llm = llm or LLMClient()
+        # max_concurrency > 1 runs the per-batch LLM calls in parallel (the
+        # production pipeline sets it from LLM_CONCURRENCY). 1 keeps the
+        # original strictly sequential order, which scripted test fakes rely on.
+        self.max_concurrency = max(1, int(max_concurrency or 1))
 
     def appraise(
         self,
@@ -459,6 +468,13 @@ class Appraiser:
         # >10% missing keys) do NOT trip this memory.
         llm_down = False
         batch_count = math.ceil(len(rows) / _LLM_BATCH_SIZE)
+        if self.max_concurrency > 1 and batch_count > 1:
+            self._appraise_batches_concurrently(question, rows, batch_count, on_progress)
+            rows.sort(key=_sort_key)
+            return [
+                AppraisedRecord(record=row.record, score=row.final, rationale=row.rationale, relevance=row.relevance)
+                for row in rows[: self.pool_cap]
+            ]
         for batch_index, start in enumerate(range(0, len(rows), _LLM_BATCH_SIZE), start=1):
             chunk = rows[start : start + _LLM_BATCH_SIZE]
             if llm_down:
@@ -488,6 +504,46 @@ class Appraiser:
             AppraisedRecord(record=row.record, score=row.final, rationale=row.rationale, relevance=row.relevance)
             for row in rows[: self.pool_cap]
         ]
+
+    def _appraise_batches_concurrently(
+        self,
+        question: str,
+        rows: list,
+        batch_count: int,
+        on_progress: Optional[Callable[[int, int], None]],
+    ) -> None:
+        """Same per-batch semantics as the sequential loop in appraise() --
+        identical batch membership, scoring and A6 failure memory (a batch
+        that hasn't STARTED when a transport failure is seen skips the LLM)
+        -- with up to max_concurrency batches in flight. Rows are finalized
+        on this thread as each batch resolves; progress counts completed
+        batches."""
+        llm_down = threading.Event()
+
+        def fetch(chunk):
+            if llm_down.is_set():
+                return None, "llm_unavailable"
+            rankings, failure_tag, transport_failed = self._fetch_llm_rankings(question, chunk)
+            if transport_failed:
+                llm_down.set()
+            return rankings, failure_tag
+
+        chunks = [rows[start : start + _LLM_BATCH_SIZE] for start in range(0, len(rows), _LLM_BATCH_SIZE)]
+        completed = 0
+        with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(chunks))) as pool:
+            futures = {pool.submit(fetch, chunk): chunk for chunk in chunks}
+            for future in as_completed(futures):
+                rankings, failure_tag = future.result()
+                for row in futures[future]:
+                    self._finalize(row, rankings, failure_tag)
+                completed += 1
+                if on_progress is not None:
+                    try:
+                        on_progress(completed, batch_count)
+                    except Exception as exc:
+                        print(f"[appraiser] on_progress callback failed ({exc}); ignoring")
+        if llm_down.is_set():
+            print("[appraiser] LLM unavailable; batches not yet started were scored heuristically")
 
     # --- LLM plumbing -------------------------------------------------------
 

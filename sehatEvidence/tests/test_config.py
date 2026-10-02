@@ -121,7 +121,7 @@ def t01_defaults():
     with _EnvPatch():  # scrubbed environment -> documented defaults
         s = Settings.from_env()
     assert s.llm_base_url == "https://integrate.api.nvidia.com/v1", s.llm_base_url
-    assert s.llm_model == "meta/llama-3.3-70b-instruct", s.llm_model
+    assert s.llm_model == "nvidia/nemotron-3-super-120b-a12b", s.llm_model
     assert s.llm_api_keys == [], f"no keys configured -> []: {s.llm_api_keys!r}"
     assert s.has_llm_keys is False, "has_llm_keys must be False without keys"
     assert s.pool_cap == 50, f"POOL_CAP default must be 50: {s.pool_cap}"
@@ -132,7 +132,7 @@ def t01_defaults():
     assert s.server_host == "127.0.0.1", s.server_host
     assert s.server_port == 8000, f"SERVER_PORT default must be 8000: {s.server_port}"
     assert s.ncbi_tool_name is None and s.ncbi_email is None and s.ncbi_api_key is None
-    print("PASS 01: from_env() defaults (NIM URL, llama-3.3-70b, no keys, 50/300/16000/True, 127.0.0.1:8000)")
+    print("PASS 01: from_env() defaults (NIM URL, nemotron-3-super, no keys, 50/300/16000/True, 127.0.0.1:8000)")
 
 
 def t02_key_parsing():

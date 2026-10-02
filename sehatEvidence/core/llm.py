@@ -18,6 +18,7 @@ class LLMclient():
                  model: Optional[str] = None,
                  time_out: Optional[int] = 60,
                  max_tokens: Optional[int] = None,
+                 extra_body: Optional[dict] = None,
                  ):
         # 1. Set the URL. .rstrip("/") just removes any accidental trailing slashes so our URLs don't break later.
         self.base_url = (base_url or os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")).rstrip("/")
@@ -41,6 +42,11 @@ class LLMclient():
         # applied -- which can silently truncate a long synthesis or a
         # multi-claim decomposition JSON mid-object with no visible error.
         self.max_tokens = max_tokens
+
+        # 7. Provider-specific request fields merged into every payload --
+        # e.g. NVIDIA's chat_template_kwargs to switch a reasoning model's
+        # thinking off (see config.build_llm_clients).
+        self.extra_body = dict(extra_body) if extra_body else {}
 
     def complete(self, prompt: str, system: Optional[str] = None, temperature: float = 0.2) -> str:
         messages = []
@@ -204,6 +210,8 @@ class LLMclient():
         }
         if self.max_tokens:
             payload["max_tokens"] = self.max_tokens
+        if self.extra_body:
+            payload.update(self.extra_body)
 
         # 2. The Try Block: Attempting the risky internet connection
         try:
