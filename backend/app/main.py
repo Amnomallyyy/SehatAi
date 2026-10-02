@@ -40,12 +40,31 @@ logging.basicConfig(
 logger = logging.getLogger("carelink")
 
 
+def _enable_row_level_security() -> None:
+    """Supabase publishes every public table through its REST API, where the
+    browser-safe publishable/anon key can read any table with RLS off --
+    found live: the 13 tables create_all() makes (users with password
+    hashes, messages, reports, ...) were all readable that way. RLS with no
+    policies closes that: this API connects as the table owner and is
+    unaffected, while the public key reads nothing. Idempotent; on plain
+    Postgres (CI, local QA) it's harmless."""
+    if engine.dialect.name != "postgresql":
+        return
+    for table in Base.metadata.sorted_tables:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE "{table.name}" ENABLE ROW LEVEL SECURITY'))
+        except Exception as exc:  # e.g. a bridge table owned by another role
+            logger.warning("Could not enable RLS on %s: %s", table.name, exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # No migrations tool in this stack (Alembic isn't in requirements.txt,
     # and wasn't asked for) -- create_all is the right amount of ceremony
     # for a hackathon MVP. It's a no-op for tables that already exist.
     Base.metadata.create_all(bind=engine)
+    _enable_row_level_security()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     yield
