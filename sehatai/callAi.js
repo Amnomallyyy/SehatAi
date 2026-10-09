@@ -288,7 +288,12 @@ const PROVIDER_FACTORIES = {
     // reasoning) for a model that requires one of the three real levels.
     // If GROQ_MODEL changes again, re-check which values that model's
     // Groq endpoint actually accepts before assuming this still applies.
-    reasoningEffortValue: "low",
+    // UPDATED (measured live, 2026-10-09): the qwen models accept "none" —
+    // 4 output tokens and ~0.2s for a one-word classification vs 82
+    // tokens on "low". The free tier's per-minute TOKEN cap was the main
+    // cause of 20-90s replies, so not spending tokens on hidden reasoning
+    // matters a lot. gpt-oss still needs "low" (it rejects "none").
+    reasoningEffortValue: /gpt-oss/i.test(process.env.GROQ_MODEL || "") ? "low" : "none",
   }),
   // ADDED: Gemini via Google's official OpenAI-compatibility endpoint
   // (ai.google.dev/gemini-api/docs/openai — confirmed live). Not
@@ -383,12 +388,18 @@ const PROVIDER_FACTORIES = {
   // truncation, no billing block. Actually usable right now, so
   // included in DEFAULT_PROVIDER_ORDER below, unlike the three
   // above that are wired in but dormant pending funding.
+  // UPDATED (found live, 2026-10-09): AionLabs now only serves its own
+  // aion-labs/* models — "gpt-4o-mini" returns 400 Unknown model. Its
+  // models reason by default (an empty answer when the reasoning eats the
+  // token budget), but honor reasoning_effort: "none": aion-3.0-mini then
+  // answers in ~1s with clean JSON/one-word output.
   aionlabs: () => makeOpenAICompatibleProvider({
     name: "aionlabs",
     apiKeyEnv: "AIONLABS_API_KEY",
     baseURL: process.env.AIONLABS_BASE_URL || "https://api.aionlabs.ai/v1",
     modelEnv: "AIONLABS_MODEL",
-    defaultModel: "gpt-4o-mini",
+    defaultModel: "aion-labs/aion-3.0-mini",
+    sendReasoningEffort: true,
   }),
 };
 
@@ -506,21 +517,87 @@ function logCallDuration(providerName, startedAt, structured) {
 // reasoningEffortValue fallback in `reasoningEffort || reasoningEffortValue`
 // (a non-empty default string is never falsy). Defaulting to null here
 // lets that per-provider fallback actually take effect.
+// ------------------------------------------------------------------
+// PROVIDER COOLDOWN (found live, 2026-10-09): with two providers out of
+// daily quota, EVERY AI call first waited for both to fail (~3-5s each)
+// before reaching the working one — ~40s of a 111s turn. A provider that
+// fails with a bad key, an unknown model or an exhausted quota is now
+// skipped for an hour; any other failure (timeout, a per-minute 429)
+// for 30s. If every provider is cooling down, they're all tried anyway
+// rather than failing outright.
+// ------------------------------------------------------------------
+const providerCooldownUntil = new Map(); // provider name -> epoch ms
+
+function cooldownMsFor(err) {
+  const status = err?.status;
+  const text = String(err?.message || '');
+  // A one-off malformed answer (bad JSON, empty content) isn't the
+  // provider being down — don't take a working provider out of rotation
+  // for it (found live: Groq returned broken JSON once, was skipped, and
+  // the whole turn failed on the exhausted providers behind it).
+  if (!status && /JSON|Unexpected token|empty content|Expected .* after/i.test(text)) return 0;
+  // A PER-MINUTE limit (Groq's free tier: tokens per minute) clears in
+  // seconds — retry the same provider after a short wait (see
+  // perMinuteWaitMs) instead of skipping it. Found live: Groq's message
+  // mentions "billing" (an upgrade link), which used to be read as a
+  // daily quota and skipped Groq for an hour, sending every call to a
+  // 50-90s fallback.
+  if (isPerMinuteLimit(err)) return 0;
+  if (status === 401 || status === 403 || /invalid api key|unauthorized/i.test(text)) return 60 * 60 * 1000;
+  if (/unknown model|model.*not found|does not exist/i.test(text)) return 60 * 60 * 1000;
+  if (/daily|per day|PerDay|TPD|RPD|quota|RESOURCE_EXHAUSTED/i.test(text)) return 60 * 60 * 1000;
+  return 30 * 1000;
+}
+
+function isPerMinuteLimit(err) {
+  const text = String(err?.message || '');
+  return err?.status === 429 && /per minute|\bTPM\b|\bRPM\b/i.test(text) && !/per day|\bTPD\b|\bRPD\b/i.test(text);
+}
+
+// How long a per-minute limit asks us to wait ("Please try again in
+// 7.32s"), capped so a turn never stalls for long on it.
+function perMinuteWaitMs(err) {
+  const m = String(err?.message || '').match(/try again in\s+(?:(\d+)m)?([\d.]+)s/i);
+  const ms = m ? ((Number(m[1]) || 0) * 60 + Number(m[2])) * 1000 : 5000;
+  return Math.min(Math.max(ms, 500), 20000);
+}
+
+function providersToTry() {
+  const now = Date.now();
+  const ready = PROVIDER_CHAIN.filter((p) => !(providerCooldownUntil.get(p.name) > now));
+  return ready.length ? ready : PROVIDER_CHAIN;
+}
+
+function coolDown(provider, err) {
+  const ms = cooldownMsFor(err);
+  if (!ms) return;
+  providerCooldownUntil.set(provider.name, Date.now() + ms);
+  console.warn(`[callAi] skipping provider "${provider.name}" for ${Math.round(ms / 1000)}s`);
+}
+
 export async function callAI({ system, message, temperature = 0, maxTokens = 300, reasoningEffort = null }) {
   if (PROVIDER_CHAIN.length === 0) {
     throw new Error("AI call failed: no AI provider is configured (see callAi.js startup warning).");
   }
   const failures = [];
-  for (const provider of PROVIDER_CHAIN) {
-    const startedAt = Date.now();
-    try {
-      const result = await provider.callText({ system, message, temperature, maxTokens, reasoningEffort });
-      logCallDuration(provider.name, startedAt, false);
-      return result;
-    } catch (err) {
-      logCallDuration(provider.name, startedAt, false);
-      failures.push(`${provider.name}: ${err.message}`);
-      console.warn(`[callAi] provider "${provider.name}" failed — trying next in chain (if any):`, err.message);
+  for (const provider of providersToTry()) {
+    // One retry on the same provider for a malformed/empty answer — see
+    // callAIStructured.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const startedAt = Date.now();
+      try {
+        const result = await provider.callText({ system, message, temperature, maxTokens, reasoningEffort });
+        logCallDuration(provider.name, startedAt, false);
+        providerCooldownUntil.delete(provider.name);
+        return result;
+      } catch (err) {
+        logCallDuration(provider.name, startedAt, false);
+        failures.push(`${provider.name}: ${err.message}`);
+        console.warn(`[callAi] provider "${provider.name}" failed — trying next in chain (if any):`, err.message);
+        coolDown(provider, err);
+        if (cooldownMsFor(err) !== 0) break;
+        if (isPerMinuteLimit(err)) await new Promise((r) => setTimeout(r, perMinuteWaitMs(err)));
+      }
     }
   }
   throw new Error(`AI call failed on every configured provider — ${failures.join(" | ")}`);
@@ -545,16 +622,24 @@ export async function callAIStructured({ system, message, schema, temperature = 
     throw new Error("Structured AI call failed: no AI provider is configured (see callAi.js startup warning).");
   }
   const failures = [];
-  for (const provider of PROVIDER_CHAIN) {
-    const startedAt = Date.now();
-    try {
-      const result = await provider.callStructured({ system, message, schema, temperature });
-      logCallDuration(provider.name, startedAt, true);
-      return result;
-    } catch (err) {
-      logCallDuration(provider.name, startedAt, true);
-      failures.push(`${provider.name}: ${err.message}`);
-      console.warn(`[callAi] provider "${provider.name}" failed structured call — trying next in chain (if any):`, err.message);
+  for (const provider of providersToTry()) {
+    // One retry on the SAME provider for a malformed (non-JSON) answer —
+    // usually a one-off; the next provider may be far slower or exhausted.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const startedAt = Date.now();
+      try {
+        const result = await provider.callStructured({ system, message, schema, temperature });
+        logCallDuration(provider.name, startedAt, true);
+        providerCooldownUntil.delete(provider.name);
+        return result;
+      } catch (err) {
+        logCallDuration(provider.name, startedAt, true);
+        failures.push(`${provider.name}: ${err.message}`);
+        console.warn(`[callAi] provider "${provider.name}" failed structured call — trying next in chain (if any):`, err.message);
+        coolDown(provider, err);
+        if (cooldownMsFor(err) !== 0) break; // a real outage — move on
+        if (isPerMinuteLimit(err)) await new Promise((r) => setTimeout(r, perMinuteWaitMs(err)));
+      }
     }
   }
   throw new Error(`Structured AI call failed on every configured provider — ${failures.join(" | ")}`);

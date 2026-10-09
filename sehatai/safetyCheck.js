@@ -20,6 +20,11 @@ export const CRISIS_PATTERNS = [
 
 // ---- DIAGNOSIS REQUEST PATTERNS ----
 export const DIAGNOSIS_PATTERNS = [
+  // FOUND live: "I've been feeling nauseous too, is that normal in
+  // pregnancy?" got no answer at all — asking whether a symptom is
+  // normal/serious is asking for a clinical judgment, same as a diagnosis.
+  /\bis\s+(?:that|this|it)\s+(?:normal|serious|dangerous|bad|something\s+serious|a\s+problem)\b/i,
+  /\bshould\s+i\s+be\s+worried\b/i,
   /\bdiagnos(?:e|is|ing)\s+(?:me|my|this|it)\b/i,
   /\bwhat(?:'?s|\s+is|\s+are)\s+wrong\s+with\s+(?:me|my)\b/i,
   /\bwrong\s+with\s+(?:me|my)\b/i,

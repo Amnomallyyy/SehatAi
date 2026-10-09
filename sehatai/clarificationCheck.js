@@ -212,8 +212,16 @@ const INTAKE_SCHEMA = {
     // pattern generaterecommendation.js's referenced_profile_facts
     // already uses.
     referencedSymptom: { type: ["string", "null"] },
+    // ADDED (found live): the NEW, not-yet-recorded symptoms the question
+    // proposes ("have you noticed swelling or redness around those
+    // joints?" -> ["joint swelling", "joint redness"]). A bare "yes" to
+    // that question was coming back from classifySymptoms with nothing
+    // extracted; processMessage.js now records these directly on a bare
+    // affirmation instead of relying on the classifier to re-derive them
+    // from the question's prose.
+    askedAboutSymptoms: { type: "array", items: { type: "string" } },
   },
-  required: ["sufficient", "question", "referencedSymptom"],
+  required: ["sufficient", "question", "referencedSymptom", "askedAboutSymptoms"],
 };
 
 /**
@@ -224,7 +232,9 @@ const INTAKE_SCHEMA = {
  *   roundsRemaining?: number|null,
  *   maxRounds?: number|null,
  * }} params
- * @returns {Promise<{sufficient: boolean, question: string|null}>}
+ * @returns {Promise<{sufficient: boolean, question: string|null, askedAboutSymptoms: string[]}>}
+ *   `askedAboutSymptoms` lists the new symptom terms the question
+ *   proposes (empty when it proposes none, or when there's no question).
  *   `sufficient: true` means the caller should stop asking targeted
  *   questions and move on (same meaning as checkNeedsClarification
  *   returning needsClarification: false). `question` is only ever
@@ -261,12 +271,16 @@ STEP 2 — if NOT sufficient, compose exactly ONE short follow-up question.
 - You are not limited to duration/severity — also consider an associated symptom the patient hasn't mentioned, what triggers or relieves it, whether it's constant or comes and goes, or how it's affecting daily activity — whatever a real intake conversation would naturally reach for next given what's already known.
 - Briefly and naturally acknowledge what the patient just said before asking, the way a person would, but keep the whole reply to one or two short sentences — this is a quick check-in question, not an essay.
 - Never repeat a question about something already recorded.
+- If a recorded symptom is only the vague "feeling unwell", it is never sufficient on its own: first ask what exactly feels wrong and where (e.g. pain, nausea, dizziness, fever), before duration or severity.
+- If a symptom's severity is missing because the patient just said it got worse (or better), ask how bad it is now, e.g. on a scale of 1 to 10.
 
 HARD RULES:
 1. Never name, suggest, or hint at a medical condition, disease, or diagnosis.
 2. Ask at most ONE question.
 3. If sufficient is true, "question" must be null.
-4. If your question asks about a SPECIFIC symptom, set referencedSymptom to that symptom's EXACT term as given in recorded_symptoms above — copy it verbatim, never a different wording or a symptom not in that list. If your question is more general (e.g. asking about an associated symptom not yet recorded, or something that doesn't name any one specific recorded symptom), set referencedSymptom to null. NEVER invent, rename, or ask about a symptom that isn't actually in recorded_symptoms — every symptom name your question mentions must come from that list, exactly as written there.
+4. If your question asks about a SPECIFIC symptom, set referencedSymptom to that symptom's EXACT term as given in recorded_symptoms above — copy it verbatim, never a different wording or a symptom not in that list. If your question is more general (e.g. asking about an associated symptom not yet recorded, or something that doesn't name any one specific recorded symptom), set referencedSymptom to null. NEVER rename a recorded symptom or talk as if the patient reported something they didn't — a recorded symptom is always referred to by its exact term from recorded_symptoms.
+4b. When your question proposes NEW associated symptom(s) that are not in recorded_symptoms (e.g. "have you noticed any swelling or redness around those joints?"), list each one in askedAboutSymptoms as a short plain term that keeps the body location the question implies — ["joint swelling", "joint redness"], NOT ["swelling", "redness"]. A location-less "redness" reads as a skin complaint downstream and sends the patient to the wrong specialist. If the question proposes nothing new, askedAboutSymptoms is [].
+4c. The patient may write in English, Urdu, Roman Urdu, or a mix. Understand all of them; write every term (referencedSymptom, askedAboutSymptoms) in plain English.
 5. PLAIN LANGUAGE, NOT MEDICAL JARGON: when you propose a new associated symptom to ask about, name it the way a patient would recognize, not a clinical label — "shortness of breath" not "dyspnea", "painful urination" not "dysuria", "no periods"/"missed periods" not "amenorrhea", "blood in urine" not "hematuria", "dizziness" not "vertigo". A patient asked about a term they never used will reasonably think you're describing something they didn't say.${budgetNote}
 
 Respond with the JSON shape you were given.`;
@@ -312,7 +326,17 @@ Respond with the JSON shape you were given.`;
       }
     }
 
-    return { sufficient, question };
+    // Candidates only mean something alongside the question that proposed
+    // them; a discarded question takes its candidates with it.
+    const knownTermsLower = new Set(symptoms.map((s) => s.term.toLowerCase().trim()));
+    const askedAboutSymptoms = question && Array.isArray(parsed?.askedAboutSymptoms)
+      ? parsed.askedAboutSymptoms
+          .filter((t) => typeof t === "string" && t.trim() && t.length <= 60)
+          .map((t) => t.trim())
+          .filter((t) => !knownTermsLower.has(t.toLowerCase()))
+      : [];
+
+    return { sufficient, question, askedAboutSymptoms };
   } catch (err) {
     console.error("[clarificationCheck] assessIntake failed (non-fatal, caller falls back to a fixed template question):", err.message);
     return fallback;

@@ -77,6 +77,21 @@ const DIAGNOSIS_PHRASES = [
   /\bdiagnos(?:is|ed|e)\b/i,
 ];
 
+// Falsely reassuring wording. generaterecommendation.js (rule 10) lets the
+// model say a symptom "can be associated with" a condition the patient
+// already has (e.g. pregnancy) — but never that it's normal, expected,
+// harmless, or probably caused by it, since the same symptom can be a
+// warning sign. Exported for testEdgeCases.js.
+export const DISMISSIVE_PHRASES = [
+  /\bnothing\s+(?:to\s+worry\s+about|serious|to\s+be\s+concerned\s+about)\b/i,
+  /\b(?:likely|probably|most\s+likely)\s+(?:just\s+)?(?:due\s+to|caused\s+by|from|because\s+of|related\s+to)\b/i,
+  /\b(?:it'?s|this\s+is|that'?s)\s+(?:probably\s+|likely\s+|most\s+likely\s+)?(?:just|only|simply)\b/i,
+  /\b(?:perfectly|completely|totally|quite)\s+normal\b/i,
+  /\b(?:is|are)\s+(?:normal|harmless)\b/i,
+  /\b(?:common|normal|expected|typical)\s+(?:in|during|with)\s+(?:early\s+|late\s+)?(?:pregnan|your\b)/i,
+  /\bnot\s+(?:serious|a\s+concern|concerning|dangerous)\b/i,
+];
+
 let vocabCache = null;
 
 export async function loadVerifierVocabulary({ force = false } = {}) {
@@ -402,6 +417,11 @@ export async function verifyRecommendation(recommendation, ctx = {}) {
   // 6. No diagnosis.
   for (const re of DIAGNOSIS_PHRASES) {
     if (re.test(prose)) { violations.push({ code: 'diagnostic_language', detail: String(re) }); break; }
+  }
+
+  // 6b. No false reassurance (see DISMISSIVE_PHRASES).
+  for (const re of DISMISSIVE_PHRASES) {
+    if (re.test(prose)) { violations.push({ code: 'dismissive_language', detail: String(re) }); break; }
   }
 
   // 7. Urgency belongs to the graph, not the model. Repair rather than reject.
