@@ -416,76 +416,76 @@ export function formatClassifiedSymptoms(symptoms) {
 }
 
 // ============================================
-// NATURAL-LANGUAGE COMPOSITION FOR INFERMEDICA'S /parse INPUT
+// INFERMEDICA /parse INPUT — DETERMINISTIC
 //
-// finalizeAndRecommend() (processMessage.js) used to build the text it
-// sends to Infermedica's /parse by mechanically joining formatted tags
-// — "headache (mild, for 2 days); eye pain" — which reads nothing like
-// real patient language. That format is what a real conversation
-// diagnosed as the likely cause of a stuck-loop bug: /parse returned a
-// correct match but without its `orig_text` field populated, and
-// filterGroundedMentions (processMessage.js) — which exists to reject
-// mentions Infermedica invents with no basis in what was actually
-// sent — had no substring to verify, so it dropped a real finding.
+// REPLACED (demonstrated live): this used to be an LLM call at
+// temperature 0.4 that rephrased the symptom list into "natural" prose.
+// The same recorded symptoms came out worded differently every time,
+// and Infermedica's parser reacted to the wording: "joint pain (3/10,
+// for three days)" went to /parse once as "...with a severity of 3..."
+// (read as "Joint pain, severe, after trauma" -> Surgeon, urgent) and
+// once as "moderate joint pain..." (-> Orthopedist, routine).
 //
-// Per the explicit decision that produced this function: rather than
-// patch that failure by regrounding against a NEW hand-maintained list
-// of known terms/synonyms, give Groq a LITTLE more room (temperature)
-// to turn the already-decided structured symptom list into one natural
-// sentence — the kind of phrasing Infermedica's own NLP is tuned to
-// parse in the first place, since that's the kind of text real patients
-// type. This is composing PROSE from data we already fully trust (the
-// structured list itself, produced by classifySymptoms/
-// resolveFinalConfirmation above), not making a new clinical judgment —
-// there's no new fact being asserted here that classifySymptoms didn't
-// already decide, so a little temperature is safe in a way it would not
-// be for the classification step itself (which stays temperature 0).
-// The caller still runs a deterministic sanity check on the output
-// (see processMessage.js) and falls back to the old mechanical format
-// if the check fails, so a bad composition can never silently drop or
-// invent a symptom.
+// Measured against /parse directly: a bare symptom term always maps to
+// the plain finding; adding a plain severity word maps correctly to the
+// severity variant where one exists ("Headache, mild", "Abdominal pain,
+// moderate"); adding a DURATION is what derails it — "mild eye pain for
+// 3 days" came back "Eye pain, unbearable" (-> emergency), "joint pain
+// for three days" -> "Joint pain, mechanical", "severe headache for 2
+// days" -> "Headache, lasting more than 3 days" (severity lost), and
+// most durations landed in the wrong bucket. So the text sent is one
+// fixed sentence per symptom — term plus a normalized severity word,
+// no duration — and an explicit "I don't have X." for a denial (which
+// /parse reads as absent). Same input, same text, same evidence, every
+// time. Duration still reaches the recommendation prose through
+// formatClassifiedSymptoms; it just never goes through /parse.
 // ============================================
 
-const NATURAL_TEXT_SCHEMA = {
-  type: 'object',
-  properties: { sentence: { type: 'string' } },
-  required: ['sentence'],
-};
-
-const NATURAL_TEXT_SYSTEM = `You are turning a structured list of a patient's already-recorded symptoms into ONE short, natural-sounding description, the way a patient might actually say it to a doctor — not a mechanical list of tags.
-
-Rules:
-- Mention EVERY symptom term in the list. Use plain everyday phrasing where there's an obvious one, but keep each symptom clearly recognizable — do not merge or drop any of them.
-- If a symptom is marked present: false, phrase it as a clear, explicit denial ("no chest pain", "hasn't had a fever", "no nausea") — never omit it, and never phrase it so it could be misread as present.
-- Naturally weave in duration and severity ONLY where given for that symptom — do not invent or mechanically restate one that isn't there.
-- Do not add any symptom, cause, detail, or narrative that isn't in the list. Do not diagnose or speculate about a cause.
-- Keep it to 1-3 short sentences of plain English.
-
-Return ONLY the JSON — no commentary.`;
+// Standard 0-10 pain-scale bands: 1-3 mild, 4-6 moderate, 7-10 severe.
+function severityWordFromScale(n) {
+  if (!(n > 0) || n > 10) return null;
+  if (n <= 3) return 'mild';
+  if (n <= 6) return 'moderate';
+  return 'severe';
+}
 
 /**
- * @param {Array<{term:string, present:boolean, duration:string|null, severity:string|null}>} symptoms
- * @returns {Promise<string>} - empty string on failure or empty input;
- *   caller falls back to the mechanical template in that case.
+ * Normalize a recorded severity ("3/10", "3", "a bit", "Moderate") to
+ * one of mild/moderate/severe, or null when it isn't recognizable —
+ * never a number or the word "severity", both of which /parse misreads.
+ *
+ * @param {string|null} raw
+ * @returns {'mild'|'moderate'|'severe'|null}
  */
-export async function composeNaturalDescription(symptoms) {
-  if (!symptoms || !symptoms.length) return '';
-  try {
-    const parsed = await callAIStructured({
-      system: NATURAL_TEXT_SYSTEM,
-      message: JSON.stringify({ symptoms }),
-      schema: NATURAL_TEXT_SCHEMA,
-      // A bit more room than the classification calls (which stay at 0)
-      // — see the doc comment above this function for why that's safe
-      // here specifically: this call composes phrasing, not a new
-      // clinical fact.
-      temperature: 0.4,
-    });
-    return String(parsed?.sentence || '').trim();
-  } catch (err) {
-    console.error('[symptomClassifier] composeNaturalDescription failed (non-fatal, caller falls back to templated text):', err.message);
-    return '';
-  }
+export function normalizeSeverityForParse(raw) {
+  const s = String(raw || '').toLowerCase().trim();
+  if (!s) return null;
+  const scale = s.match(/(\d+(?:\.\d+)?)\s*(?:\/|out of|of)\s*10\b/) || s.match(/^(\d+(?:\.\d+)?)$/);
+  if (scale) return severityWordFromScale(parseFloat(scale[1]));
+  if (/\b(severe|extreme|excruciating|unbearable|intense|worst|terrible|very bad|really bad)\b/.test(s)) return 'severe';
+  if (/\b(moderate|medium)\b/.test(s)) return 'moderate';
+  if (/\b(mild|slight|slightly|minor|light|a bit|a little)\b/.test(s)) return 'mild';
+  return null;
+}
+
+/**
+ * The exact text sent to Infermedica's /parse for a list of recorded
+ * symptoms: "I have mild joint pain. I don't have nausea."
+ *
+ * @param {Array<{term:string, present:boolean, severity?:string|null}>} symptoms
+ * @returns {string}
+ */
+export function describeSymptomsForParse(symptoms) {
+  return (symptoms || [])
+    .map((s) => {
+      const term = String(s?.term || '').trim();
+      if (!term) return '';
+      if (!s.present) return `I don't have ${term}.`;
+      const severity = normalizeSeverityForParse(s.severity);
+      return `I have ${severity ? `${severity} ` : ''}${term}.`;
+    })
+    .filter(Boolean)
+    .join(' ');
 }
 
 const COMPLAINT_SCHEMA = {

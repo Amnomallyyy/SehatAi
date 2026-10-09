@@ -535,10 +535,10 @@ export async function callAI({ system, message, temperature = 0, maxTokens = 300
  *   every structured call that makes a factual/clinical extraction decision
  *   (symptom classification, confirmation resolution, etc). Pass a higher
  *   value ONLY for a call that is composing free-text PROSE with no
- *   clinical assertion of its own (e.g. symptomClassifier.js's
- *   composeNaturalDescription, which just rephrases already-decided
- *   structured data into a natural sentence) — see that function's doc
- *   comment for why a little more room there is safe.
+ *   clinical assertion of its own — and never for text another engine
+ *   will interpret (Infermedica's /parse input is built deterministically
+ *   for exactly that reason; see symptomClassifier.js's
+ *   describeSymptomsForParse).
  */
 export async function callAIStructured({ system, message, schema, temperature = 0 }) {
   if (PROVIDER_CHAIN.length === 0) {

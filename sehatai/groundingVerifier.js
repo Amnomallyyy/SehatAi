@@ -103,6 +103,7 @@ export async function loadVerifierVocabulary({ force = false } = {}) {
  *   allowedLabTests?: string[],
  *   allowedProfileFacts?: string[],
  *   matchedSymptomNames?: string[],
+ *   reportedSeverities?: string[],
  *   patientStatedText?: string,
  *   graphUrgency?: string,
  *   subjectInfo?: {subject:string, relation?:string|null},
@@ -132,6 +133,24 @@ export async function verifyRecommendation(recommendation, ctx = {}) {
   );
   const allowedFacts       = normSet(factValues(ctx.allowedProfileFacts || []));
   const knownSymptoms      = normSet(ctx.matchedSymptomNames || []);
+  // FIXED (demonstrated live): Infermedica names many findings
+  // "<finding>, <qualifier>" — "Joint pain, one knee". A model describing
+  // that finding in plain words naturally uses the part before the comma
+  // ("mild joint pain"), which never exactly equals the full normalized
+  // name ("joint pain one knee"), so a mildly sore knee's correct
+  // Orthopedist answer was blocked on both attempts as an "ungrounded
+  // profile fact" and replaced with the safe default. The head names the
+  // SAME reported finding, only less specifically, so it counts as known.
+  const knownSymptomHeads  = normSet(
+    asArray(ctx.matchedSymptomNames).map((name) => String(name).split(',')[0])
+  );
+  // Severity words this session's tracked symptoms actually carry. Only
+  // these are stripped before the known-symptom check, so "mild joint
+  // pain" for a knee reported as mild is grounded, while "severe joint
+  // pain" for that same knee still reads as ungrounded.
+  const reportedSeverityWords = new Set(
+    asArray(ctx.reportedSeverities).flatMap((s) => norm(s).split(' ')).filter(Boolean)
+  );
   const isSelf             = ctx.subjectInfo?.subject === 'self';
   const prose              = PROSE_FIELDS.map((f) => rec[f] || '').join('\n');
   const patientSaid        = norm(ctx.patientStatedText || '');
@@ -280,11 +299,18 @@ export async function verifyRecommendation(recommendation, ctx = {}) {
     // still has to be independently in knownSymptoms; it only stops a
     // model naturally saying "X and Y" instead of "X. Y." from reading
     // as a hallucination.
+    const isKnownSymptom = (p) => {
+      if (knownSymptoms.has(p) || knownSymptomHeads.has(p)) return true;
+      const words = p.split(' ');
+      while (words.length > 1 && reportedSeverityWords.has(words[0])) words.shift();
+      const core = words.join(' ');
+      return core !== p && (knownSymptoms.has(core) || knownSymptomHeads.has(core));
+    };
     const isConjunctionOfKnown = (() => {
       const parts = mention.split(/\s*(?:,|&|\band\b|\bor\b)\s*/i).map(norm).filter(Boolean);
-      return parts.length > 1 && parts.every((p) => knownSymptoms.has(p));
+      return parts.length > 1 && parts.every(isKnownSymptom);
     })();
-    if (knownSymptoms.has(n) || isConjunctionOfKnown) continue;
+    if (isKnownSymptom(n) || isConjunctionOfKnown) continue;
     if (!isSelf) {
       // An answer about someone else's body must not cite the account
       // holder's record at all — unless the sender said it themselves.

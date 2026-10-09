@@ -42,9 +42,10 @@ import { shareSynonymWord } from './symptomSynonyms.js';
 import { appendAccumulatedSymptoms, getAccumulatedSymptoms } from './chatLog.js';
 import { applyMixedEmotionalAcknowledgment } from './processMessage.js';
 import { buildSafeDefault, SAFE_DEFAULT_RESPONSE } from './safedefault.js';
-import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE } from './symptomClassifier.js';
+import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE, describeSymptomsForParse, normalizeSeverityForParse } from './symptomClassifier.js';
 import { verifyRecommendation } from './groundingVerifier.js';
-import { naturalDescriptionPassesSanityCheck, applyMixedDiagnosisDecline } from './processMessage.js';
+import { mapTriageToUrgency } from './infermedicaClient.js';
+import { applyMixedDiagnosisDecline } from './processMessage.js';
 import { DIAGNOSIS_PATTERNS } from './safetyCheck.js';
 
 const LIVE = process.argv.includes('--live');
@@ -256,35 +257,38 @@ async function runDeterministicChecks() {
     check('does not misfire on "forgot" (past tense) or "start with"', shouldNotMatch.every((s) => !RESTART_INTENT_RE.test(s)), `false positives: ${JSON.stringify(shouldNotMatch.filter((s) => RESTART_INTENT_RE.test(s)))}`);
   }
 
-  section('Deterministic: processMessage.js natural-description negation check (the demonstrated live bug)');
+  section('Deterministic: symptomClassifier.js Infermedica /parse text (the demonstrated live bug)');
   {
-    // Live-demonstrated case: a denied symptom's natural-language
-    // description ("...but I haven't had any nausea.") got wrongly
-    // rejected by the sanity check, because normalizeText strips
-    // apostrophes BEFORE the negation-word check runs, so the "n't"
-    // pattern (the only one meant to catch a contraction) could never
-    // match anything — forcing a fallback to mechanical "(denied, ...)"
-    // phrasing that Infermedica's own parser didn't reliably read as
-    // negation, letting the denied symptom leak back in as a positive
-    // finding in the final recommendation.
+    // Live-demonstrated case: the same "joint pain, 3/10, three days"
+    // reached /parse as "...with a severity of 3..." one run (read as
+    // "Joint pain, severe, after trauma" -> Surgeon) and "moderate joint
+    // pain..." the next (-> Orthopedist), because an LLM at temperature
+    // 0.4 wrote the sentence. Durations also derailed /parse ("mild eye
+    // pain for 3 days" -> "Eye pain, unbearable" -> emergency).
     const symptoms = [
-      { term: 'nausea', present: false },
-      { term: 'headache', present: true, severity: 'mild' },
+      { term: 'joint pain', present: true, severity: '3/10', duration: 'three days' },
+      { term: 'nausea', present: false, severity: null, duration: null },
     ];
-    const goodSentence = "I've had a mild headache, but I haven't had any nausea.";
-    const goodSentenceOtherContraction = "I've had a mild headache, but I hasn't — wait, I mean I haven't had any nausea.";
-    const badSentenceNoNegationAtAll = "I've had a mild headache and nausea for a couple days.";
+    const text = describeSymptomsForParse(symptoms);
     check(
-      'a correctly-negated natural sentence using a contraction ("haven\'t") passes',
-      naturalDescriptionPassesSanityCheck(goodSentence, symptoms) === true
+      'the same symptoms always produce the same /parse text',
+      text === describeSymptomsForParse(symptoms) && text === "I have mild joint pain. I don't have nausea.",
+      `got: ${JSON.stringify(text)}`
     );
     check(
-      'still passes with other text around the contraction',
-      naturalDescriptionPassesSanityCheck(goodSentenceOtherContraction, symptoms) === true
+      'no number, "severity", or duration ever reaches /parse',
+      !/\d|severity|three days/i.test(text),
+      `got: ${JSON.stringify(text)}`
     );
+    const bands = {
+      '3/10': 'mild', '3': 'mild', '3 out of 10': 'mild', '5/10': 'moderate', '8 out of 10': 'severe',
+      'Moderate': 'moderate', 'a bit': 'mild', 'very bad': 'severe', 'mild': 'mild', '': null, 'odd': null, '0/10': null,
+    };
+    const wrong = Object.entries(bands).filter(([raw, want]) => normalizeSeverityForParse(raw) !== want);
     check(
-      'a sentence with NO negation at all for a denied symptom is correctly rejected',
-      naturalDescriptionPassesSanityCheck(badSentenceNoNegationAtAll, symptoms) === false
+      'recorded severities normalize to mild/moderate/severe (1-3/4-6/7-10 on a 0-10 scale)',
+      wrong.length === 0,
+      `wrong: ${JSON.stringify(wrong.map(([raw]) => [raw, normalizeSeverityForParse(raw)]))}`
     );
   }
 
@@ -372,6 +376,25 @@ async function runDeterministicChecks() {
       '"what could this be" (no inserted noun) still matches, unaffected by the new pattern',
       DIAGNOSIS_PATTERNS.some((re) => re.test('what could this be')),
       'existing pattern regressed'
+    );
+  }
+
+  {
+    // "consultation" used to map to 'urgent', so every ordinary
+    // see-a-doctor case showed an "urgency: urgent" chip.
+    const expected = {
+      emergency_ambulance: 'emergency',
+      emergency: 'emergency',
+      consultation_24: 'urgent',
+      consultation: 'routine',
+      self_care: 'routine',
+      not_a_real_level: 'urgent',
+    };
+    const wrong = Object.entries(expected).filter(([level, bucket]) => mapTriageToUrgency(level) !== bucket);
+    check(
+      'Infermedica triage levels map to the right urgency (consultation is routine, unknown is cautious)',
+      wrong.length === 0,
+      `wrong: ${JSON.stringify(wrong.map(([level]) => [level, mapTriageToUrgency(level)]))}`
     );
   }
 }
@@ -464,6 +487,50 @@ async function runLiveScenarios() {
       'plain-language symptom wording and a colloquial specialist alias are both recognized as grounded',
       result.ok === true,
       `violations: ${JSON.stringify(result.violations)}`
+    );
+  }
+
+  {
+    // Live-demonstrated case: "my knee is a bit sore after jogging".
+    // Infermedica matched "Joint pain, one knee"; the model wrote "mild
+    // joint pain" (the part before the comma plus the reported severity)
+    // and was blocked on both attempts as an ungrounded profile fact,
+    // falling back to the safe default.
+    const ctx = {
+      allowedSpecialists: ['Orthopedist'],
+      allowedLabTests: [],
+      allowedProfileFacts: [],
+      matchedSymptomNames: ['Joint pain, one knee', 'knee pain'],
+      reportedSeverities: ['mild'],
+      patientStatedText: "my knee is a bit sore after jogging yesterday\nthat's all",
+      graphUrgency: 'routine',
+      subjectInfo: { subject: 'self' },
+    };
+    const rec = (rationale) => ({
+      specialist_recommended: 'Orthopedist',
+      rationale,
+      next_steps: 'Schedule an appointment with an Orthopedist.',
+      referenced_lab_tests: [],
+      referenced_profile_facts: [],
+    });
+    const blockedOn = (result) => result.violations.filter((v) => !v.repaired).map((v) => v.detail);
+
+    const grounded = await verifyRecommendation(
+      rec('Mild joint pain after jogging is worth having an Orthopedist examine directly.'), ctx
+    );
+    check(
+      'the general part of a qualified finding name, with its reported severity, is grounded',
+      grounded.ok === true,
+      `violations: ${JSON.stringify(grounded.violations)}`
+    );
+
+    const invented = await verifyRecommendation(
+      rec('Knee pain like this, given your arthritis, is worth having an Orthopedist examine directly.'), ctx
+    );
+    check(
+      'an invented condition is still blocked',
+      blockedOn(invented).some((d) => /arthritis/i.test(d)),
+      `violations: ${JSON.stringify(invented.violations)}`
     );
   }
 

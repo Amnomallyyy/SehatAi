@@ -104,7 +104,7 @@ import {
   MAX_CLARIFICATION_ROUNDS,
 } from './infermedicaClient.js';
 import { getClarifyingQuestion, assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested } from './clarificationCheck.js';
-import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, composeNaturalDescription, RESTART_INTENT_RE } from './symptomClassifier.js';
+import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, describeSymptomsForParse, RESTART_INTENT_RE } from './symptomClassifier.js';
 import { sanityFilterSymptoms } from './symptomSanityGate.js';
 import { getDietResponse } from './dietBotClient.js';
 import { detectSubject } from './subjectDetection.js';
@@ -341,10 +341,7 @@ function normalizeText(s) {
  * orig_text but that text genuinely isn't in what we sent is the real
  * red flag (a same-call invented guess) and is still dropped exactly
  * as before. This is a narrower, better-justified fail path, not a
- * blanket fail-open — see the accompanying composeNaturalDescription
- * change (symptomClassifier.js) for the other half of this fix: giving
- * Infermedica more natural, parseable input in the first place so
- * missing orig_text should now also just be rarer.
+ * blanket fail-open.
  *
  * @param {Array} rawMentions - raw /parse mentions for this turn
  * @param {string} message - the patient's raw message this turn
@@ -432,85 +429,6 @@ async function getRiskFactorEvidence(profileFacts, age) {
     console.error('[processMessage] getRiskFactorEvidence failed (non-fatal, proceeding on symptom evidence alone):', err.message);
     return [];
   }
-}
-
-/**
- * Deterministic sanity check on composeNaturalDescription's output
- * (symptomClassifier.js) before it's trusted as the text sent to
- * Infermedica: every symptom term's significant word(s) must appear
- * somewhere in the generated sentence (so a symptom can never be
- * silently dropped from what Infermedica sees), and if any symptom is
- * denied (present: false), at least one plain negation word must
- * appear somewhere in the sentence too (so a denial can't silently
- * read as a plain statement). This is intentionally a coarse check,
- * not a full re-parse — its only job is to catch the failure modes
- * that would actually matter (a dropped or inverted symptom), not to
- * grade the prose. Anything that fails this falls back to the old
- * mechanical template in finalizeAndRecommend.
- *
- * @param {string} sentence
- * @param {Array<{term:string, present:boolean}>} symptoms
- * @returns {boolean}
- */
-// Words that plausibly push Infermedica's own triage engine toward a
-// more urgent classification (sudden/severe onset language, "worst",
-// etc). None of these carry meaning on their own here — the point is
-// only: if NO symptom in the accumulated list was ever given a stated
-// severity, the generated sentence has no legitimate source for any of
-// these words, so their presence means the model added intensity that
-// was never reported. Observed live: a plain "headache (for few
-// days), eye pain (for few days)" — no severity stated for either —
-// came back from Infermedica's /triage as an EMERGENCY after going
-// through the natural-language rewrite, which is the kind of result
-// this guard exists to catch (whether the rewrite actually invented
-// alarming language or the escalation had some other cause, failing
-// the sanity check here costs nothing but a fallback to the plain
-// template, so it's the safe default whenever this can't be ruled
-// out).
-const ALARM_WORDS = ['severe', 'sudden', 'suddenly', 'worst', 'excruciating', 'intense', 'extreme', 'agonizing', 'unbearable', 'emergency', 'critical'];
-
-export function naturalDescriptionPassesSanityCheck(sentence, symptoms) {
-  if (!sentence || !sentence.trim()) return false;
-  const normSentence = normalizeText(sentence);
-  let anyDenied = false;
-  for (const s of symptoms) {
-    const words = normalizeText(s.term).split(' ').filter((w) => w.length > 2);
-    const covered = words.length === 0 || words.some((w) => normSentence.includes(w));
-    if (!covered) return false;
-    if (!s.present) anyDenied = true;
-  }
-  if (anyDenied) {
-    // BUG (found live): normSentence has already had normalizeText run on
-    // it, which replaces every non-alphanumeric character — including
-    // apostrophes — with a space. "haven't" becomes "haven t", so the
-    // "n't" pattern below (the ONLY one meant to catch a contraction like
-    // "haven't"/"didn't"/"doesn't"/"isn't") can never match anything in
-    // normSentence — it was checking for a character that's already been
-    // stripped out by the time this runs. That silently rejected a
-    // genuinely correct, safe sentence ("...but I haven't had any
-    // nausea.") purely for using a natural contraction, forcing a
-    // fallback to the mechanical "(denied, ...)" template — which
-    // Infermedica's own /parse then failed to read as negation, letting
-    // an explicitly-denied symptom leak back in as a positive finding in
-    // the final recommendation. Fix: check the RAW (pre-normalization)
-    // sentence for the apostrophe-dependent contraction pattern, since
-    // that's the only text that still has the apostrophe to check.
-    const rawLower = String(sentence).toLowerCase();
-    // No leading \b before "n" — in every real contraction ("haven't",
-    // "doesn't", "isn't") the "n" is attached to the preceding letter
-    // (have-N'T), never at a word boundary, so a leading \b here would
-    // never match anything real. Only the boundary AFTER "t" is needed.
-    const hasContractedNegation = /n['’]t\b/.test(rawLower);
-    const NEGATION_WORDS = ['no ', 'not ', 'never', 'denies', 'denied', 'without', 'none'];
-    const hasNegation = hasContractedNegation || NEGATION_WORDS.some((w) => normSentence.includes(w.trim()));
-    if (!hasNegation) return false;
-  }
-  const anySeverityStated = symptoms.some((s) => s.present && s.severity);
-  if (!anySeverityStated) {
-    const inventedAlarm = ALARM_WORDS.some((w) => normSentence.includes(w));
-    if (inventedAlarm) return false;
-  }
-  return true;
 }
 
 /**
@@ -2843,36 +2761,17 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   // THE ONE INFERMEDICA CALL THAT MATTERS: map the accumulated,
   // already-classified symptom labels to real evidence.
   //
-  // UPDATED: this used to always be the mechanical tag format —
-  // "headache (mild, for 2 days); eye pain" — which reads nothing like
-  // real patient language and is the format implicated in the
-  // orig_text-missing bug documented above filterGroundedMentions. Per
-  // the explicit decision to fix this by giving Groq a little more
-  // room to phrase it naturally (composeNaturalDescription,
-  // symptomClassifier.js) rather than by regrounding against a new
-  // hand-built term list, that's tried first; a deterministic sanity
-  // check (naturalDescriptionPassesSanityCheck, above) guards against a
-  // bad composition ever silently dropping or inverting a symptom, and
-  // the old mechanical template remains the fallback if that check
-  // fails or the Groq call errors — so this can never end up WORSE
-  // than the previous behavior, only better on the common path.
+  // REPLACED: this used to be an LLM rewrite at temperature 0.4, so the
+  // same symptoms reached /parse worded differently each time and came
+  // back as different evidence (joint pain: Surgeon one run, Orthopedist
+  // the next). Now one fixed sentence per symptom — see
+  // describeSymptomsForParse (symptomClassifier.js) for what /parse was
+  // measured to misread and why duration is left out.
   // ================================================================
-  const templatedText = `${formatClassifiedSymptoms(accumulated).replace(/;\s*/g, '. ')}.`;
-  const naturalSentence = await composeNaturalDescription(accumulated);
-  let fullText;
-  if (naturalSentence && naturalDescriptionPassesSanityCheck(naturalSentence, accumulated)) {
-    fullText = naturalSentence;
-  } else {
-    if (naturalSentence) {
-      console.warn('[processMessage] composeNaturalDescription output failed sanity check, falling back to templated text. Generated:', naturalSentence);
-    }
-    fullText = templatedText;
-  }
-  // Always visible (not just on failure) — this exact class of bug
-  // (a triage result that only makes sense in light of what text
-  // Infermedica actually saw) has already been hard to diagnose once
-  // without this. Cheap: one line, every finalize call.
-  console.log(`[processMessage] finalize: sending to Infermedica /parse (source=${fullText === naturalSentence ? 'natural' : 'templated'}): "${fullText}"`);
+  const fullText = describeSymptomsForParse(accumulated);
+  // Always visible — a triage result often only makes sense in light of
+  // the exact text Infermedica saw. Cheap: one line, every finalize call.
+  console.log(`[processMessage] finalize: sending to Infermedica /parse: "${fullText}"`);
   let keptMentions = [];
   let rawMentionCount = 0;
   let droppedMentions = [];
@@ -3171,8 +3070,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   let secondarySpecialist = null;
   if (priorRoundSymptoms.length > 0 && newRoundSymptoms.length > 0) {
     try {
-      const priorText = `${formatClassifiedSymptoms(priorRoundSymptoms).replace(/;\s*/g, '. ')}.`;
-      const newText = `${formatClassifiedSymptoms(newRoundSymptoms).replace(/;\s*/g, '. ')}.`;
+      const priorText = describeSymptomsForParse(priorRoundSymptoms);
+      const newText = describeSymptomsForParse(newRoundSymptoms);
 
       const priorRaw = await parsePatientMessage(priorText, age);
       const { kept: priorKept } = filterGroundedMentions(priorRaw, priorText);
@@ -3233,6 +3132,20 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     ...matchedSymptoms.map((s) => s.name),
     ...accumulated.filter((s) => s.present).map((s) => s.term),
   ];
+  const reportedSeverities = accumulated
+    .filter((s) => s.present && s.severity)
+    .map((s) => s.severity);
+
+  // FIXED (demonstrated live): this used to be just `message` — and the
+  // turn that produces a recommendation is almost always a bare
+  // confirmation ("that's all", "go ahead"), so the verifier's "the
+  // patient said it themselves in this session" exception never saw
+  // anything the patient had actually described. Their own recent
+  // messages (never the bot's) plus this one.
+  const patientStatedText = [
+    ...getRecentMessages(sessionId).filter((m) => m.role === 'patient').map((m) => m.text),
+    message,
+  ].join('\n');
 
   let raw = await generateRecommendation(generateInput);
   let { ok, recommendation, violations } = await verifyRecommendation(raw, {
@@ -3240,7 +3153,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     allowedLabTests: realLabValues.map((v) => v.testName),
     allowedProfileFacts: profileFacts,
     matchedSymptomNames: groundedSymptomNames,
-    patientStatedText: message,
+    reportedSeverities,
+    patientStatedText,
     graphUrgency: urgency,
     subjectInfo,
     checkKeywordMatch,
@@ -3257,7 +3171,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       allowedLabTests: realLabValues.map((v) => v.testName),
       allowedProfileFacts: profileFacts,
       matchedSymptomNames: groundedSymptomNames,
-      patientStatedText: message,
+      reportedSeverities,
+      patientStatedText,
       graphUrgency: urgency,
       subjectInfo,
       checkKeywordMatch,
@@ -3304,7 +3219,7 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   // deterministic backstop that makes the doctor-consult mention
   // unconditional, same "prompt instruction + cheap guaranteed check"
   // shape already used throughout this pipeline (symptomSanityGate.js,
-  // naturalDescriptionPassesSanityCheck, etc.). Deliberately does NOT
+  // the grounding verifier, etc.). Deliberately does NOT
   // attempt to deterministically detect/fix a dismissive TONE — that's
   // open-ended text-quality judgment, not something a keyword check can
   // reliably catch or repair; the prompt instruction is what carries
