@@ -65,6 +65,8 @@ import {
   applyEmergencyContinueNote,
   withRemovalNote,
   keepAnswerOnAskedSymptom,
+  findMissingDetail,
+  fallbackDetailQuestion,
 } from './processMessage.js';
 import { readFile } from 'node:fs/promises';
 import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers, validateComposed } from './replyComposer.js';
@@ -467,6 +469,16 @@ async function runDeterministicChecks() {
     );
     check('a newly mentioned symptom is kept', withNew.some((s) => s.term === 'fever') && !withNew.some((s) => s.term === 'joint pain'));
     check('no asked symptom: nothing is dropped', keepAnswerOnAskedSymptom(copied, { askedSymptom: null, knownTerms: ['joint pain', 'leg pain'], message: '2 days' }).length === 2);
+  }
+
+  section('Deterministic: the backup question never re-asks what is known (the demonstrated live bug)');
+  {
+    // Live: "only today" was given, the question AI was down, and the backup
+    // asked "how long has this been going on, and how bad is it?" anyway.
+    const gap = findMissingDetail([{ term: 'blurry vision', present: true, duration: 'today', severity: null }]);
+    check('only the missing piece (severity) is asked', gap?.missing === 'severity' && /how bad is the blurry vision/i.test(fallbackDetailQuestion(gap)) && !/how long/i.test(fallbackDetailQuestion(gap)), JSON.stringify(gap));
+    check('nothing missing: no question (moves on to the confirmation)', findMissingDetail([{ term: 'headache', present: true, duration: '2 days', severity: 'mild' }]) === null);
+    check('a removed symptom is ignored', findMissingDetail([{ term: 'nausea', present: false }, { term: 'headache', present: true, duration: '2 days', severity: null }])?.term === 'headache');
   }
 
   section('Deterministic: re-opened symptom stays in the round (the demonstrated live bug)');

@@ -113,7 +113,7 @@ import {
   describeChannel,
   MAX_CLARIFICATION_ROUNDS,
 } from './infermedicaClient.js';
-import { getClarifyingQuestion, assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested } from './clarificationCheck.js';
+import { assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested } from './clarificationCheck.js';
 import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, describeSymptomsForParse, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, PRONOUN_DENIAL_RE } from './symptomClassifier.js';
 import { sanityFilterSymptoms } from './symptomSanityGate.js';
 import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers } from './replyComposer.js';
@@ -352,6 +352,37 @@ export function pickDistinctSpecialist({ priorSpecialists = [], newSpecialists =
   if (!priorSpecialists.length) return null;
   const alreadyNamed = new Set([...priorSpecialists, ...mainSpecialists].map((s) => String(s).toLowerCase().trim()));
   return newSpecialists.find((s) => !alreadyNamed.has(String(s).toLowerCase().trim())) || null;
+}
+
+/**
+ * The first present symptom still missing its duration and/or severity,
+ * or null when every one has both. Used when the AI that composes the
+ * next question is unavailable, so the fallback never re-asks something
+ * the patient already answered.
+ *
+ * @param {Array<{term:string, present?:boolean, duration?:string|null, severity?:string|null}>} symptoms
+ * @returns {{term: string, missing: 'duration'|'severity'|'both'}|null}
+ */
+export function findMissingDetail(symptoms) {
+  for (const s of symptoms || []) {
+    if (s.present === false) continue;
+    const noDuration = !s.duration;
+    const noSeverity = !s.severity;
+    if (noDuration || noSeverity) {
+      return { term: s.term, missing: noDuration && noSeverity ? 'both' : noDuration ? 'duration' : 'severity' };
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {{term: string, missing: 'duration'|'severity'|'both'}} gap
+ * @returns {string}
+ */
+export function fallbackDetailQuestion({ term, missing }) {
+  if (missing === 'duration') return `How long have you had the ${term}?`;
+  if (missing === 'severity') return `On a scale of 1 to 10, how bad is the ${term} right now?`;
+  return `How long have you had the ${term}, and how bad is it on a scale of 1 to 10?`;
 }
 
 const GENERIC_SYMPTOM_WORDS_FOR_MENTION = new Set(['pain', 'ache', 'aches', 'aching', 'feeling', 'severe', 'mild', 'moderate']);
@@ -2976,8 +3007,21 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
         maxRounds: MAX_CLARIFICATION_ROUNDS,
       });
 
-  if (!intakeAssessment.sufficient) {
-    const questionText = intakeAssessment.question || getClarifyingQuestion('both');
+  // BUG (found live): when assessIntake's AI call failed (provider quota),
+  // the fixed fallback ALWAYS asked "how long, and how severe?" — even
+  // right after the patient said "only today". The fallback now asks only
+  // for what's actually missing, and moves on to the confirmation when
+  // nothing is.
+  let assessment = intakeAssessment;
+  if (!assessment.sufficient && !assessment.question) {
+    const gap = findMissingDetail(symptomsForIntakeAssessment);
+    assessment = gap
+      ? { sufficient: false, question: fallbackDetailQuestion(gap), referencedSymptom: gap.term, askedAboutSymptoms: [] }
+      : { sufficient: true, question: null };
+  }
+
+  if (!assessment.sufficient) {
+    const questionText = assessment.question;
 
     // FIXED (properly this time): an answer to our own targeted
     // question that contributes NOTHING relevant (e.g. "oh I love
@@ -2997,12 +3041,8 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
 
     setAwaitingClarificationAnswer(sessionId, true);
     setLastQuestionAsked(sessionId, questionText);
-    // Only when the question is the one assessIntake composed — the fixed
-    // template fallback proposes no new symptoms.
-    if (intakeAssessment.question) {
-      setLastQuestionCandidates(sessionId, intakeAssessment.askedAboutSymptoms || []);
-      setLastQuestionSymptom(sessionId, intakeAssessment.referencedSymptom || null);
-    }
+    setLastQuestionCandidates(sessionId, assessment.askedAboutSymptoms || []);
+    setLastQuestionSymptom(sessionId, assessment.referencedSymptom || null);
     incrementClarificationCount(sessionId);
     return envelope({
       kind: 'clarification',

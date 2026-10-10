@@ -393,6 +393,23 @@ const PROVIDER_FACTORIES = {
   // models reason by default (an empty answer when the reasoning eats the
   // token budget), but honor reasoning_effort: "none": aion-3.0-mini then
   // answers in ~1s with clean JSON/one-word output.
+  // ADDED (2026-10-10): "Gamma" — the team's self-hosted Gemma model
+  // (vLLM, OpenAI-compatible) on a private Tailscale host. No rate limits
+  // or quotas, but slow on long prompts — measured: ~2s for a short check,
+  // ~22s for the ~5k-token symptom prompt (Groq: 0.2s / 0.9s when not
+  // rate-limited). So it sits right AFTER Groq in AI_PROVIDER_ORDER:
+  // Groq stays fast while within its limits, Gamma takes over when Groq
+  // is rate-limited. Gemma isn't a reasoning model, so no
+  // reasoning_effort is sent. Context window: 8,192 tokens (see
+  // isContextOverflow below). Only reachable while this machine is on
+  // the Tailscale network; otherwise calls fail over to the next provider.
+  gamma: () => process.env.GAMMA_BASE_URL ? makeOpenAICompatibleProvider({
+    name: "gamma",
+    apiKeyEnv: "GAMMA_API_KEY",
+    baseURL: process.env.GAMMA_BASE_URL.trim(),
+    modelEnv: "GAMMA_MODEL",
+    defaultModel: "gemma-4-31b-it",
+  }) : null,
   aionlabs: () => makeOpenAICompatibleProvider({
     name: "aionlabs",
     apiKeyEnv: "AIONLABS_API_KEY",
@@ -536,6 +553,11 @@ function cooldownMsFor(err) {
   // for it (found live: Groq returned broken JSON once, was skipped, and
   // the whole turn failed on the exhausted providers behind it).
   if (!status && /JSON|Unexpected token|empty content|Expected .* after/i.test(text)) return 0;
+  // This one request is too long for the provider's context window (Gamma:
+  // 8,192 tokens). Not an outage: skip to the next provider for THIS call
+  // only (-1 = no cooldown and no same-provider retry), so one oversized
+  // prompt doesn't bench the provider for every other call.
+  if (isContextOverflow(err)) return -1;
   // A PER-MINUTE limit (Groq's free tier: tokens per minute) clears in
   // seconds — retry the same provider after a short wait (see
   // perMinuteWaitMs) instead of skipping it. Found live: Groq's message
@@ -547,6 +569,10 @@ function cooldownMsFor(err) {
   if (/unknown model|model.*not found|does not exist/i.test(text)) return 60 * 60 * 1000;
   if (/daily|per day|PerDay|TPD|RPD|quota|RESOURCE_EXHAUSTED/i.test(text)) return 60 * 60 * 1000;
   return 30 * 1000;
+}
+
+function isContextOverflow(err) {
+  return /maximum context length|context length|context window|too many tokens|prompt is too long/i.test(String(err?.message || ''));
 }
 
 function isPerMinuteLimit(err) {
@@ -570,7 +596,7 @@ function providersToTry() {
 
 function coolDown(provider, err) {
   const ms = cooldownMsFor(err);
-  if (!ms) return;
+  if (ms <= 0) return; // 0: retry same provider; -1: skip it for this call only
   providerCooldownUntil.set(provider.name, Date.now() + ms);
   console.warn(`[callAi] skipping provider "${provider.name}" for ${Math.round(ms / 1000)}s`);
 }
