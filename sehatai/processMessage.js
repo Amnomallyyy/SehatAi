@@ -94,6 +94,8 @@ import {
   setLastQuestionAsked,
   getLastQuestionCandidates,
   setLastQuestionCandidates,
+  getLastQuestionSymptom,
+  setLastQuestionSymptom,
   getReopenedTerms,
   addReopenedTerms,
   getAwaitingEmotionalFollowUp,
@@ -350,6 +352,39 @@ export function pickDistinctSpecialist({ priorSpecialists = [], newSpecialists =
   if (!priorSpecialists.length) return null;
   const alreadyNamed = new Set([...priorSpecialists, ...mainSpecialists].map((s) => String(s).toLowerCase().trim()));
   return newSpecialists.find((s) => !alreadyNamed.has(String(s).toLowerCase().trim())) || null;
+}
+
+const GENERIC_SYMPTOM_WORDS_FOR_MENTION = new Set(['pain', 'ache', 'aches', 'aching', 'feeling', 'severe', 'mild', 'moderate']);
+
+/**
+ * When the pending question was about ONE recorded symptom ("How long have
+ * you had the leg pain, and how severe is it?"), a bare answer ("2 days
+ * and 5 out of 10") belongs to that symptom only. BUG (found live): the
+ * classifier also applied it to every other known symptom — joint pain's
+ * real "6/10, a few days" got overwritten, both looked like blanket
+ * guesses, and the bot kept re-asking about each in turn. Drops entries
+ * for OTHER already-known symptoms that the patient didn't name in this
+ * message (they only carried the copied answer). New symptoms, denials,
+ * and anything the patient actually named are kept.
+ *
+ * @param {Array} classified - classifySymptoms() output for this turn
+ * @param {{askedSymptom: string|null, knownTerms: string[], message: string}} ctx
+ * @returns {Array}
+ */
+export function keepAnswerOnAskedSymptom(classified, { askedSymptom, knownTerms = [], message = '' }) {
+  if (!askedSymptom || !Array.isArray(classified) || classified.length < 2) return classified;
+  const asked = askedSymptom.toLowerCase().trim();
+  const known = new Set(knownTerms.map((t) => String(t).toLowerCase().trim()));
+  const lowerMsg = String(message).toLowerCase();
+  const namedInMessage = (term) =>
+    term.toLowerCase().split(/\s+/).some((w) => w.length > 2 && !GENERIC_SYMPTOM_WORDS_FOR_MENTION.has(w) && lowerMsg.includes(w));
+  return classified.filter((s) => {
+    const key = String(s.term || '').toLowerCase().trim();
+    if (key === asked) return true;
+    if (s.present === false) return true;
+    if (!known.has(key)) return true; // a newly mentioned symptom
+    return namedInMessage(key);
+  });
 }
 
 /**
@@ -2269,6 +2304,13 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       });
     }
     classifiedSymptoms = classificationResult.symptoms;
+    if (wasAnsweringClarification) {
+      classifiedSymptoms = keepAnswerOnAskedSymptom(classifiedSymptoms, {
+        askedSymptom: getLastQuestionSymptom(sessionId),
+        knownTerms: priorPresentTerms,
+        message,
+      });
+    }
     // DETERMINISTIC BACKSTOP (found live): "yes" answering "have you
     // noticed any swelling or redness around those joints?" came back from
     // classifySymptoms with nothing extracted — its affirmation-to-
@@ -2957,7 +2999,10 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     setLastQuestionAsked(sessionId, questionText);
     // Only when the question is the one assessIntake composed — the fixed
     // template fallback proposes no new symptoms.
-    if (intakeAssessment.question) setLastQuestionCandidates(sessionId, intakeAssessment.askedAboutSymptoms || []);
+    if (intakeAssessment.question) {
+      setLastQuestionCandidates(sessionId, intakeAssessment.askedAboutSymptoms || []);
+      setLastQuestionSymptom(sessionId, intakeAssessment.referencedSymptom || null);
+    }
     incrementClarificationCount(sessionId);
     return envelope({
       kind: 'clarification',

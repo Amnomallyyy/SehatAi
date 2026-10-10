@@ -113,6 +113,9 @@ function defaultExtra() {
     // Plain symptom terms the pending question proposed (e.g. "joint
     // swelling", "joint redness") — see getLastQuestionCandidates.
     lastQuestionCandidates: [],
+    // The recorded symptom the pending question is about, if it's about
+    // one — see getLastQuestionSymptom.
+    lastQuestionSymptom: null,
     // Already-finalized symptom terms the patient re-opened in the
     // current round — see getReopenedTerms.
     reopenedTerms: [],
@@ -668,6 +671,7 @@ export function clearPendingQuestionFlags(sessionId) {
   extra.awaitingClarificationAnswer = false;
   extra.lastQuestionAsked = null;
   extra.lastQuestionCandidates = [];
+  extra.lastQuestionSymptom = null;
   extra.awaitingFinalConfirmation = false;
   extra.awaitingDisambiguationAnswer = false;
   extra.pendingAmbiguousValue = null;
@@ -1250,10 +1254,38 @@ export function setLastQuestionAsked(sessionId, questionText) {
   if (!sessionId) return;
   const extra = getOrInitExtra(sessionId);
   extra.lastQuestionAsked = questionText || null;
-  // A new question invalidates the previous one's candidates; the
-  // assessIntake call site sets fresh ones right after this when its
-  // question proposes any.
+  // A new question invalidates the previous one's candidates and symptom;
+  // the assessIntake call site sets fresh ones right after this.
   extra.lastQuestionCandidates = [];
+  extra.lastQuestionSymptom = null;
+  extra.lastAccessed = Date.now();
+}
+
+/**
+ * The recorded symptom the pending targeted question is about (e.g.
+ * "leg pain" for "How long have you had the leg pain, and how severe is
+ * it?"), or null when the question isn't about one specific symptom. BUG
+ * (found live): the answer "2 days and 5 out of 10" to that question was
+ * applied to joint pain too, overwriting its real values, and the bot
+ * then kept re-asking about both.
+ *
+ * @param {string} sessionId
+ * @returns {string|null}
+ */
+export function getLastQuestionSymptom(sessionId) {
+  if (!sessionId) return null;
+  const extra = sessionExtraStore.get(sessionId);
+  return extra ? extra.lastQuestionSymptom || null : null;
+}
+
+/**
+ * @param {string} sessionId
+ * @param {string|null} term
+ */
+export function setLastQuestionSymptom(sessionId, term) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  extra.lastQuestionSymptom = term ? String(term).trim() : null;
   extra.lastAccessed = Date.now();
 }
 

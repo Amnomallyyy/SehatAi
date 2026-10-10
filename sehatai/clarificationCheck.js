@@ -336,7 +336,12 @@ Respond with the JSON shape you were given.`;
           .filter((t) => !knownTermsLower.has(t.toLowerCase()))
       : [];
 
-    return { sufficient, question, askedAboutSymptoms };
+    // Which recorded symptom the question is about (validated above), so the
+    // caller can attach a bare answer ("2 days, 5 out of 10") to THAT
+    // symptom only — see processMessage.js's keepAnswerOnAskedSymptom.
+    const askedSymptom = question && parsed?.referencedSymptom ? String(parsed.referencedSymptom).trim() : null;
+
+    return { sufficient, question, askedAboutSymptoms, referencedSymptom: askedSymptom };
   } catch (err) {
     console.error("[clarificationCheck] assessIntake failed (non-fatal, caller falls back to a fixed template question):", err.message);
     return fallback;

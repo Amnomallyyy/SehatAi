@@ -64,6 +64,7 @@ import {
   EMERGENCY_CONTINUE_NOTE,
   applyEmergencyContinueNote,
   withRemovalNote,
+  keepAnswerOnAskedSymptom,
 } from './processMessage.js';
 import { readFile } from 'node:fs/promises';
 import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers, validateComposed } from './replyComposer.js';
@@ -446,6 +447,26 @@ async function runDeterministicChecks() {
     );
     setLastQuestionAsked(sid, 'How long has it been going on?');
     check('asking a new question clears the previous question\'s candidates', getLastQuestionCandidates(sid).length === 0);
+  }
+
+  section('Deterministic: an answer belongs to the symptom the question asked about (the demonstrated live bug)');
+  {
+    // Live: asked about leg pain, "2 days and 5 out of 10" was also applied
+    // to joint pain (overwriting its 6/10, few days) and the bot looped.
+    const copied = [
+      { term: 'joint pain', present: true, duration: '2 days', severity: '5/10' },
+      { term: 'leg pain', present: true, duration: '2 days', severity: '5/10' },
+    ];
+    const kept = keepAnswerOnAskedSymptom(copied, { askedSymptom: 'leg pain', knownTerms: ['joint pain', 'leg pain'], message: '2 days and 5 out of 10' });
+    check('the answer stays on leg pain only; joint pain keeps its own values', kept.length === 1 && kept[0].term === 'leg pain', JSON.stringify(kept));
+    const named = keepAnswerOnAskedSymptom(copied, { askedSymptom: 'leg pain', knownTerms: ['joint pain', 'leg pain'], message: 'both the joint and leg pain are 2 days, 5 out of 10' });
+    check('if the patient names the other symptom too, it is updated as well', named.length === 2);
+    const withNew = keepAnswerOnAskedSymptom(
+      [...copied, { term: 'fever', present: true, duration: null, severity: null }],
+      { askedSymptom: 'leg pain', knownTerms: ['joint pain', 'leg pain'], message: '2 days, 5 out of 10, and now a fever' }
+    );
+    check('a newly mentioned symptom is kept', withNew.some((s) => s.term === 'fever') && !withNew.some((s) => s.term === 'joint pain'));
+    check('no asked symptom: nothing is dropped', keepAnswerOnAskedSymptom(copied, { askedSymptom: null, knownTerms: ['joint pain', 'leg pain'], message: '2 days' }).length === 2);
   }
 
   section('Deterministic: re-opened symptom stays in the round (the demonstrated live bug)');
