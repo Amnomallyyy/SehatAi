@@ -49,6 +49,8 @@ class UserOut(BaseModel):
     avatar_url: Optional[str] = None
     date_of_birth: Optional[date] = None
     sex: Optional[Literal["male", "female"]] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
 
 
 def _validate_date_of_birth_value(v: Optional[date]) -> Optional[date]:
@@ -78,6 +80,13 @@ class ProfileUpdate(BaseModel):
     # required /triage evidence fields).
     date_of_birth: Optional[date] = Field(default=None, description="Not in the future, not implausibly old")
     sex: Optional[Literal["male", "female"]] = None
+    city: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    country: Optional[str] = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator("city", "country")
+    @classmethod
+    def _strip_location(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if isinstance(v, str) else v
 
     @field_validator("date_of_birth")
     @classmethod
@@ -97,6 +106,20 @@ class SignupRequest(BaseModel):
     # role-conditional check on these same two fields.
     date_of_birth: Optional[date] = Field(default=None, description="Patient-only; not in the future, not implausibly old")
     sex: Optional[Literal["male", "female"]] = None
+    # Typed location, required for both roles.
+    city: str = Field(min_length=1, max_length=100)
+    country: str = Field(min_length=1, max_length=100)
+    # The privacy-notice version the person ticked "I agree" on. Required:
+    # sign-up is refused without it (routers/auth.py).
+    accepted_notice_version: Optional[str] = Field(default=None, max_length=30)
+
+    @field_validator("city", "country")
+    @classmethod
+    def _strip_location(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Location can't be blank")
+        return v
 
     @field_validator("email")
     @classmethod
@@ -123,6 +146,35 @@ class Token(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     user: UserOut
+
+
+class SignupResponse(BaseModel):
+    """Sign-up no longer logs the user in: the email must be confirmed first."""
+    status: Literal["confirmation_sent"] = "confirmation_sent"
+    email: EmailStr
+
+
+class StatusMessage(BaseModel):
+    """Plain {"message": ...} reply for the account-link endpoints."""
+    message: str
+
+
+class EmailOnlyRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, v: str) -> str:
+        return v.lower().strip()
+
+
+class ConfirmEmailRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    new_password: str = Field(min_length=8, max_length=72, description="8-72 characters (bcrypt limit)")
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +443,8 @@ class LabReportUploadOut(BaseModel):
     document_id: Optional[str] = None
     status: str
     detail: Optional[str] = None
+    # Set when status == "queued": poll GET /me/lab-reports/jobs/{job_id}.
+    job_id: Optional[str] = None
 
 
 # ── Structured lab data (routers/structured_reports.py) ──────────────────
@@ -441,6 +495,8 @@ class StructuredDocumentSummaryOut(BaseModel):
     has_source_file: bool = False
     doctor_reviewed: bool = False
     retracted: bool = False
+    mime_type: Optional[str] = None
+    ai_summary: Optional[str] = None
 
 
 class StructuredDocumentDetailOut(StructuredDocumentSummaryOut):
@@ -519,3 +575,212 @@ class UnifiedReportItemOut(BaseModel):
     marker_count: int = 0
     abnormal_count: int = 0
     spark: List[float] = []
+
+
+class MedicineOut(BaseModel):
+    id: str
+    name: str
+    dosage: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    active: bool = True
+    # Computed: "active" | "paused" (patient says they are not taking it) |
+    # "ended" (end date has passed).
+    status: Literal["active", "paused", "ended"] = "active"
+    notes: Optional[str] = None
+    source: Literal["doctor", "lab_report"] = "doctor"
+    doctor_id: Optional[int] = None
+    doctor_name: Optional[str] = None
+    has_attachment: bool = False
+    attachment_name: Optional[str] = None
+    recorded_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class MedicineTakingUpdate(BaseModel):
+    taking: bool
+
+
+# ---------------------------------------------------------------------------
+# Patient intake + emergency contact
+# ---------------------------------------------------------------------------
+
+MAX_INTAKE_ITEMS = 40
+MAX_INTAKE_ITEM_LEN = 100
+
+
+def _clean_list(values: List[str]) -> List[str]:
+    seen, out = set(), []
+    for v in values or []:
+        v = (v or "").strip()[:MAX_INTAKE_ITEM_LEN]
+        key = v.lower()
+        if v and key not in seen:
+            seen.add(key)
+            out.append(v)
+    return out[:MAX_INTAKE_ITEMS]
+
+
+class EmergencyContactIO(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    relationship: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    phone: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("name", "relationship")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("This field can't be blank")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, v: str) -> str:
+        return v.lower().strip()
+
+    @field_validator("phone")
+    @classmethod
+    def _strip_phone(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip()
+        return v or None
+
+
+def _row_text(v: Optional[str], limit: int) -> Optional[str]:
+    v = (v or "").strip()[:limit]
+    return v or None
+
+
+class _IntakeRowBase(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, v):
+        v = (v or "").strip() if isinstance(v, str) else v
+        if not v:
+            raise ValueError("Each row needs a name")
+        return v[:200]
+
+
+class AllergyRow(_IntakeRowBase):
+    reaction: Optional[str] = None
+    severity: Optional[Literal["mild", "moderate", "severe"]] = None
+
+    @field_validator("reaction", mode="before")
+    @classmethod
+    def _clean_reaction(cls, v):
+        return _row_text(v, 100)
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _blank_severity(cls, v):
+        return v or None
+
+
+class ConditionRow(_IntakeRowBase):
+    since: Optional[str] = None
+    status: Optional[Literal["ongoing", "managed", "resolved"]] = None
+
+    @field_validator("since", mode="before")
+    @classmethod
+    def _clean_since(cls, v):
+        return _row_text(v, 100)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _blank_status(cls, v):
+        return v or None
+
+
+class FamilyRow(_IntakeRowBase):
+    relative: Optional[str] = None
+
+    @field_validator("relative", mode="before")
+    @classmethod
+    def _clean_relative(cls, v):
+        return _row_text(v, 100)
+
+
+class IntakeUpdate(BaseModel):
+    allergies: List[AllergyRow] = Field(default_factory=list, max_length=MAX_INTAKE_ITEMS)
+    conditions: List[ConditionRow] = Field(default_factory=list, max_length=MAX_INTAKE_ITEMS)
+    family_history: List[FamilyRow] = Field(default_factory=list, max_length=MAX_INTAKE_ITEMS)
+    # Top health concerns in order of importance (up to 5) + when the main one began.
+    concerns: List[str] = Field(default_factory=list, max_length=5)
+    concern_began: Optional[str] = Field(default=None, max_length=100)
+    emergency_contact: EmergencyContactIO
+    # Only needed when the account has no location yet (accounts created
+    # before location was collected at sign-up).
+    city: Optional[str] = Field(default=None, max_length=100)
+    country: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("concerns")
+    @classmethod
+    def _clean_concerns(cls, v: List[str]) -> List[str]:
+        return [c.strip()[:200] for c in v if c and c.strip()][:5]
+
+    @field_validator("concern_began", mode="before")
+    @classmethod
+    def _clean_began(cls, v):
+        return _row_text(v, 100)
+
+
+class IntakeOut(BaseModel):
+    completed: bool
+    missing: List[str] = []
+    allergies: List[AllergyRow] = []
+    conditions: List[ConditionRow] = []
+    family_history: List[FamilyRow] = []
+    concerns: List[str] = []
+    concern_began: Optional[str] = None
+    emergency_contact: Optional[EmergencyContactIO] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+
+
+class EmergencyNotifyRequest(BaseModel):
+    trigger: Literal["button", "triage"] = "button"
+    category: Optional[str] = Field(default=None, max_length=100)
+
+
+class EmergencyNotifyOut(BaseModel):
+    status: Literal["sent", "dry_run", "failed"]
+    contact_name: str
+    detail: str
+
+
+# ---------------------------------------------------------------------------
+# Appointment slots (doctor availability)
+# ---------------------------------------------------------------------------
+
+
+class SlotCreate(BaseModel):
+    """Generates back-to-back slots between `start` and `end` (UTC or offset
+    datetimes -- normalised to naive UTC like appointments)."""
+    start: datetime
+    end: datetime
+    slot_minutes: Literal[15, 20, 30, 45, 60] = 30
+
+    @field_validator("start", "end")
+    @classmethod
+    def _to_naive_utc(cls, v: datetime) -> datetime:
+        if v.tzinfo is not None:
+            v = v.astimezone(timezone.utc).replace(tzinfo=None)
+        return v
+
+
+class SlotBook(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class SlotOut(BaseModel):
+    id: int
+    doctor_id: int
+    doctor_name: Optional[str] = None
+    starts_at: datetime
+    ends_at: datetime
+    status: Literal["open", "booked"]
+    # Doctor's own view only: who booked it.
+    patient_name: Optional[str] = None
+    appointment_id: Optional[int] = None

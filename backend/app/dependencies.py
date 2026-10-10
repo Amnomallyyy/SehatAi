@@ -149,6 +149,18 @@ def ensure_report_participant(report: models.Report, user: models.User) -> None:
     ensure_conversation_participant(report.conversation, user)
 
 
+def ensure_report_viewer(db: Session, report: models.Report, user: models.User) -> None:
+    """Read-only access to a conversation report: either participant, or
+    any doctor with an accepted connection to the report's patient (a
+    connected doctor sees all of the patient's reports, not only the ones
+    shared in their own conversation)."""
+    if user.id in (report.conversation.patient_id, report.conversation.doctor_id):
+        return
+    if user.role == models.UserRole.doctor and has_accepted_connection(db, report.patient_id, user.id):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not connected to this patient")
+
+
 def normalize_to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
     """`since` query params may arrive naive or timezone-aware -- e.g.
     JavaScript's `date.toISOString()` always appends "Z". Stored timestamps
@@ -162,6 +174,26 @@ def normalize_to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
+
+
+def set_user_location(db: Session, user: models.User, city: Optional[str], country: Optional[str]) -> None:
+    """Creates/updates the user's city/country (user_locations). A partial
+    update (only city or only country) keeps whatever the other already is;
+    an account with no location yet needs both. Caller commits."""
+    city = (city or "").strip() or None
+    country = (country or "").strip() or None
+    if city is None and country is None:
+        return
+    loc = user.location
+    if loc is None:
+        if city is None or country is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please give both a city and a country")
+        user.location = models.UserLocation(city=city, country=country)
+        return
+    if city is not None:
+        loc.city = city
+    if country is not None:
+        loc.country = country
 
 
 def has_accepted_connection(db: Session, patient_id: int, doctor_id: int) -> bool:
@@ -193,7 +225,9 @@ def has_reports_access_grant(db: Session, patient_id: int, doctor_id: int) -> bo
     )
 
 
-def resolve_structured_patient(target_user_id: int, current_user: models.User, db: Session) -> uuid.UUID:
+def resolve_structured_patient(
+    target_user_id: int, current_user: models.User, db: Session, allow_missing: bool = False
+) -> Optional[uuid.UUID]:
     """Resolves a CareLink `patient_id: int` (never a raw SehatAI UUID --
     see routers/structured_reports.py's module docstring for why the
     client must never send one directly) to the shared `patients.id` UUID
@@ -208,11 +242,14 @@ def resolve_structured_patient(target_user_id: int, current_user: models.User, d
     silently get an empty Patient row created just by loading the Reports
     page.
 
-    Patient: may only resolve themselves. Doctor: gated by the identical
-    double check list_reports_for_patient already applies to
-    GET /reports?patient_id= (accepted connection AND an explicit reports-
-    access grant) -- structured lab data is exactly as protected as report
-    history, not looser.
+    Patient: may only resolve themselves. Doctor: an accepted connection is
+    enough -- a connected doctor sees ALL of the patient's lab documents
+    (uploaded on the patient's own side or in chat). The separate reports-
+    access grant is no longer required here.
+
+    allow_missing=True returns None (instead of 404) for a patient who has
+    never uploaded anything, so list endpoints can answer "no data yet"
+    with an empty list.
     """
     if current_user.role == models.UserRole.patient:
         if current_user.id != target_user_id:
@@ -222,22 +259,20 @@ def resolve_structured_patient(target_user_id: int, current_user: models.User, d
         target_user = db.query(models.User).filter(models.User.id == target_user_id).first()
         if target_user is None or target_user.role != models.UserRole.patient:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
-        if not (
-            has_accepted_connection(db, patient_id=target_user_id, doctor_id=current_user.id)
-            and has_reports_access_grant(db, patient_id=target_user_id, doctor_id=current_user.id)
-        ):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No reports-access grant for this patient")
+        if not has_accepted_connection(db, patient_id=target_user_id, doctor_id=current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not connected to this patient")
 
     if target_user.sehatai_patient_id is None:
+        if allow_missing:
+            return None
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No structured lab data yet")
     return target_user.sehatai_patient_id
 
 
 def list_granted_patients_for_doctor(db: Session, doctor_id: int) -> list:
-    """Patients with BOTH an accepted connection and a granted reports-
-    access to this doctor -- the same double gate resolve_structured_patient
-    checks per-patient, applied here as one set intersection so the
-    doctor's cross-patient notification feed (GET /structured/notifications)
+    """Patients with an accepted connection to this doctor -- the same gate
+    resolve_structured_patient checks per-patient, applied as one query so
+    the doctor's cross-patient notification feed (GET /structured/notifications)
     doesn't need a round trip per connected patient."""
     accepted_patient_ids = {
         c.patient_id
@@ -248,17 +283,7 @@ def list_granted_patients_for_doctor(db: Session, doctor_id: int) -> list:
     }
     if not accepted_patient_ids:
         return []
-    granted_patient_ids = {
-        g.patient_id
-        for g in db.query(models.ReportAccessGrant).filter(
-            models.ReportAccessGrant.doctor_id == doctor_id,
-            models.ReportAccessGrant.status == models.ReportAccessStatus.granted,
-            models.ReportAccessGrant.patient_id.in_(accepted_patient_ids),
-        )
-    }
-    if not granted_patient_ids:
-        return []
-    return db.query(models.User).filter(models.User.id.in_(granted_patient_ids)).all()
+    return db.query(models.User).filter(models.User.id.in_(accepted_patient_ids)).all()
 
 
 def compute_active_reminder(scheduled_at: datetime) -> Optional[str]:

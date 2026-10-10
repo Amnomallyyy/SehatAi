@@ -8,7 +8,29 @@ validation to ensure data quality before it reaches the database.
 
 from datetime import date
 from typing import List, Optional, Literal
-from pydantic import BaseModel, Field, model_validator
+import re
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# The live extracted_data_flag_check constraint only accepts this set --
+# anything else (e.g. "H", "↑", "borderline") used to fail storage for the
+# WHOLE document. Map the common spellings; drop the rest to null.
+_FLAG_ALIASES = {
+    "normal": "normal", "n": "normal", "within range": "normal", "wnl": "normal", "ok": "normal",
+    "high": "high", "h": "high", "hi": "high", "elevated": "high", "↑": "high", "above": "high",
+    "low": "low", "l": "low", "lo": "low", "decreased": "low", "↓": "low", "below": "low",
+    "abnormal": "abnormal", "a": "abnormal", "positive": "abnormal", "borderline": "abnormal",
+    "critical": "critical", "c": "critical", "hh": "critical", "ll": "critical", "panic": "critical",
+}
+_OPERATOR_ALIASES = {"<": "lt", "<=": "lt", "≤": "lt", "lt": "lt", ">": "gt", ">=": "gt", "≥": "gt",
+                     "gt": "gt", "=": "eq", "==": "eq", "eq": "eq"}
+_CATEGORIES = {'blood_test', 'prescription', 'imaging_report', 'discharge_summary', 'consultation_note', 'unknown'}
+
+
+def normalize_flag(value) -> Optional[str]:
+    if value is None:
+        return None
+    key = str(value).strip().casefold()
+    return _FLAG_ALIASES.get(key)
 
 
 # ============================================================
@@ -37,6 +59,45 @@ class ExtractedValue(BaseModel):
         None,
         description="Comparison operator for non-numeric values"
     )
+
+    # The model often returns numbers where strings are expected (and vice
+    # versa) or odd operator/flag spellings -- strict validation used to
+    # reject the entire document over one such field. Coerce instead.
+    @field_validator('test_name', 'value', mode='before')
+    @classmethod
+    def _coerce_required_text(cls, v):
+        return "" if v is None else str(v)
+
+    @field_validator('unit', 'normal_range', mode='before')
+    @classmethod
+    def _coerce_optional_text(cls, v):
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
+
+    @field_validator('value_numeric', mode='before')
+    @classmethod
+    def _coerce_numeric(cls, v):
+        if v is None or isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v
+        match = re.search(r"-?\d[\d,]*(?:\.\d+)?|-?\.\d+", str(v))
+        try:
+            return float(match.group().replace(",", "")) if match else None
+        except ValueError:
+            return None
+
+    @field_validator('flag', mode='before')
+    @classmethod
+    def _coerce_flag(cls, v):
+        return normalize_flag(v)
+
+    @field_validator('operator', mode='before')
+    @classmethod
+    def _coerce_operator(cls, v):
+        if v is None:
+            return None
+        return _OPERATOR_ALIASES.get(str(v).strip().casefold())
 
     @model_validator(mode='after')
     def validate_value_numeric(self) -> 'ExtractedValue':
@@ -81,6 +142,43 @@ class StructuredDocument(BaseModel):
     )
     ai_summary: Optional[str] = Field(None, description="Plain-language summary")
     doctor_notes: Optional[str] = Field(None, description="Transcribed handwritten notes")
+
+    @field_validator('category', mode='before')
+    @classmethod
+    def _coerce_category(cls, v):
+        key = str(v or "").strip().casefold().replace(" ", "_").replace("-", "_")
+        return key if key in _CATEGORIES else "unknown"
+
+    @field_validator('document_date', mode='before')
+    @classmethod
+    def _coerce_date(cls, v):
+        """An unparseable date becomes null instead of failing the document."""
+        if v is None or isinstance(v, date):
+            return v
+        text = str(v).strip()
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+
+    @field_validator('extracted_values', mode='before')
+    @classmethod
+    def _drop_unusable_values(cls, v):
+        """Skip rows with no test name/value rather than rejecting the
+        whole document because of one malformed row."""
+        if not isinstance(v, list):
+            return []
+        return [row for row in v if isinstance(row, dict) and row.get('test_name') and row.get('value') is not None]
+
+    @field_validator('ai_summary', 'doctor_notes', mode='before')
+    @classmethod
+    def _coerce_text(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            v = "\n".join(str(x) for x in v)
+        text = str(v).strip()
+        return text or None
 
 
 # ============================================================
@@ -137,7 +235,7 @@ def structured_document_to_payload(
             # storage entirely on casing alone. Normalizing here is
             # cheaper and more robust than trying to constrain the
             # model's output casing via prompt wording.
-            "flag": val.flag.lower() if val.flag else val.flag,
+            "flag": normalize_flag(val.flag),
             "operator": val.operator,
         })
 

@@ -19,3 +19,6 @@ node_modules/
 # Playwright output
 sehatEvidence/web/test-results/
 sehatEvidence/web/playwright-report/
+
+# Local QA account credentials (generated)
+qa-accounts.local.txt

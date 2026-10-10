@@ -24,7 +24,7 @@ import uuid as uuid_module
 from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -118,6 +118,27 @@ class User(Base):
         so schemas.UserOut's from_attributes=True mapping picks it up via
         plain attribute access with no extra serialization helper needed."""
         return f"/users/{self.id}/avatar" if self.avatar_path else None
+
+    # Location lives in its own table (user_locations) so adding it didn't
+    # need an ALTER on the existing `users` table -- see UserLocation.
+    location = relationship("UserLocation", uselist=False, cascade="all, delete-orphan")
+
+    @property
+    def city(self) -> "str | None":
+        return self.location.city if self.location else None
+
+    @property
+    def country(self) -> "str | None":
+        return self.location.country if self.location else None
+
+    @property
+    def email_confirmed(self) -> bool:
+        """Accounts that predate email confirmation have no pending row and
+        count as confirmed; only new signups get an `unconfirmed_users` row."""
+        return self.unconfirmed is None
+
+    unconfirmed = relationship("UnconfirmedUser", uselist=False, cascade="all, delete-orphan")
+    consent = relationship("ConsentRecord", uselist=False, cascade="all, delete-orphan")
 
     conversations_as_patient = relationship(
         "Conversation", foreign_keys="Conversation.patient_id", back_populates="patient"
@@ -433,6 +454,7 @@ class Document(Base):
     status = Column(String, nullable=True)
     raw_ocr = Column(Text, nullable=True)
     ocr_engine = Column(String, nullable=True)
+    ai_summary = Column(Text, nullable=True)
     superseded_by = Column(UUID(as_uuid=True), nullable=True)
 
 
@@ -499,6 +521,49 @@ class DocumentNote(Base):
     doctor = relationship("User", foreign_keys=[doctor_id])
 
 
+class Medicine(Base):
+    """SehatAI/DataFetch's existing `medicines` table (bridge table -- not
+    created here). Doctor-prescribed medicines are written straight into it
+    (document_id null) so the triage bot's patient profile, which already
+    reads this table, accounts for what the doctor prescribed."""
+    __tablename__ = "medicines"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4)
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True)
+    name = Column(Text, nullable=False)
+    dosage = Column(Text, nullable=True)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    recorded_at = Column(DateTime, default=utc_now)
+
+    prescription = relationship("MedicinePrescription", back_populates="medicine", uselist=False)
+
+
+class MedicinePrescription(Base):
+    """CareLink-owned side table: which doctor prescribed a `medicines` row,
+    plus an optional attached file. Same pattern as DocumentNote -- a
+    portal table pointing at a bridge table, auto-created by create_all.
+    Medicines without a row here came from DataFetch's lab extraction."""
+    __tablename__ = "medicine_prescriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    medicine_id = Column(
+        UUID(as_uuid=True), ForeignKey("medicines.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    doctor_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    notes = Column(Text, nullable=True)
+    attachment_path = Column(String(500), nullable=True)
+    attachment_name = Column(String(255), nullable=True)
+    attachment_mime = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    medicine = relationship("Medicine", back_populates="prescription")
+    doctor = relationship("User", foreign_keys=[doctor_id])
+
+
 class ExtractionVerification(Base):
     """One independent second-model verification run against a document's
     ORIGINAL source file -- see backend/app/verification.py. Feeds the
@@ -542,3 +607,164 @@ class ExtractionVerificationFinding(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
     verification = relationship("ExtractionVerification", back_populates="findings")
+
+
+# ============================================================
+# AUTH / PROFILE / SCHEDULING / SAFETY -- CareLink-owned tables.
+#
+# All brand-new tables on purpose: create_all() adds missing tables on
+# startup but never alters existing ones, so none of these touch `users`,
+# `appointments` or any bridge table's columns.
+# ============================================================
+
+
+class UserLocation(Base):
+    """Typed city/country collected at sign-up (patients and doctors)."""
+    __tablename__ = "user_locations"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    city = Column(String(100), nullable=False)
+    country = Column(String(100), nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class UnconfirmedUser(Base):
+    """A row here means "this account's email isn't confirmed yet". Accounts
+    created before email confirmation existed have no row, so they are
+    confirmed by definition -- no backfill needed."""
+    __tablename__ = "unconfirmed_users"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class ConsentRecord(Base):
+    """That this person agreed to the privacy notice at sign-up: which version
+    of the text they saw and when. One row per account."""
+    __tablename__ = "consent_records"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    notice_version = Column(String(30), nullable=False)
+    accepted_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class DemographicStat(Base):
+    """ANONYMISED sign-up statistics: a coarse age group, sex, role and
+    country plus the sign-up month. Deliberately has NO user id, name, email,
+    city or date of birth, so a row can't be traced back to an account (and
+    it is not updated or removed when an account changes). Written once at
+    sign-up, after the person agreed to the privacy notice."""
+    __tablename__ = "demographic_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    role = Column(String(10), nullable=False)  # doctor | patient
+    age_band = Column(String(10), nullable=True)  # 0-17 | 18-29 | 30-44 | 45-59 | 60+ (patients only)
+    sex = Column(String(10), nullable=True)  # patients only
+    country = Column(String(100), nullable=False)
+    signup_month = Column(String(7), nullable=False, index=True)  # YYYY-MM
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class AuthToken(Base):
+    """One-time emailed token (confirm email / reset password). Only the
+    SHA-256 of the token is stored, so a database leak can't be replayed."""
+    __tablename__ = "auth_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    purpose = Column(String(30), nullable=False)  # confirm_email | reset_password
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class EmergencyContact(Base):
+    """The loved one a patient wants alerted in an emergency."""
+    __tablename__ = "emergency_contacts"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    name = Column(String(200), nullable=False)
+    relationship_label = Column("relationship", String(100), nullable=False)
+    email = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class EmergencyAlert(Base):
+    """Audit trail + rate-limit source for emergency notifications. Never
+    stores chat text -- only who, when, how it was triggered and the outcome."""
+    __tablename__ = "emergency_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    contact_email = Column(String(255), nullable=False)
+    trigger = Column(String(20), nullable=False)  # button | triage
+    category = Column(String(100), nullable=True)
+    status = Column(String(20), nullable=False)  # sent | dry_run | failed
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+
+
+class AppointmentSlot(Base):
+    """A bookable window a doctor published. Booking creates a normal
+    `appointments` row and links it here; one slot per (doctor, start)."""
+    __tablename__ = "appointment_slots"
+    __table_args__ = (UniqueConstraint("doctor_id", "starts_at", name="uq_slot_doctor_start"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    starts_at = Column(DateTime, nullable=False, index=True)
+    ends_at = Column(DateTime, nullable=False)
+    status = Column(String(10), nullable=False, default="open", index=True)  # open | booked
+    appointment_id = Column(Integer, ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True, unique=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+    doctor = relationship("User", foreign_keys=[doctor_id])
+    appointment = relationship("Appointment", foreign_keys=[appointment_id])
+
+
+class IntakeEntry(Base):
+    """One row of a table on the patient's intake form. One generic table
+    for all four sections; what detail1..3 mean depends on `section`:
+        allergy    name=allergen,  detail1=reaction,  detail2=severity
+        condition  name=condition, detail1=since,     detail2=status
+        family     name=condition, detail1=relative
+    The bots keep reading the simple lists in `patient_intake_form`; saving
+    the form refreshes those lists from the names here (routers/intake.py)."""
+    __tablename__ = "intake_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    section = Column(String(20), nullable=False)  # allergy | condition | family
+    position = Column(Integer, nullable=False, default=0)
+    name = Column(String(200), nullable=False)
+    detail1 = Column(String(100), nullable=True)
+    detail2 = Column(String(100), nullable=True)
+    detail3 = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class IntakeProfile(Base):
+    """The free-form part of the intake form: top health concerns (ranked,
+    up to 5) and when the main problem began."""
+    __tablename__ = "intake_profile"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    concerns = Column(JSON, nullable=False, default=list)
+    concern_began = Column(String(100), nullable=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class PatientIntake(Base):
+    """SehatAI's existing `patient_intake_form` table (bridge -- not created
+    here). The triage and diet bots already read it on every turn, so what
+    the patient saves in the portal's intake form reaches them immediately."""
+    __tablename__ = "patient_intake_form"
+
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"), primary_key=True)
+    existing_conditions = Column(ARRAY(Text), nullable=False, default=list)
+    allergies = Column(ARRAY(Text), nullable=False, default=list)
+    current_medications = Column(ARRAY(Text), nullable=False, default=list)
+    family_history = Column(ARRAY(Text), nullable=False, default=list)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)

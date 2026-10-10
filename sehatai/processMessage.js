@@ -41,6 +41,8 @@ import { generateRecommendation } from './generaterecommendation.js';
 import { verifyRecommendation } from './groundingVerifier.js';
 import {
   getOrCreateSession,
+  snapshotSession,
+  restoreSession,
   logChatMessage,
   getAccumulatedSymptoms,
   appendAccumulatedSymptoms,
@@ -76,9 +78,13 @@ import {
   setAwaitingEmergencyAcknowledgment,
   getPendingEmergencyMessage,
   setPendingEmergencyMessage,
-  getPendingEmergencyReply,
   setPendingEmergencyReply,
   getPendingEmergencyQuestionType,
+  getPendingEmergencyReply,
+  recordEmergencyFlag,
+  getEmergencyHistory,
+  setEmergencyNoticePending,
+  consumeEmergencyNoticePending,
   setPendingEmergencyQuestionType,
   resetSessionState,
   clearPendingQuestionFlags,
@@ -86,14 +92,18 @@ import {
   getRecentMessages,
   getLastQuestionAsked,
   setLastQuestionAsked,
+  getLastQuestionCandidates,
+  setLastQuestionCandidates,
+  getLastQuestionSymptom,
+  setLastQuestionSymptom,
+  getReopenedTerms,
+  addReopenedTerms,
   getAwaitingEmotionalFollowUp,
   setAwaitingEmotionalFollowUp,
   getLastEmotionalQuestion,
   setLastEmotionalQuestion,
   getDietSessionId,
   saveDietSessionId,
-  hydrateSessionState,
-  persistSessionState,
 } from './chatLog.js';
 import {
   getTriageForEvidence,
@@ -103,9 +113,10 @@ import {
   describeChannel,
   MAX_CLARIFICATION_ROUNDS,
 } from './infermedicaClient.js';
-import { getClarifyingQuestion, assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested } from './clarificationCheck.js';
-import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, composeNaturalDescription, RESTART_INTENT_RE } from './symptomClassifier.js';
+import { assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested, extractQuestionOptions } from './clarificationCheck.js';
+import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, describeSymptomsForParse, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, BARE_NEGATION_RE, PRONOUN_DENIAL_RE } from './symptomClassifier.js';
 import { sanityFilterSymptoms } from './symptomSanityGate.js';
+import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers } from './replyComposer.js';
 import { getDietResponse } from './dietBotClient.js';
 import { detectSubject } from './subjectDetection.js';
 import { getRelevantLabValues } from './getlabvalues.js';
@@ -134,6 +145,12 @@ import { extractUnaccountedComplaints } from './complaintDiff.js';
 // cooperative patient's real Q&A rounds, but still can't stall the
 // conversation forever.
 const MAX_OFF_TOPIC_STREAK = 2;
+
+// "Which one?" follow-up to a bare "yes" on an either/or question (see the
+// EITHER/OR backstop in STAGE 6). The prefix marks the follow-up so a
+// second "yes" to it is read as "all of them".
+const WHICH_OPTION_PREFIX = 'Just to be sure,';
+const BOTH_ANSWER_RE = /^\s*(?:both|both of them|all|all of them|all of those|dono|dono\s+hi|donon|dono\s+hain|دونوں)\s*[.!]*\s*$/i;
 
 // ------------------------------------------------------------------
 // HELPERS
@@ -200,6 +217,23 @@ function envelope(fields) {
   return env;
 }
 
+/**
+ * Reply to small talk ("hi", "how are you", "thanks") — warm, not a
+ * refusal. replyComposer.js lets the AI open by answering the small talk
+ * itself (kind 'greeting'), in the patient's language; this text is the
+ * part it must keep. Mid-conversation it invites updates instead of
+ * starting over.
+ *
+ * @param {string} sessionId
+ */
+function greetingEnvelope(sessionId) {
+  const ongoing = getAccumulatedSymptoms(sessionId).some((s) => s.present);
+  const reply = ongoing
+    ? "I'm still here. Is anything else bothering you, or has anything changed with what you told me about?"
+    : "Hi! I'm here to help you work out which kind of doctor to see. How are you feeling — is anything bothering you physically?";
+  return envelope({ kind: 'greeting', sessionId, reply });
+}
+
 function guidanceReply(guidance) {
   if (!guidance) return '';
   return `${guidance.headline} ${guidance.action}`.trim();
@@ -223,7 +257,9 @@ function guidanceReply(guidance) {
 // never sent to Infermedica directly (it goes through the exact same
 // classifySymptoms() path any other message would).
 // ------------------------------------------------------------------
-function markEmergencyAcknowledgeable(fields, sessionId, message, pendingQuestionType = null) {
+function markEmergencyAcknowledgeable(fields, sessionId, message, pendingQuestionType = null, { repeat = false } = {}) {
+  // Re-showing the same notice isn't a new emergency.
+  if (!repeat) recordEmergencyFlag(sessionId, fields?.emergencyCategory || null);
   setAwaitingEmergencyAcknowledgment(sessionId, true);
   setPendingEmergencyMessage(sessionId, message);
   // FIXED (root cause, demonstrated live): see chatLog.js's
@@ -256,7 +292,20 @@ function markEmergencyAcknowledgeable(fields, sessionId, message, pendingQuestio
 // Matches the "Continue" button's own sent text AND any equivalent
 // typed phrase, so this works identically from a client with no
 // buttons (CLI, curl, a future integration) — not just the browser demo.
-const EMERGENCY_CONTINUE_RE = /^(continue|keep going|yes,?\s*continue|go ahead)(\s+with\s+(?:this|the)\s+chat)?[.!]?$/i;
+export const EMERGENCY_CONTINUE_RE = /^(?:ok(?:ay)?,?\s*|yes,?\s*|i\s+want\s+to\s+)?(continue|keep going|go ahead|carry on)(\s+with\s+(?:this|the)\s+chat)?(\s+please)?[.!]?$/i;
+
+// Said once, on the first conversational reply after the patient carries
+// on past an emergency notice — see STAGE -1 and runPatientMessageTurn.
+export const EMERGENCY_CONTINUE_NOTE =
+  "I'll keep in mind that something you described earlier was flagged as a possible emergency — " +
+  'if it gets worse at any point, please call your local emergency number or go to the nearest emergency room. ';
+
+// Appended to a recommendation when an emergency was flagged earlier in
+// the same session — see finalizeAndRecommend.
+export const EARLIER_EMERGENCY_REMINDER =
+  ' Earlier in this chat, something you described was flagged as a possible emergency. If those symptoms ' +
+  "come back or get worse, don't wait for an appointment — call your local emergency number or go to the " +
+  'nearest emergency room.';
 
 const DECLINE_DIAGNOSIS_NOTE =
   " I can't tell you what condition you have — that needs a doctor who can examine you. " +
@@ -291,6 +340,103 @@ function buildCrossDomainNote(newSymptomNames, distinctSpecialist) {
     ` I should also mention — ${symptomText} ${verb} look related to the rest of what we discussed. ` +
     `For that, you should see a${/^[aeiou]/i.test(distinctSpecialist) ? 'n' : ''} ${distinctSpecialist}.`
   );
+}
+
+/**
+ * Which specialist (if any) the cross-domain note should name: one the
+ * NEW round's symptoms point to that is neither the earlier round's
+ * specialist nor already the main recommendation in this same reply.
+ * BUG (found live): only the earlier round was checked, so the reply said
+ * "Schedule an appointment with a Dermatologist ... redness and swelling
+ * don't look related ... For that, you should see a Dermatologist" —
+ * naming the main recommendation a second time as if it were separate.
+ *
+ * @param {{priorSpecialists: string[], newSpecialists: string[], mainSpecialists: string[]}} params
+ * @returns {string|null}
+ */
+export function pickDistinctSpecialist({ priorSpecialists = [], newSpecialists = [], mainSpecialists = [] }) {
+  if (!priorSpecialists.length) return null;
+  const alreadyNamed = new Set([...priorSpecialists, ...mainSpecialists].map((s) => String(s).toLowerCase().trim()));
+  return newSpecialists.find((s) => !alreadyNamed.has(String(s).toLowerCase().trim())) || null;
+}
+
+/**
+ * The first present symptom still missing its duration and/or severity,
+ * or null when every one has both. Used when the AI that composes the
+ * next question is unavailable, so the fallback never re-asks something
+ * the patient already answered.
+ *
+ * @param {Array<{term:string, present?:boolean, duration?:string|null, severity?:string|null}>} symptoms
+ * @returns {{term: string, missing: 'duration'|'severity'|'both'}|null}
+ */
+export function findMissingDetail(symptoms) {
+  for (const s of symptoms || []) {
+    if (s.present === false) continue;
+    const noDuration = !s.duration;
+    const noSeverity = !s.severity;
+    if (noDuration || noSeverity) {
+      return { term: s.term, missing: noDuration && noSeverity ? 'both' : noDuration ? 'duration' : 'severity' };
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {{term: string, missing: 'duration'|'severity'|'both'}} gap
+ * @returns {string}
+ */
+export function fallbackDetailQuestion({ term, missing }) {
+  if (missing === 'duration') return `How long have you had the ${term}?`;
+  if (missing === 'severity') return `On a scale of 1 to 10, how bad is the ${term} right now?`;
+  return `How long have you had the ${term}, and how bad is it on a scale of 1 to 10?`;
+}
+
+const GENERIC_SYMPTOM_WORDS_FOR_MENTION = new Set(['pain', 'ache', 'aches', 'aching', 'feeling', 'severe', 'mild', 'moderate']);
+
+/**
+ * When the pending question was about ONE recorded symptom ("How long have
+ * you had the leg pain, and how severe is it?"), a bare answer ("2 days
+ * and 5 out of 10") belongs to that symptom only. BUG (found live): the
+ * classifier also applied it to every other known symptom — joint pain's
+ * real "6/10, a few days" got overwritten, both looked like blanket
+ * guesses, and the bot kept re-asking about each in turn. Drops entries
+ * for OTHER already-known symptoms that the patient didn't name in this
+ * message (they only carried the copied answer). New symptoms, denials,
+ * and anything the patient actually named are kept.
+ *
+ * @param {Array} classified - classifySymptoms() output for this turn
+ * @param {{askedSymptom: string|null, knownTerms: string[], message: string}} ctx
+ * @returns {Array}
+ */
+export function keepAnswerOnAskedSymptom(classified, { askedSymptom, knownTerms = [], message = '' }) {
+  if (!askedSymptom || !Array.isArray(classified) || classified.length < 2) return classified;
+  const asked = askedSymptom.toLowerCase().trim();
+  const known = new Set(knownTerms.map((t) => String(t).toLowerCase().trim()));
+  const lowerMsg = String(message).toLowerCase();
+  const namedInMessage = (term) =>
+    term.toLowerCase().split(/\s+/).some((w) => w.length > 2 && !GENERIC_SYMPTOM_WORDS_FOR_MENTION.has(w) && lowerMsg.includes(w));
+  return classified.filter((s) => {
+    const key = String(s.term || '').toLowerCase().trim();
+    if (key === asked) return true;
+    if (s.present === false) return true;
+    if (!known.has(key)) return true; // a newly mentioned symptom
+    return namedInMessage(key);
+  });
+}
+
+/**
+ * The closing sentence about consultation type. BUG (found live): for an
+ * in-person channel this read "This can likely be handled with an
+ * in-person visit, though an in-person visit is always fine too".
+ *
+ * @param {string|null} channel - Infermedica recommended_channel
+ * @returns {string} leading space included, or '' when there's no channel
+ */
+export function channelSentence(channel) {
+  const label = describeChannel(channel);
+  if (!label) return '';
+  if (channel === 'personal_visit') return ' An in-person visit is the best way to have this looked at.';
+  return ` This can likely be handled with ${label}, though an in-person visit is always fine too if you'd prefer it.`;
 }
 
 function normalizeText(s) {
@@ -341,10 +487,7 @@ function normalizeText(s) {
  * orig_text but that text genuinely isn't in what we sent is the real
  * red flag (a same-call invented guess) and is still dropped exactly
  * as before. This is a narrower, better-justified fail path, not a
- * blanket fail-open — see the accompanying composeNaturalDescription
- * change (symptomClassifier.js) for the other half of this fix: giving
- * Infermedica more natural, parseable input in the first place so
- * missing orig_text should now also just be rarer.
+ * blanket fail-open.
  *
  * @param {Array} rawMentions - raw /parse mentions for this turn
  * @param {string} message - the patient's raw message this turn
@@ -432,85 +575,6 @@ async function getRiskFactorEvidence(profileFacts, age) {
     console.error('[processMessage] getRiskFactorEvidence failed (non-fatal, proceeding on symptom evidence alone):', err.message);
     return [];
   }
-}
-
-/**
- * Deterministic sanity check on composeNaturalDescription's output
- * (symptomClassifier.js) before it's trusted as the text sent to
- * Infermedica: every symptom term's significant word(s) must appear
- * somewhere in the generated sentence (so a symptom can never be
- * silently dropped from what Infermedica sees), and if any symptom is
- * denied (present: false), at least one plain negation word must
- * appear somewhere in the sentence too (so a denial can't silently
- * read as a plain statement). This is intentionally a coarse check,
- * not a full re-parse — its only job is to catch the failure modes
- * that would actually matter (a dropped or inverted symptom), not to
- * grade the prose. Anything that fails this falls back to the old
- * mechanical template in finalizeAndRecommend.
- *
- * @param {string} sentence
- * @param {Array<{term:string, present:boolean}>} symptoms
- * @returns {boolean}
- */
-// Words that plausibly push Infermedica's own triage engine toward a
-// more urgent classification (sudden/severe onset language, "worst",
-// etc). None of these carry meaning on their own here — the point is
-// only: if NO symptom in the accumulated list was ever given a stated
-// severity, the generated sentence has no legitimate source for any of
-// these words, so their presence means the model added intensity that
-// was never reported. Observed live: a plain "headache (for few
-// days), eye pain (for few days)" — no severity stated for either —
-// came back from Infermedica's /triage as an EMERGENCY after going
-// through the natural-language rewrite, which is the kind of result
-// this guard exists to catch (whether the rewrite actually invented
-// alarming language or the escalation had some other cause, failing
-// the sanity check here costs nothing but a fallback to the plain
-// template, so it's the safe default whenever this can't be ruled
-// out).
-const ALARM_WORDS = ['severe', 'sudden', 'suddenly', 'worst', 'excruciating', 'intense', 'extreme', 'agonizing', 'unbearable', 'emergency', 'critical'];
-
-export function naturalDescriptionPassesSanityCheck(sentence, symptoms) {
-  if (!sentence || !sentence.trim()) return false;
-  const normSentence = normalizeText(sentence);
-  let anyDenied = false;
-  for (const s of symptoms) {
-    const words = normalizeText(s.term).split(' ').filter((w) => w.length > 2);
-    const covered = words.length === 0 || words.some((w) => normSentence.includes(w));
-    if (!covered) return false;
-    if (!s.present) anyDenied = true;
-  }
-  if (anyDenied) {
-    // BUG (found live): normSentence has already had normalizeText run on
-    // it, which replaces every non-alphanumeric character — including
-    // apostrophes — with a space. "haven't" becomes "haven t", so the
-    // "n't" pattern below (the ONLY one meant to catch a contraction like
-    // "haven't"/"didn't"/"doesn't"/"isn't") can never match anything in
-    // normSentence — it was checking for a character that's already been
-    // stripped out by the time this runs. That silently rejected a
-    // genuinely correct, safe sentence ("...but I haven't had any
-    // nausea.") purely for using a natural contraction, forcing a
-    // fallback to the mechanical "(denied, ...)" template — which
-    // Infermedica's own /parse then failed to read as negation, letting
-    // an explicitly-denied symptom leak back in as a positive finding in
-    // the final recommendation. Fix: check the RAW (pre-normalization)
-    // sentence for the apostrophe-dependent contraction pattern, since
-    // that's the only text that still has the apostrophe to check.
-    const rawLower = String(sentence).toLowerCase();
-    // No leading \b before "n" — in every real contraction ("haven't",
-    // "doesn't", "isn't") the "n" is attached to the preceding letter
-    // (have-N'T), never at a word boundary, so a leading \b here would
-    // never match anything real. Only the boundary AFTER "t" is needed.
-    const hasContractedNegation = /n['’]t\b/.test(rawLower);
-    const NEGATION_WORDS = ['no ', 'not ', 'never', 'denies', 'denied', 'without', 'none'];
-    const hasNegation = hasContractedNegation || NEGATION_WORDS.some((w) => normSentence.includes(w.trim()));
-    if (!hasNegation) return false;
-  }
-  const anySeverityStated = symptoms.some((s) => s.present && s.severity);
-  if (!anySeverityStated) {
-    const inventedAlarm = ALARM_WORDS.some((w) => normSentence.includes(w));
-    if (inventedAlarm) return false;
-  }
-  return true;
 }
 
 /**
@@ -1051,20 +1115,132 @@ export async function processPatientMessage(message, patientId, existingSessionI
   return withSessionLock(sessionId, () => runPatientMessageTurn({ message, patientId, sessionId, session }));
 }
 
-async function runPatientMessageTurn({ message, patientId, sessionId, session }) {
-  // Load any previously-persisted evidence/pending-question/extra state for
-  // this session from Supabase into RAM — a no-op if RAM already has this
-  // session (the normal case: same server instance, same session, later
-  // turn). Only matters after a server restart. See chatLog.js's
-  // hydrateSessionState/persistSessionState doc comment for the full design
-  // — everything below this line is UNCHANGED and still reads/writes the
-  // same RAM Maps it always did; persistence is bolted on around the
-  // outside via the try/finally below, not threaded through Stage 4-14.
-  await hydrateSessionState(sessionId);
+/**
+ * Records the symptoms in a message that triggered an emergency notice,
+ * without replaying it as a turn — used when the patient carries on by
+ * typing something new instead of pressing Continue, so what they first
+ * described still reaches the final assessment.
+ *
+ * @param {string} sessionId
+ * @param {string} flaggedMessage
+ */
+async function absorbFlaggedMessageSymptoms(sessionId, flaggedMessage) {
+  const known = getAccumulatedSymptoms(sessionId).filter((s) => s.present).map((s) => s.term);
+  const result = await classifySymptoms(flaggedMessage, known, null);
+  if (result._classificationFailed) return;
+  const symptoms = sanityFilterSymptoms(result.symptoms.filter((s) => s.present), 'emergency-carryover');
+  if (symptoms.length) appendAccumulatedSymptoms(sessionId, symptoms);
+  if (result.mentionedConditions?.length) appendMentionedConditions(sessionId, result.mentionedConditions);
+}
 
+// sessionId -> { removed, stillPresent } for the CURRENT turn only — set
+// in the pipeline, consumed (and always cleared) by runPatientMessageTurn.
+const pendingRemovalNotes = new Map();
+
+function setRemovalNote(sessionId, removed, stillPresent) {
+  pendingRemovalNotes.set(sessionId, { removed, stillPresent: stillPresent.map((s) => ({ ...s })) });
+}
+
+/**
+ * Tells the patient which symptom(s) this turn removed and what's still on
+ * the list — unless the reply already says it (the pure-retraction and
+ * final-gate replies have their own wording for this).
+ *
+ * @param {object} result - envelope
+ * @param {string[]} removed
+ * @param {Array} stillPresent
+ * @returns {object}
+ */
+export function withRemovalNote(result, removed, stillPresent) {
+  if (!result || !removed?.length || !KINDS_THAT_CONTINUE_PHYSICAL_FLOW.has(result.kind)) return result;
+  if (/no longer have/i.test(result.reply || '')) return result;
+  const listed = /so far i (?:still )?have/i.test(result.reply || '');
+  const remaining = stillPresent?.length && !listed
+    ? ` What I have now: ${listMarker(formatClassifiedSymptoms(stillPresent))}.`
+    : '';
+  return { ...result, reply: `Got it, I've removed ${removed.join(', ')} from your list.${remaining} ${result.reply}` };
+}
+
+/**
+ * Prepends the one-time "I'll keep the earlier emergency in mind" note to
+ * the first conversational reply after the patient carries on past an
+ * emergency notice. Never on another emergency reply (that has its own,
+ * stronger guidance).
+ *
+ * @param {object} result - envelope
+ * @param {string} sessionId
+ * @returns {object}
+ */
+export function applyEmergencyContinueNote(result, sessionId) {
+  if (!result || !KINDS_THAT_CONTINUE_PHYSICAL_FLOW.has(result.kind)) return result;
+  if (!consumeEmergencyNoticePending(sessionId)) return result;
+  return { ...result, reply: `${EMERGENCY_CONTINUE_NOTE}${result.reply}` };
+}
+
+/**
+ * Last step before a reply leaves the pipeline: the AI rewrites fixed
+ * replies naturally in the patient's language, and translates AI-written
+ * replies / recommendations / emergency notices for non-English
+ * conversations (see replyComposer.js for the policy and its
+ * deterministic checks). Symptom lists stay exact.
+ *
+ * @param {object} result - envelope
+ * @param {string} sessionId
+ * @param {string} message - this turn's patient message
+ * @returns {Promise<object>}
+ */
+async function composeFinalReply(result, sessionId, message) {
+  const recentPatientMessages = [
+    ...getRecentMessages(sessionId).filter((m) => m.role === 'patient').map((m) => m.text),
+    message,
+  ];
+  const mode = composeModeFor(result, looksNonEnglish(recentPatientMessages));
+  const mustKeep = result.kind === 'recommendation' && result.recommendation?.specialist_recommended
+    ? [result.recommendation.specialist_recommended]
+    : [];
+  const { text, composed } = await composeReply({
+    reply: result.reply,
+    mode,
+    recentPatientMessages,
+    kind: result.kind,
+    mustKeep,
+  });
+  const { aiWritten, ...rest } = result;
+  // replyOriginal: the pipeline's own wording before composing — for
+  // debugging and the test scripts, whose checks can't depend on the AI's
+  // phrasing. The UI shows `reply`.
+  return { ...rest, reply: text, replyOriginal: stripListMarkers(result.reply), replyComposed: composed };
+}
+
+async function runPatientMessageTurn({ message, patientId, sessionId, session }) {
+  // Session state is RAM-only (see chatLog.js's SESSION_TTL_MS) — nothing
+  // to load before the turn or save after it.
+  pendingRemovalNotes.delete(sessionId);
+  // If this turn fails, put the session back exactly as it was, so the
+  // patient's retry (or next message) keeps the conversation's context —
+  // see chatLog.js's snapshotSession.
+  const before = snapshotSession(sessionId);
   try {
     const result = await runPatientMessagePipeline({ message, patientId, sessionId, session });
-    const finalResult = applyMixedDiagnosisDecline(applyMixedEmotionalAcknowledgment(result, message), message);
+    if (result?.kind === 'error') {
+      restoreSession(sessionId, before);
+      pendingRemovalNotes.delete(sessionId);
+      return composeFinalReply(result, sessionId, message);
+    }
+    const removal = pendingRemovalNotes.get(sessionId);
+    pendingRemovalNotes.delete(sessionId);
+    const noted = applyEmergencyContinueNote(
+      withRemovalNote(
+        applyMixedDiagnosisDecline(applyMixedEmotionalAcknowledgment(result, message), message),
+        removal?.removed,
+        removal?.stillPresent
+      ),
+      sessionId
+    );
+    // A fixed note added on top of an AI-written reply makes the whole
+    // reply a template again, so it gets composed as one piece.
+    if (noted !== result) noted.aiWritten = false;
+    const finalResult = await composeFinalReply(noted, sessionId, message);
     // See chatLog.js's appendRecentMessage doc comment — short, in-RAM-
     // only turn history for the relevance classifier. Appended here
     // (not earlier) so it reflects the FINAL reply actually sent, after
@@ -1086,13 +1262,13 @@ async function runPatientMessageTurn({ message, patientId, sessionId, session })
     // goes to the server log (for real diagnosis); the patient gets an
     // honest, specific reply instead of a generic server error.
     console.error('[processMessage] uncaught error during pipeline (likely an AI provider failure):', err.message);
+    pendingRemovalNotes.delete(sessionId);
+    restoreSession(sessionId, before);
     return envelope({
       kind: 'error',
       sessionId,
       reply: "I'm having trouble processing that right now — could you try sending it again in a moment?",
     });
-  } finally {
-    await persistSessionState(sessionId);
   }
 }
 
@@ -1211,15 +1387,17 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   //     keyword/crisis-matched message through to normal processing at
   //     all) so neither immediately re-flags the same content. Only for
   //     this one replay turn.
-  //   - anything else (a fresh, unrelated message; the "Notify someone"
-  //     choice, which never even needs to reach the backend): re-show
-  //     the SAME notice again and stay locked on it — see
-  //     getPendingEmergencyReply's doc comment (chatLog.js) — rather
-  //     than silently discarding it and processing whatever arrived as
-  //     an ordinary fresh turn. EXPLICIT PRODUCT DECISION: an emergency
-  //     or crisis notice must not be simply typed past; the patient has
-  //     to either Notify or actually Continue before anything else gets
-  //     processed.
+  //   - anything else — the patient typed something new instead of
+  //     pressing Continue. PRODUCT DECISION (replaces the earlier
+  //     "stay locked on the notice" behavior): that counts as carrying
+  //     on too. The flagged message's symptoms are still recorded (so
+  //     they reach the final assessment), then the NEW message is
+  //     processed normally with every safety gate active — it's new
+  //     content, so it can flag an emergency of its own.
+  // Either way the bot remembers the emergency (recordEmergencyFlag in
+  // markEmergencyAcknowledgeable): the next reply acknowledges it once,
+  // and the recommendation reminds the patient about it.
+  // Crisis/mental-health notices never reach here: they stay a hard stop.
   // ================================================================
   let suppressSeverityGate = false;
   let suppressHardEmergencyGate = false;
@@ -1227,11 +1405,21 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     const stashed = getPendingEmergencyMessage(sessionId);
     const stashedQuestionType = getPendingEmergencyQuestionType(sessionId);
     const stashedReply = getPendingEmergencyReply(sessionId);
+    // A CRISIS notice (self-harm / suicide) is never typed past: anything
+    // other than an explicit Continue shows the same notice again. Only
+    // physical emergencies treat a new message as carrying on.
+    if (stashedReply?.emergencyCategory === 'mental_health' && !EMERGENCY_CONTINUE_RE.test(message.trim())) {
+      return envelope(markEmergencyAcknowledgeable({ ...stashedReply }, sessionId, stashed, stashedQuestionType, { repeat: true }));
+    }
+    setAwaitingEmergencyAcknowledgment(sessionId, false);
+    setPendingEmergencyMessage(sessionId, null);
+    setPendingEmergencyQuestionType(sessionId, null);
+    setPendingEmergencyReply(sessionId, null);
+    if (stashed) setEmergencyNoticePending(sessionId, true);
+    if (stashed && !EMERGENCY_CONTINUE_RE.test(message.trim())) {
+      await absorbFlaggedMessageSymptoms(sessionId, stashed);
+    }
     if (stashed && EMERGENCY_CONTINUE_RE.test(message.trim())) {
-      setAwaitingEmergencyAcknowledgment(sessionId, false);
-      setPendingEmergencyMessage(sessionId, null);
-      setPendingEmergencyQuestionType(sessionId, null);
-      setPendingEmergencyReply(sessionId, null);
       message = stashed;
       suppressSeverityGate = true;
       suppressHardEmergencyGate = true;
@@ -1248,22 +1436,13 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       // stand-alone message with no memory of what it was answering —
       // which is exactly what produced a bare "10 severity" being
       // misread as a mental-health crisis in a real, live test.
+    }
+    // A new message typed instead of Continue may well be answering the
+    // same pending question, so it gets the same restored context.
+    if (stashed) {
       if (stashedQuestionType === 'disambiguation') setAwaitingDisambiguationAnswer(sessionId, true);
       else if (stashedQuestionType === 'finalConfirmation') setAwaitingFinalConfirmation(sessionId, true);
       else if (stashedQuestionType === 'clarification') setAwaitingClarificationAnswer(sessionId, true);
-    } else if (stashedReply) {
-      // Not "Continue" (and not the button-only "Notify", which never
-      // needs to reach the backend at all) — re-show the exact same
-      // notice, keep the acknowledgment flag AND the stash exactly as
-      // they were (this message is simply ignored, not merged into
-      // anything), so the next reply gets the same choice again.
-      return envelope(markEmergencyAcknowledgeable({ ...stashedReply }, sessionId, stashed, stashedQuestionType));
-    } else {
-      // Flag was set but nothing usable is stashed (a rare edge case —
-      // e.g. server state was hydrated mid-flight) — don't get stuck
-      // locked on nothing; clear it and fall through to ordinary
-      // processing.
-      setAwaitingEmergencyAcknowledgment(sessionId, false);
     }
   }
 
@@ -1351,21 +1530,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // ------------------------------------------------------------------
   const obvious = checkObviouslyOffTopic(message);
   if (obvious.offTopic && !wasAnsweringPendingQuestion) {
-    const reply = "Hi — I'm here to help you figure out which kind of doctor to see. " +
-      "What symptoms are you experiencing, and how long have you had them?";
-    await logChatMessage({
-      sessionId,
-      patientId,
-      message,
-      response: { kind: 'off_topic', offTopicReason: obvious.reason, reply },
-    });
-    return envelope({
-      kind: 'off_topic',
-      sessionId,
-      isOffTopic: true,
-      offTopicReason: obvious.reason,
-      reply: cleanReply(reply),
-    });
+    return greetingEnvelope(sessionId);
   }
 
   // ================================================================
@@ -1437,9 +1602,34 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // way, with no changes needed at any of them. Deterministic checks
   // (crisis, keyword) are NOT affected by this — they still run
   // normally elsewhere in this turn.
-  const severityCheckPromise = suppressSeverityGate
+  // With no question pending, still tell the emergency check which
+  // symptoms are on file — "it just got a lot worse" means nothing on its
+  // own, but a lot after "chest pain".
+  // BUG (found live): once the patient has continued past an emergency,
+  // that same emergency's symptoms are in this context — so every later
+  // answer ("8/10", "yes") was judged together with them, re-flagged as
+  // an emergency, and the patient was asked to Continue again on every
+  // single message. After an acknowledged emergency, judge only what the
+  // NEW message itself says (a genuinely new emergency still fires; the
+  // keyword/crisis gates are message-only already).
+  const continuedPastEmergency = getEmergencyHistory(sessionId).length > 0;
+  const severityContext = continuedPastEmergency
+    ? null
+    : wasAnsweringPendingQuestion
+    ? pendingContext
+    : priorPresentTermsForContext.length
+    ? `The patient has been describing these symptoms earlier in this conversation: ${priorPresentTermsForContext.join(', ')}.`
+    : null;
+  // After the patient has continued past an emergency this round, the AI
+  // severity check is not re-run: measured live, even judged alone, "20
+  // minutes, 9 out of 10" is flagged EMERGENCY, so every answer re-locked
+  // the chat behind Continue. The patient has been warned (and is reminded
+  // in the recommendation); the deterministic emergency-keyword and crisis
+  // gates still run on every message, and Infermedica's triage still sets
+  // the final urgency. Cleared when the round is finalized.
+  const severityCheckPromise = suppressSeverityGate || continuedPastEmergency
     ? Promise.resolve({ isEmergency: false })
-    : checkAISeverity(message, callAI, wasAnsweringPendingQuestion ? pendingContext : null);
+    : checkAISeverity(message, callAI, severityContext);
   // A speculative call rejecting with nobody listening yet (before its
   // first real `await` below) would surface as an unhandled promise
   // rejection — attach a no-op catch immediately so Node never sees an
@@ -1459,7 +1649,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     }),
     wasAnsweringPendingQuestion
       ? classifyPendingAnswerRelevance({ message, callAI, context: pendingContext, recentHistory: getRecentMessages(sessionId) })
-      : checkOffTopic(message, callAI),
+      : checkOffTopic(message, callAI, null, getRecentMessages(sessionId)),
   ]);
   if (gateResult) return gateResult;
 
@@ -1526,6 +1716,9 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
 
   if (!wasAnsweringPendingQuestion) {
     const offTopicResult = domainResult;
+    if (offTopicResult?.offTopic && offTopicResult.reason === 'social') {
+      return greetingEnvelope(sessionId);
+    }
     if (offTopicResult?.offTopic) {
       let reply;
       if (offTopicResult.reason === 'concerning_content') {
@@ -1578,7 +1771,8 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       // making a second AI call — envelope/logging happens HERE, exactly
       // once, since this is the branch actually consuming it.
       const [dangerousEventEmergency, aiSafety] = await Promise.all([
-        checkDangerousEventGate({ message, callAI, sessionId, patientId, pendingQuestionType }),
+        // Skipped on the Continue replay itself — it would re-flag the same message.
+        suppressSeverityGate ? null : checkDangerousEventGate({ message, callAI, sessionId, patientId, pendingQuestionType }),
         severityCheckPromise,
       ]);
       if (dangerousEventEmergency) return dangerousEventEmergency;
@@ -1594,6 +1788,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
         needsClarification: true,
         clarificationRound: getClarificationCount(sessionId),
         maxClarificationRounds: MAX_CLARIFICATION_ROUNDS,
+        aiWritten: true,
         reply: cleanReply(followUpQuestion),
       });
     }
@@ -1645,7 +1840,8 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // true, so severityCheckPromise's context is already pendingContext);
     // envelope/logging happens HERE since this is the branch consuming it.
     const [dangerousEventEmergency, aiSafety] = await Promise.all([
-      checkDangerousEventGate({ message, callAI, sessionId, patientId, pendingQuestionType }),
+      // Skipped on the Continue replay itself — it would re-flag the same message.
+      suppressSeverityGate ? null : checkDangerousEventGate({ message, callAI, sessionId, patientId, pendingQuestionType }),
       severityCheckPromise,
     ]);
     if (dangerousEventEmergency) return dangerousEventEmergency;
@@ -1669,6 +1865,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       needsClarification: true,
       clarificationRound: getClarificationCount(sessionId),
       maxClarificationRounds: MAX_CLARIFICATION_ROUNDS,
+      aiWritten: true,
       reply: cleanReply(pendingEventFollowUp),
     });
   }
@@ -1891,6 +2088,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       kind: 'emotional_followup_question',
       sessionId,
       needsClarification: true,
+      aiWritten: true,
       reply: cleanReply(followUpQuestion),
     });
   }
@@ -1983,6 +2181,29 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       reply: cleanReply(reply),
       actionable: true,
       actions: [{ id: 'complete_profile', label: 'Complete your profile' }],
+    });
+  }
+  // Infermedica only accepts ages 1–130 (found live: a date of birth
+  // entered as this year gave age 0, and the patient only saw "trouble
+  // connecting to the clinical engine" at the very end). Catch it here,
+  // before any symptom gathering, with a message that says what to fix.
+  if (!(patientProfile.age >= 1 && patientProfile.age <= 130)) {
+    const reply =
+      "The date of birth on your profile doesn't look right (it gives an age of " +
+      `${patientProfile.age}). Please check it on your Profile page, then come back and we'll pick this up.`;
+    await logChatMessage({
+      sessionId,
+      patientId,
+      message,
+      response: { kind: 'profile_incomplete', reply },
+    });
+    return envelope({
+      kind: 'profile_incomplete',
+      sessionId,
+      subject: subjectInfo,
+      reply: cleanReply(reply),
+      actionable: true,
+      actions: [{ id: 'complete_profile', label: 'Check your profile' }],
     });
   }
   const age = patientProfile.age;
@@ -2143,6 +2364,74 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       });
     }
     classifiedSymptoms = classificationResult.symptoms;
+    if (wasAnsweringClarification) {
+      classifiedSymptoms = keepAnswerOnAskedSymptom(classifiedSymptoms, {
+        askedSymptom: getLastQuestionSymptom(sessionId),
+        knownTerms: priorPresentTerms,
+        message,
+      });
+    }
+    // DETERMINISTIC BACKSTOP (found live): "yes" answering "have you
+    // noticed any swelling or redness around those joints?" came back from
+    // classifySymptoms with nothing extracted — its affirmation-to-
+    // candidates rule isn't reliably followed — so the patient's answer
+    // was lost and they got "I couldn't tell what new symptoms you're
+    // experiencing". The question's own candidates were declared
+    // structurally by assessIntake when it was asked (see
+    // getLastQuestionCandidates), so a bare affirmation records exactly
+    // those, with no AI guess involved. Never overrides anything the
+    // classifier DID extract.
+    //
+    // EITHER/OR (found live): "yes" answering "have you noticed any changes
+    // in your vision or any redness in the eye?" came back with NO
+    // candidates declared, so it fell through to "I didn't catch any
+    // symptoms". Now: recover the options from the question text when
+    // they weren't declared, and when the question offered two or more,
+    // ask which one(s) instead of guessing — a "yes" to "A or B?" doesn't
+    // mean both. "both" (or "yes" again to that follow-up) records all.
+    const isBareYes = BARE_AFFIRMATION_RE.test(message);
+    const isBoth = BOTH_ANSWER_RE.test(message);
+    if (wasAnsweringClarification && classifiedSymptoms.length === 0 && (isBareYes || isBoth)) {
+      const lastQuestion = getLastQuestionAsked(sessionId) || '';
+      let candidates = getLastQuestionCandidates(sessionId);
+      if (!candidates.length && lastQuestion) {
+        candidates = await extractQuestionOptions(lastQuestion, priorPresentTerms);
+      }
+      const answeringWhichOne = lastQuestion.startsWith(WHICH_OPTION_PREFIX);
+      if (candidates.length === 1 || (candidates.length > 1 && (isBoth || answeringWhichOne))) {
+        classifiedSymptoms = candidates.map((term) => ({ term, present: true, duration: null, severity: null }));
+      } else if (candidates.length > 1) {
+        const options = `${candidates.slice(0, -1).join(', ')} or ${candidates[candidates.length - 1]}`;
+        const whichQuestion = `${WHICH_OPTION_PREFIX} which do you have — ${options}, or both?`;
+        setAwaitingClarificationAnswer(sessionId, true);
+        setLastQuestionAsked(sessionId, whichQuestion); // clears candidates, so set them after
+        setLastQuestionCandidates(sessionId, candidates);
+        return envelope({
+          kind: 'clarification',
+          sessionId,
+          needsClarification: true,
+          resolvedAge: age,
+          resolvedSex: sex,
+          reply: cleanReply(whichQuestion),
+        });
+      }
+    }
+    // "I don't have this symptom" with several on file: the classifier
+    // rightly refuses to guess which one — ask, instead of silently doing
+    // nothing. The answer is read with the "WHICH ONE IS GONE?" rule.
+    if (classifiedSymptoms.length === 0 && priorPresentTerms.length > 1 && PRONOUN_DENIAL_RE.test(message)) {
+      const whichQuestion = `Which one is gone now? So far I have: ${listMarker(priorPresentTerms.join(', '))}.`;
+      setAwaitingClarificationAnswer(sessionId, true);
+      setLastQuestionAsked(sessionId, `Which of these symptoms is gone now: ${priorPresentTerms.join(', ')}?`);
+      return envelope({
+        kind: 'clarification',
+        sessionId,
+        needsClarification: true,
+        resolvedAge: age,
+        resolvedSex: sex,
+        reply: cleanReply(whichQuestion),
+      });
+    }
     if (classificationResult.ambiguous) ambiguousNumberAnswer = classificationResult.ambiguousValue;
     // Persist any chronic condition/risk-factor mentioned this turn
     // ("I have diabetes", "I'm pregnant") — see chatLog.js's
@@ -2206,15 +2495,25 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       const pairKey = `${s.duration || ''}|${s.severity || ''}`;
       pairCounts.set(pairKey, (pairCounts.get(pairKey) || 0) + 1);
     }
+    // BUG (found live): "about 20 minutes, it's a 9 out of 10" after
+    // chest pain + arm pain + sweating marked ALL three as guessed, so the
+    // bot asked "how severe is the chest pain?" right after being told.
+    // The answer is real for the MAIN complaint (the first one listed);
+    // only the others are guesses.
+    const firstOfPair = new Set();
     for (const s of classifiedSymptoms) {
       if (!s.duration && !s.severity) continue;
       const pairKey = `${s.duration || ''}|${s.severity || ''}`;
-      if (pairCounts.get(pairKey) > 1) {
+      if (pairCounts.get(pairKey) > 1 && firstOfPair.has(pairKey)) {
         if (s.duration) s.durationGuessed = true;
         if (s.severity) s.severityGuessed = true;
       }
+      firstOfPair.add(pairKey);
     }
   }
+  // Snapshot of what was present before this turn's merge — used below to
+  // tell the patient exactly what was removed (see removedThisTurn).
+  const presentBeforeMerge = getAccumulatedSymptoms(sessionId).filter((s) => s.present).map((s) => s.term);
   if (classifiedSymptoms.length) {
     // BUG (found live): a symptom restated as present in a genuinely
     // NEW round, after already being `finalized` from an EARLIER
@@ -2240,7 +2539,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     const priorAccumulated = getAccumulatedSymptoms(sessionId);
     const revivedTerms = new Set(
       classifiedSymptoms
-        .filter((s) => s.present !== false && !s.duration && !s.severity)
+        .filter((s) => s.present !== false && !s.duration && !s.severity && !s.severityCorrected && !s.durationCorrected)
         .map((s) => s.term.toLowerCase().trim())
         .filter((term) => priorAccumulated.some((e) => e.term.toLowerCase().trim() === term && e.finalized))
     );
@@ -2260,6 +2559,17 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     );
   }
   const accumulated = getAccumulatedSymptoms(sessionId);
+  // PRODUCT REQUIREMENT: whenever the patient takes a symptom back, say so
+  // and show what's left. A turn that ONLY takes things back already does
+  // this (RETRACTION HANDLING below); this covers a removal that arrives
+  // together with something new ("no more headache, but now I have a
+  // fever"), which used to be applied silently. Applied in
+  // runPatientMessageTurn, so it reaches whichever reply this turn produces.
+  {
+    const stillPresentLower = new Set(accumulated.filter((s) => s.present).map((s) => s.term.toLowerCase().trim()));
+    const removedThisTurn = presentBeforeMerge.filter((t) => !stillPresentLower.has(t.toLowerCase().trim()));
+    if (removedThisTurn.length) setRemovalNote(sessionId, removedThisTurn, accumulated.filter((s) => s.present));
+  }
 
   // ================================================================
   // RETRACTION HANDLING (root-cause fix, general case): a turn whose
@@ -2297,7 +2607,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       incrementClarificationCount(sessionId);
       reply =
         `Got it, I've noted that you no longer have ${retractedNames}. So far I still have: ` +
-        `${formatClassifiedSymptoms(stillPresent)}. Would you like to add anything, remove anything else, ` +
+        `${listMarker(formatClassifiedSymptoms(stillPresent))}. Would you like to add anything, remove anything else, ` +
         `or should I go ahead and recommend a specialist?`;
     } else {
       // Nothing left on file at all — do NOT route toward finalize
@@ -2363,9 +2673,12 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       });
     }
     // Something usable IS already on file — stop re-asking a question
-    // that keeps getting an unrelated reply and go ahead with what we
-    // have instead of looping indefinitely.
-    return await finalizeAndRecommend({ sessionId, patientId, message, age, sex, isDiagnosisRequest, subjectInfo });
+    // that keeps getting an unrelated reply, and offer to go ahead with
+    // what we have (never straight to the engine without a yes).
+    return askFinalConfirmation({
+      sessionId, accumulated, age, sex,
+      lead: "Let's not get stuck on that question.",
+    });
   }
 
   // ================================================================
@@ -2407,14 +2720,19 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       // patient who never gives a parseable answer still gets forced to
       // a recommendation eventually, same reasoning as the targeted-
       // question cap below.
+      // Past the round budget: keep asking (never finalize without an
+      // explicit yes), but as plainly as possible.
       if (getClarificationCount(sessionId) >= MAX_CLARIFICATION_ROUNDS + 1) {
-        return await finalizeAndRecommend({ sessionId, patientId, message, age, sex, isDiagnosisRequest, subjectInfo });
+        return askFinalConfirmation({
+          sessionId, accumulated, age, sex,
+          lead: 'Sorry, I still could not tell. Please reply "yes" to get your recommendation, or tell me what to add or remove.',
+        });
       }
       setAwaitingFinalConfirmation(sessionId, true);
       incrementClarificationCount(sessionId);
       const listText = formatClassifiedSymptoms(accumulated.filter((s) => s.present)) || 'nothing yet';
       const rereadReply =
-        `I couldn't quite tell what you meant there. Just to confirm — so far I have: ${listText}. ` +
+        `I couldn't quite tell what you meant there. Just to confirm — so far I have: ${listMarker(listText)}. ` +
         `Would you like to add anything, remove anything, or should I go ahead and recommend a specialist?`;
       return envelope({
         kind: 'clarification',
@@ -2473,7 +2791,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
         setAwaitingFinalConfirmation(sessionId, true);
         reply =
           `Got it, I've noted that you no longer have ${retractedNames}. So far I still have: ` +
-          `${formatClassifiedSymptoms(stillPresent)}. Would you like to add anything, remove anything else, ` +
+          `${listMarker(formatClassifiedSymptoms(stillPresent))}. Would you like to add anything, remove anything else, ` +
           `or should I go ahead and recommend a specialist?`;
       } else {
         reply = `Got it, I've noted that you no longer have ${retractedNames}. That's everything you'd told me about — let me know if anything else comes up.`;
@@ -2515,7 +2833,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
         ? `I've also noted you no longer have ${resolution.removals.join(', ')}. `
         : '';
       const reply =
-        `Got it, I've updated that. ${removedNote}So far I have: ${formatClassifiedSymptoms(stillPresent)}. ` +
+        `Got it, I've updated that. ${removedNote}So far I have: ${listMarker(formatClassifiedSymptoms(stillPresent))}. ` +
         `Would you like to add anything, remove anything, or should I go ahead and recommend a specialist?`;
       return envelope({
         kind: 'clarification',
@@ -2554,7 +2872,18 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // mentioned condition ("I'm pregnant") instead of a fully generic
     // "I couldn't identify any symptoms" when that's the only real
     // content in the very first message(s) of a session.
-    const reply = turnMentionedConditions.length
+    // LOST CONTEXT (found live): a one-word "yes"/"no" can only answer a
+    // question this session asked -- if the session holds NO symptoms at all,
+    // the earlier conversation is gone (the assistant restarted, or the
+    // session expired; sessions are RAM-only). "I couldn't identify any
+    // symptoms in your message" blamed the patient for that. Say what
+    // actually happened and ask them to restate.
+    const isBareYesNo = BARE_AFFIRMATION_RE.test(message) || BARE_NEGATION_RE.test(message);
+    const reply = isBareYesNo && !turnMentionedConditions.length
+      ? "I've lost track of our earlier conversation (the assistant may have restarted), so I don't have your " +
+        'symptoms on file anymore and that answer has nothing to attach to. Sorry about that — could you tell me ' +
+        "again what you're feeling physically, where it hurts, and how long it has been going on?"
+      : turnMentionedConditions.length
       ? `Thanks, I've noted that. What symptoms are you experiencing right now — where does it hurt, and how long has it been going on?`
       : streak > 2
       ? "I'm still not able to tell what's bothering you physically from your messages. Let's try once more, " +
@@ -2616,9 +2945,22 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       .filter((s) => s.present !== false)
       .map((s) => s.term.toLowerCase().trim())
   );
-  const newRoundPresentSymptoms = accumulated.filter(
-    (s) => s.present && (!s.finalized || thisTurnPresentTerms.has(s.term.toLowerCase().trim()))
+  // A finalized symptom restated now stays part of this round on LATER
+  // turns too, not just this one — see chatLog.js's getReopenedTerms for
+  // the live bug ("yes" to a follow-up about joint swelling dropped the
+  // re-opened joint pain out of the round entirely).
+  addReopenedTerms(
+    sessionId,
+    accumulated
+      .filter((s) => s.finalized && thisTurnPresentTerms.has(s.term.toLowerCase().trim()))
+      .map((s) => s.term)
   );
+  const reopenedTerms = new Set(getReopenedTerms(sessionId));
+  const newRoundPresentSymptoms = accumulated.filter((s) => {
+    if (!s.present) return false;
+    const key = s.term.toLowerCase().trim();
+    return !s.finalized || thisTurnPresentTerms.has(key) || reopenedTerms.has(key);
+  });
   const totalPresentCount = newRoundPresentSymptoms.length;
 
   // A new round has started (there's at least one finalized symptom
@@ -2696,10 +3038,14 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // duration/severity as unknown; the REAL accumulated entry (with the
   // guessed value intact, still better than nothing) is untouched and
   // is what actually reaches Infermedica if the round cap is hit first.
+  // With only ONE symptom left there's nothing to have guessed between —
+  // found live: "tingling and numbness for 2 weeks", then "the tingling
+  // stopped", and the bot asked how long the numbness had lasted.
+  const onlyOneLeft = newRoundPresentSymptoms.length === 1;
   const symptomsForIntakeAssessment = newRoundPresentSymptoms.map((s) => ({
     ...s,
-    duration: s.durationGuessed ? null : s.duration,
-    severity: s.severityGuessed ? null : s.severity,
+    duration: s.durationGuessed && !onlyOneLeft ? null : s.duration,
+    severity: s.severityGuessed && !onlyOneLeft ? null : s.severity,
   }));
 
   // BUG (found live): isOverrideRequested existed for exactly this case
@@ -2730,8 +3076,21 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
         maxRounds: MAX_CLARIFICATION_ROUNDS,
       });
 
-  if (!intakeAssessment.sufficient) {
-    const questionText = intakeAssessment.question || getClarifyingQuestion('both');
+  // BUG (found live): when assessIntake's AI call failed (provider quota),
+  // the fixed fallback ALWAYS asked "how long, and how severe?" — even
+  // right after the patient said "only today". The fallback now asks only
+  // for what's actually missing, and moves on to the confirmation when
+  // nothing is.
+  let assessment = intakeAssessment;
+  if (!assessment.sufficient && !assessment.question) {
+    const gap = findMissingDetail(symptomsForIntakeAssessment);
+    assessment = gap
+      ? { sufficient: false, question: fallbackDetailQuestion(gap), referencedSymptom: gap.term, askedAboutSymptoms: [] }
+      : { sufficient: true, question: null };
+  }
+
+  if (!assessment.sufficient) {
+    const questionText = assessment.question;
 
     // FIXED (properly this time): an answer to our own targeted
     // question that contributes NOTHING relevant (e.g. "oh I love
@@ -2751,6 +3110,8 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
 
     setAwaitingClarificationAnswer(sessionId, true);
     setLastQuestionAsked(sessionId, questionText);
+    setLastQuestionCandidates(sessionId, assessment.askedAboutSymptoms || []);
+    setLastQuestionSymptom(sessionId, assessment.referencedSymptom || null);
     incrementClarificationCount(sessionId);
     return envelope({
       kind: 'clarification',
@@ -2760,22 +3121,17 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       maxClarificationRounds: MAX_CLARIFICATION_ROUNDS,
       resolvedAge: age,
       resolvedSex: sex,
+      // assessIntake's own question is already natural; the "doesn't seem
+      // related" prefix or the template fallback still need composing.
+      aiWritten: Boolean(intakeAssessment.question) && !contributedNothing,
       reply: cleanReply(replyText),
     });
   }
 
-  // FIXED: this fallthrough had NO cap check at all — every other path
-  // that asks another question checks the round budget first, but this
-  // one (reached whenever assessIntake says enough is known / the round
-  // budget is exhausted) could re-ask the final gate and increment the counter past
-  // MAX_CLARIFICATION_ROUNDS indefinitely (this is what produced
-  // "clarificationRound=4/3" — a counter meant to be capped, going over
-  // its own cap). If we're already past the +1 ceiling (the same one
-  // used for the "I couldn't understand that" re-ask above), stop
-  // asking and finalize with whatever's on file instead of looping.
-  if (roundsUsed >= MAX_CLARIFICATION_ROUNDS + 1) {
-    return await finalizeAndRecommend({ sessionId, patientId, message, age, sex, isDiagnosisRequest, subjectInfo });
-  }
+  // Reached when assessIntake says enough is known or the round budget is
+  // spent. This used to finalize outright once past the +1 ceiling; now
+  // it always shows the final gate, since the patient's explicit
+  // go-ahead is required before the clinical engine is ever called.
 
   // Nothing targeted left to ask — ask the final gate once. Reads the
   // REAL accumulated list back (deterministically rendered via
@@ -2783,16 +3139,32 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // memory, so it can't omit or invent a symptom here) so the patient
   // can explicitly add to or correct it, not just a generic "anything
   // else?" with no visibility into what's actually on file.
+  return askFinalConfirmation({ sessionId, accumulated, age, sex });
+}
+
+/**
+ * Shows the "So far I have: … should I go ahead?" gate. PRODUCT
+ * REQUIREMENT: this is the ONLY road to finalizeAndRecommend() — the
+ * clinical engine is never called until the patient has seen the exact
+ * list being sent and said to go ahead. Every place that used to finalize
+ * on its own (off-topic streak, unclear gate answer, round cap) now asks
+ * this instead.
+ *
+ * @param {{sessionId: string, accumulated: Array, age: number, sex: string, lead?: string}} params
+ *   lead: optional sentence shown before the list (e.g. after an unclear reply).
+ */
+function askFinalConfirmation({ sessionId, accumulated, age, sex, lead = '' }) {
   setAwaitingFinalConfirmation(sessionId, true);
   incrementClarificationCount(sessionId);
   const knownListText = formatClassifiedSymptoms(accumulated.filter((s) => s.present)) || 'nothing yet';
   const finalGateReply =
-    `So far I have: ${knownListText}. Would you like to add anything, remove anything, ` +
+    `${lead ? `${lead} ` : ''}So far I have: ${listMarker(knownListText)}. Would you like to add anything, remove anything, ` +
     `or should I go ahead and recommend a specialist? Just say no (or "that's all") to go ahead.`;
   return envelope({
     kind: 'clarification',
     sessionId,
     needsClarification: true,
+    awaitingConfirmation: true,
     clarificationRound: getClarificationCount(sessionId),
     maxClarificationRounds: MAX_CLARIFICATION_ROUNDS,
     resolvedAge: age,
@@ -2836,43 +3208,31 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   // (finalized: false) — pure bookkeeping over OUR OWN classification,
   // never anything Infermedica returned. Used below for the
   // cross-domain check.
-  const priorRoundSymptoms = accumulated.filter((s) => s.finalized);
-  const newRoundSymptoms = accumulated.filter((s) => !s.finalized);
+  // A finalized symptom the patient re-opened this round (see
+  // getReopenedTerms) is part of THIS round's complaint, not the earlier
+  // one — otherwise "joint pain is worse now, and there's swelling and
+  // redness" compared joint pain against its own swelling/redness and
+  // told the patient they "don't look related".
+  const reopenedAtFinalize = new Set(getReopenedTerms(sessionId));
+  const isReopened = (s) => reopenedAtFinalize.has(s.term.toLowerCase().trim());
+  const priorRoundSymptoms = accumulated.filter((s) => s.finalized && !isReopened(s));
+  const newRoundSymptoms = accumulated.filter((s) => !s.finalized || isReopened(s));
 
   // ================================================================
   // THE ONE INFERMEDICA CALL THAT MATTERS: map the accumulated,
   // already-classified symptom labels to real evidence.
   //
-  // UPDATED: this used to always be the mechanical tag format —
-  // "headache (mild, for 2 days); eye pain" — which reads nothing like
-  // real patient language and is the format implicated in the
-  // orig_text-missing bug documented above filterGroundedMentions. Per
-  // the explicit decision to fix this by giving Groq a little more
-  // room to phrase it naturally (composeNaturalDescription,
-  // symptomClassifier.js) rather than by regrounding against a new
-  // hand-built term list, that's tried first; a deterministic sanity
-  // check (naturalDescriptionPassesSanityCheck, above) guards against a
-  // bad composition ever silently dropping or inverting a symptom, and
-  // the old mechanical template remains the fallback if that check
-  // fails or the Groq call errors — so this can never end up WORSE
-  // than the previous behavior, only better on the common path.
+  // REPLACED: this used to be an LLM rewrite at temperature 0.4, so the
+  // same symptoms reached /parse worded differently each time and came
+  // back as different evidence (joint pain: Surgeon one run, Orthopedist
+  // the next). Now one fixed sentence per symptom — see
+  // describeSymptomsForParse (symptomClassifier.js) for what /parse was
+  // measured to misread and why duration is left out.
   // ================================================================
-  const templatedText = `${formatClassifiedSymptoms(accumulated).replace(/;\s*/g, '. ')}.`;
-  const naturalSentence = await composeNaturalDescription(accumulated);
-  let fullText;
-  if (naturalSentence && naturalDescriptionPassesSanityCheck(naturalSentence, accumulated)) {
-    fullText = naturalSentence;
-  } else {
-    if (naturalSentence) {
-      console.warn('[processMessage] composeNaturalDescription output failed sanity check, falling back to templated text. Generated:', naturalSentence);
-    }
-    fullText = templatedText;
-  }
-  // Always visible (not just on failure) — this exact class of bug
-  // (a triage result that only makes sense in light of what text
-  // Infermedica actually saw) has already been hard to diagnose once
-  // without this. Cheap: one line, every finalize call.
-  console.log(`[processMessage] finalize: sending to Infermedica /parse (source=${fullText === naturalSentence ? 'natural' : 'templated'}): "${fullText}"`);
+  const fullText = describeSymptomsForParse(accumulated);
+  // Always visible — a triage result often only makes sense in light of
+  // the exact text Infermedica saw. Cheap: one line, every finalize call.
+  console.log(`[processMessage] finalize: sending to Infermedica /parse: "${fullText}"`);
   let keptMentions = [];
   let rawMentionCount = 0;
   let droppedMentions = [];
@@ -3139,6 +3499,22 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     const templatedNote = TRIAGE_LEVEL_NOTES[triageLevel];
     const reply = templatedNote
       || `🚨 ${triageResult.triage?.triage_level_explanation || 'This may be a medical emergency. Please seek immediate medical attention.'}`;
+    // BUG (found live): if the patient already continued past an
+    // emergency in this conversation, offering Continue here again was an
+    // endless loop — Continue replays the same confirmation, Infermedica
+    // scores the same evidence as an emergency again, Continue again...
+    // This IS the final answer for this round -- never another Continue
+    // lock. UPDATED (product decision): it used to be a second, bare
+    // "this is an emergency" message with NO specialist, which read as the
+    // bot being stuck in a loop. The patient has already been warned and
+    // chose to continue, so fall through to the normal recommendation
+    // below: it names the specialist to see, keeps the emergency note
+    // (TRIAGE_LEVEL_NOTES) and the earlier-emergency reminder, keeps the
+    // urgency at 'emergency' (the grounding verifier repairs it to the
+    // clinical engine's level and still rejects dismissive wording), and
+    // closes the round (markAllSymptomsFinalized) so the next message
+    // starts fresh.
+    if (getEmergencyHistory(sessionId).length === 0) {
     return envelope(markEmergencyAcknowledgeable({
       kind: 'emergency',
       sessionId,
@@ -3151,6 +3527,7 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       reply: cleanReply(reply),
       source: 'infermedica_triage',
     }, sessionId, message));
+    }
   }
 
   // ------------------------------------------------------------------
@@ -3171,8 +3548,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   let secondarySpecialist = null;
   if (priorRoundSymptoms.length > 0 && newRoundSymptoms.length > 0) {
     try {
-      const priorText = `${formatClassifiedSymptoms(priorRoundSymptoms).replace(/;\s*/g, '. ')}.`;
-      const newText = `${formatClassifiedSymptoms(newRoundSymptoms).replace(/;\s*/g, '. ')}.`;
+      const priorText = describeSymptomsForParse(priorRoundSymptoms);
+      const newText = describeSymptomsForParse(newRoundSymptoms);
 
       const priorRaw = await parsePatientMessage(priorText, age);
       const { kept: priorKept } = filterGroundedMentions(priorRaw, priorText);
@@ -3184,12 +3561,11 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       const newEvidenceForApi = newKept.map((m) => ({ id: m.id, choice_id: m.choice_id || 'present', source: 'initial' }));
       const newSpecialists = await getSpecialistNamesForEvidence({ age, sex, evidence: newEvidenceForApi });
 
-      const anchorLower = new Set(priorSpecialists.map((s) => String(s).toLowerCase()));
-      const distinctFresh = newSpecialists.filter((s) => !anchorLower.has(String(s).toLowerCase()));
-      if (distinctFresh.length > 0 && priorSpecialists.length > 0) {
+      const distinct = pickDistinctSpecialist({ priorSpecialists, newSpecialists, mainSpecialists: specialists });
+      if (distinct) {
         const newSymptomNames = newRoundSymptoms.filter((s) => s.present).map((s) => s.term);
-        crossDomainNote = buildCrossDomainNote(newSymptomNames, distinctFresh[0]);
-        secondarySpecialist = distinctFresh[0];
+        crossDomainNote = buildCrossDomainNote(newSymptomNames, distinct);
+        secondarySpecialist = distinct;
       }
     } catch (err) {
       console.error('[processMessage] Cross-domain specialist check failed at finalize (non-fatal):', err.message);
@@ -3233,6 +3609,20 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     ...matchedSymptoms.map((s) => s.name),
     ...accumulated.filter((s) => s.present).map((s) => s.term),
   ];
+  const reportedSeverities = accumulated
+    .filter((s) => s.present && s.severity)
+    .map((s) => s.severity);
+
+  // FIXED (demonstrated live): this used to be just `message` — and the
+  // turn that produces a recommendation is almost always a bare
+  // confirmation ("that's all", "go ahead"), so the verifier's "the
+  // patient said it themselves in this session" exception never saw
+  // anything the patient had actually described. Their own recent
+  // messages (never the bot's) plus this one.
+  const patientStatedText = [
+    ...getRecentMessages(sessionId).filter((m) => m.role === 'patient').map((m) => m.text),
+    message,
+  ].join('\n');
 
   let raw = await generateRecommendation(generateInput);
   let { ok, recommendation, violations } = await verifyRecommendation(raw, {
@@ -3240,7 +3630,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     allowedLabTests: realLabValues.map((v) => v.testName),
     allowedProfileFacts: profileFacts,
     matchedSymptomNames: groundedSymptomNames,
-    patientStatedText: message,
+    reportedSeverities,
+    patientStatedText,
     graphUrgency: urgency,
     subjectInfo,
     checkKeywordMatch,
@@ -3257,7 +3648,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       allowedLabTests: realLabValues.map((v) => v.testName),
       allowedProfileFacts: profileFacts,
       matchedSymptomNames: groundedSymptomNames,
-      patientStatedText: message,
+      reportedSeverities,
+      patientStatedText,
       graphUrgency: urgency,
       subjectInfo,
       checkKeywordMatch,
@@ -3288,13 +3680,14 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       `Please mention ${newUnaccounted.length > 1 ? 'these' : 'this'} to the doctor directly.`;
   }
   if (crossDomainNote) reply += crossDomainNote;
+  // The patient carried on past an emergency notice earlier in this
+  // session — its symptoms are part of this assessment, and the warning
+  // still stands.
+  if (getEmergencyHistory(sessionId).length) reply += EARLIER_EMERGENCY_REMINDER;
 
   const triageLevelNote = TRIAGE_LEVEL_NOTES[triageResult.triageLevel];
   if (triageLevelNote) reply += ` ${triageLevelNote}`;
-  const channelLabel = describeChannel(triageResult.recommendedChannel);
-  if (channelLabel) {
-    reply += ` This can likely be handled with ${channelLabel}, though an in-person visit is always fine too if you'd prefer it.`;
-  }
+  reply += channelSentence(triageResult.recommendedChannel);
 
   // PREGNANCY SAFETY NET (MVP scope — explicit product decision): the
   // generation prompt (generaterecommendation.js, rule 10) already
@@ -3304,7 +3697,7 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   // deterministic backstop that makes the doctor-consult mention
   // unconditional, same "prompt instruction + cheap guaranteed check"
   // shape already used throughout this pipeline (symptomSanityGate.js,
-  // naturalDescriptionPassesSanityCheck, etc.). Deliberately does NOT
+  // the grounding verifier, etc.). Deliberately does NOT
   // attempt to deterministically detect/fix a dismissive TONE — that's
   // open-ended text-quality judgment, not something a keyword check can
   // reliably catch or repair; the prompt instruction is what carries
@@ -3312,8 +3705,8 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   const pregnancyOnFile = (profileFacts || []).some(
     (f) => f?.category === 'condition' && /pregnan|expecting/i.test(String(f.value || ''))
   );
-  if (pregnancyOnFile && !/consult|talk to your doctor|see your doctor/i.test(reply)) {
-    reply += ' Given your pregnancy, please consult your doctor about this rather than assuming it will resolve on its own.';
+  if (pregnancyOnFile && !/doctor (?:looking after|for) your pregnancy|pregnancy doctor/i.test(reply)) {
+    reply += ' Since you\'re pregnant, please also let the doctor looking after your pregnancy know about this, rather than assuming it will settle on its own.';
   }
 
   // Mark this round's symptoms as finalized and reset the round

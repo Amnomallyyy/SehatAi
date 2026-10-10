@@ -19,7 +19,6 @@ from ..dependencies import (
     ensure_conversation_participant,
     get_conversation_or_404,
     has_accepted_connection,
-    has_reports_access_grant,
 )
 from ..security import get_current_user, require_doctor_role
 
@@ -137,11 +136,6 @@ def list_prescriptions_for_patient(
     else:
         if not has_accepted_connection(db, patient_id, current_user.id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not connected to this patient")
-        if not has_reports_access_grant(db, patient_id, current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This patient has not granted you access to their reports history",
-            )
 
     prescriptions = (
         db.query(models.Prescription)

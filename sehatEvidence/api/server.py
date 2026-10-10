@@ -47,6 +47,7 @@ import json
 import mimetypes
 import sqlite3
 import sys
+import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -69,6 +70,9 @@ __all__ = ["EvidenceHandler", "main", "run_server"]
 
 #: Refuse absurd request bodies outright (a clinical question is a sentence).
 MAX_BODY_BYTES = 64 * 1024
+
+#: Keep-alive cadence for /api/ask/stream (see _handle_ask_stream).
+STREAM_HEARTBEAT_SECONDS = 20
 
 #: The built frontend, produced by `npm run build` in web/. Resolved once
 #: at import time; do_GET re-checks .exists() per request so a build that
@@ -541,9 +545,14 @@ class EvidenceHandler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+        # The heartbeat thread below writes to the same socket as the
+        # pipeline's own events, so every chunk goes out under one lock.
+        write_lock = threading.Lock()
+
         def send_line(payload: dict) -> None:
             line = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
-            self._write_chunk(line)
+            with write_lock:
+                self._write_chunk(line)
 
         if not force_refresh:
             cached = self._check_cache(cache_key)
@@ -584,11 +593,28 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 print(f"[server] stream write failed ({exc}); client likely gone")
 
+        # Some stages (parallel claim checks, supersession) emit nothing for
+        # minutes. Proxies and tunnels drop a response that is silent that
+        # long (Cloudflare: 100s), so a {"type":"heartbeat"} line goes out
+        # every STREAM_HEARTBEAT_SECONDS while the pipeline runs. Clients
+        # ignore event types they don't know.
+        stop_heartbeat = threading.Event()
+
+        def heartbeat() -> None:
+            while not stop_heartbeat.wait(STREAM_HEARTBEAT_SECONDS):
+                try:
+                    send_line({"type": "heartbeat"})
+                except Exception:
+                    return  # client gone; the pipeline's own writes will notice too
+
+        heartbeat_thread = threading.Thread(target=heartbeat, name="ask-stream-heartbeat", daemon=True)
+        heartbeat_thread.start()
         try:
             report = self.pipeline.run(
                 question, use_mock=self.use_mock, on_event=on_event
             )
         except Exception as exc:  # pipeline.run() should not raise -- be safe
+            stop_heartbeat.set()
             print(f"[server] error: {exc}")
             traceback.print_exc()
             try:
@@ -597,6 +623,9 @@ class EvidenceHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             return
+
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=2)
 
         if not isinstance(report, dict):
             print(f"[server] error: pipeline returned {type(report).__name__}, expected dict")

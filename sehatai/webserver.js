@@ -59,7 +59,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processPatientMessage, processDietMessage } from './processMessage.js';
 import { verifyApiToken, extractBearerToken } from './auth.js';
-import { getOrResumeSession, getOrResumeDietSession } from './chatLog.js';
+import { getOrResumeSession, getOrResumeDietSession, endPatientSessions } from './chatLog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -247,6 +247,33 @@ const server = http.createServer({
       return;
     }
 
+    // "New session" button: delete the patient's chat session(s) right
+    // away rather than on their next message. Sessions are RAM-only (see
+    // chatLog.js), so this is the whole deletion.
+    if (req.method === 'POST' && req.url === '/api/session/reset') {
+      let patientId;
+      try {
+        patientId = await authenticate(req);
+      } catch (err) {
+        if (err.statusCode !== 503) throw err;
+        sendJson(res, 503, { error: 'The assistant is temporarily unavailable. Please try again in a moment.' });
+        return;
+      }
+      if (!patientId) {
+        sendJson(res, 401, { error: 'Your assistant session expired. Please try again.' });
+        return;
+      }
+      let body = {};
+      try {
+        body = (await readJsonBody(req)) || {};
+      } catch {
+        // An empty body is fine: it ends both modes.
+      }
+      const mode = body.mode === 'symptom' || body.mode === 'diet' ? body.mode : null;
+      sendJson(res, 200, { ended: endPatientSessions(patientId, mode) });
+      return;
+    }
+
     if (req.method === 'POST' && req.url === '/api/chat') {
       let patientId;
       try {
@@ -309,7 +336,11 @@ const server = http.createServer({
         ? await processDietMessage(message, patientId, resumed.sessionId)
         : await processPatientMessage(message, patientId, resumed.sessionId);
 
-      sendJson(res, 200, result);
+      // sessionIsNew: this turn started a brand-new (empty) session. A client
+      // that thought it was continuing a chat (newSession !== true) uses it
+      // to tell the patient their earlier answers were lost -- sessions are
+      // RAM-only, so a server restart or expiry silently empties them.
+      sendJson(res, 200, { ...result, sessionIsNew: Boolean(resumed.isNew) });
       return;
     }
 
@@ -325,7 +356,9 @@ const server = http.createServer({
   }
 });
 
-server.listen(PORT, () => {
+// HOST: startChat.js sets 127.0.0.1 so the no-login local chat is only
+// reachable from this machine. Unset = all interfaces (Docker/gateway).
+server.listen(PORT, process.env.HOST || undefined, () => {
   console.log(`SehatAI web UI running at http://localhost:${PORT}`);
   if (ALLOW_UNAUTHENTICATED) {
     console.log(`(dev mode — unauthenticated, treated as patient ${DEFAULT_PATIENT_ID})`);

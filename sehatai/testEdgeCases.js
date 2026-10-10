@@ -39,12 +39,42 @@
 
 import { sanityFilterSymptoms } from './symptomSanityGate.js';
 import { shareSynonymWord } from './symptomSynonyms.js';
-import { appendAccumulatedSymptoms, getAccumulatedSymptoms } from './chatLog.js';
-import { applyMixedEmotionalAcknowledgment } from './processMessage.js';
+import {
+  appendAccumulatedSymptoms,
+  getAccumulatedSymptoms,
+  setLastQuestionAsked,
+  getLastQuestionCandidates,
+  setLastQuestionCandidates,
+  getReopenedTerms,
+  addReopenedTerms,
+  markAllSymptomsFinalized,
+  getOrResumeSession,
+  endPatientSessions,
+  snapshotSession,
+  restoreSession,
+  recordEmergencyFlag,
+  getEmergencyHistory,
+  setEmergencyNoticePending,
+} from './chatLog.js';
+import {
+  applyMixedEmotionalAcknowledgment,
+  pickDistinctSpecialist,
+  channelSentence,
+  EMERGENCY_CONTINUE_RE,
+  EMERGENCY_CONTINUE_NOTE,
+  applyEmergencyContinueNote,
+  withRemovalNote,
+  keepAnswerOnAskedSymptom,
+  findMissingDetail,
+  fallbackDetailQuestion,
+} from './processMessage.js';
+import { readFile } from 'node:fs/promises';
+import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers, validateComposed } from './replyComposer.js';
 import { buildSafeDefault, SAFE_DEFAULT_RESPONSE } from './safedefault.js';
-import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE } from './symptomClassifier.js';
-import { verifyRecommendation } from './groundingVerifier.js';
-import { naturalDescriptionPassesSanityCheck, applyMixedDiagnosisDecline } from './processMessage.js';
+import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, BARE_NEGATION_RE, describeSymptomsForParse, normalizeSeverityForParse } from './symptomClassifier.js';
+import { verifyRecommendation, DISMISSIVE_PHRASES } from './groundingVerifier.js';
+import { mapTriageToUrgency } from './infermedicaClient.js';
+import { applyMixedDiagnosisDecline } from './processMessage.js';
 import { DIAGNOSIS_PATTERNS } from './safetyCheck.js';
 
 const LIVE = process.argv.includes('--live');
@@ -256,35 +286,38 @@ async function runDeterministicChecks() {
     check('does not misfire on "forgot" (past tense) or "start with"', shouldNotMatch.every((s) => !RESTART_INTENT_RE.test(s)), `false positives: ${JSON.stringify(shouldNotMatch.filter((s) => RESTART_INTENT_RE.test(s)))}`);
   }
 
-  section('Deterministic: processMessage.js natural-description negation check (the demonstrated live bug)');
+  section('Deterministic: symptomClassifier.js Infermedica /parse text (the demonstrated live bug)');
   {
-    // Live-demonstrated case: a denied symptom's natural-language
-    // description ("...but I haven't had any nausea.") got wrongly
-    // rejected by the sanity check, because normalizeText strips
-    // apostrophes BEFORE the negation-word check runs, so the "n't"
-    // pattern (the only one meant to catch a contraction) could never
-    // match anything — forcing a fallback to mechanical "(denied, ...)"
-    // phrasing that Infermedica's own parser didn't reliably read as
-    // negation, letting the denied symptom leak back in as a positive
-    // finding in the final recommendation.
+    // Live-demonstrated case: the same "joint pain, 3/10, three days"
+    // reached /parse as "...with a severity of 3..." one run (read as
+    // "Joint pain, severe, after trauma" -> Surgeon) and "moderate joint
+    // pain..." the next (-> Orthopedist), because an LLM at temperature
+    // 0.4 wrote the sentence. Durations also derailed /parse ("mild eye
+    // pain for 3 days" -> "Eye pain, unbearable" -> emergency).
     const symptoms = [
-      { term: 'nausea', present: false },
-      { term: 'headache', present: true, severity: 'mild' },
+      { term: 'joint pain', present: true, severity: '3/10', duration: 'three days' },
+      { term: 'nausea', present: false, severity: null, duration: null },
     ];
-    const goodSentence = "I've had a mild headache, but I haven't had any nausea.";
-    const goodSentenceOtherContraction = "I've had a mild headache, but I hasn't — wait, I mean I haven't had any nausea.";
-    const badSentenceNoNegationAtAll = "I've had a mild headache and nausea for a couple days.";
+    const text = describeSymptomsForParse(symptoms);
     check(
-      'a correctly-negated natural sentence using a contraction ("haven\'t") passes',
-      naturalDescriptionPassesSanityCheck(goodSentence, symptoms) === true
+      'the same symptoms always produce the same /parse text',
+      text === describeSymptomsForParse(symptoms) && text === "I have mild joint pain. I don't have nausea.",
+      `got: ${JSON.stringify(text)}`
     );
     check(
-      'still passes with other text around the contraction',
-      naturalDescriptionPassesSanityCheck(goodSentenceOtherContraction, symptoms) === true
+      'no number, "severity", or duration ever reaches /parse',
+      !/\d|severity|three days/i.test(text),
+      `got: ${JSON.stringify(text)}`
     );
+    const bands = {
+      '3/10': 'mild', '3': 'mild', '3 out of 10': 'mild', '5/10': 'moderate', '8 out of 10': 'severe',
+      'Moderate': 'moderate', 'a bit': 'mild', 'very bad': 'severe', 'mild': 'mild', '': null, 'odd': null, '0/10': null,
+    };
+    const wrong = Object.entries(bands).filter(([raw, want]) => normalizeSeverityForParse(raw) !== want);
     check(
-      'a sentence with NO negation at all for a denied symptom is correctly rejected',
-      naturalDescriptionPassesSanityCheck(badSentenceNoNegationAtAll, symptoms) === false
+      'recorded severities normalize to mild/moderate/severe (1-3/4-6/7-10 on a 0-10 scale)',
+      wrong.length === 0,
+      `wrong: ${JSON.stringify(wrong.map(([raw]) => [raw, normalizeSeverityForParse(raw)]))}`
     );
   }
 
@@ -373,6 +406,257 @@ async function runDeterministicChecks() {
       DIAGNOSIS_PATTERNS.some((re) => re.test('what could this be')),
       'existing pattern regressed'
     );
+  }
+
+  {
+    // "consultation" used to map to 'urgent', so every ordinary
+    // see-a-doctor case showed an "urgency: urgent" chip.
+    const expected = {
+      emergency_ambulance: 'emergency',
+      emergency: 'emergency',
+      consultation_24: 'urgent',
+      consultation: 'routine',
+      self_care: 'routine',
+      not_a_real_level: 'urgent',
+    };
+    const wrong = Object.entries(expected).filter(([level, bucket]) => mapTriageToUrgency(level) !== bucket);
+    check(
+      'Infermedica triage levels map to the right urgency (consultation is routine, unknown is cautious)',
+      wrong.length === 0,
+      `wrong: ${JSON.stringify(wrong.map(([level]) => [level, mapTriageToUrgency(level)]))}`
+    );
+  }
+
+  section('Deterministic: bare "no" (a one-word answer that needs a remembered question)');
+  {
+    // Live: "no" to "any itching, discharge, or changes in your vision?" arrived
+    // at a session with no symptoms on file (server restart) and was answered
+    // "I couldn't identify any symptoms in your message".
+    for (const no of ['no', 'No.', 'nope', 'nah', 'none', 'nothing', 'not really', 'nahi', 'nahin', 'نہیں']) {
+      check(`"${no}" is a bare negation`, BARE_NEGATION_RE.test(no));
+    }
+    for (const notBare of ['no, but my knee hurts', 'yes', 'I have no appetite', 'nothing helps the pain', 'nose bleed']) {
+      check(`"${notBare}" is NOT a bare negation`, !BARE_NEGATION_RE.test(notBare));
+    }
+  }
+
+  section('Deterministic: bare "yes" to a follow-up question (the demonstrated live bug)');
+  {
+    // Live: "yes" to "have you noticed any swelling or redness around those
+    // joints?" extracted nothing; the backstop records the question's own
+    // declared candidates on a bare affirmation only.
+    for (const yes of ['yes', 'Yes.', 'yeah', 'yess', 'yep', 'I do', 'definitely', 'haan', 'han ji', 'ji', 'jee', 'bilkul', 'ہاں', 'جی ہاں']) {
+      check(`"${yes}" is a bare affirmation`, BARE_AFFIRMATION_RE.test(yes));
+    }
+    for (const notBare of ['yes but only in the morning', 'yes, the swelling', 'no', 'nahi', 'I have a headache', 'yesterday']) {
+      check(`"${notBare}" is NOT a bare affirmation (has its own content, or isn't a yes)`, !BARE_AFFIRMATION_RE.test(notBare));
+    }
+
+    const sid = 'test-question-candidates';
+    setLastQuestionAsked(sid, 'Have you noticed any swelling or redness around those joints?');
+    setLastQuestionCandidates(sid, ['joint swelling', ' joint redness ', '']);
+    check(
+      'candidates declared with the question are stored (trimmed, empties dropped)',
+      JSON.stringify(getLastQuestionCandidates(sid)) === JSON.stringify(['joint swelling', 'joint redness']),
+      JSON.stringify(getLastQuestionCandidates(sid))
+    );
+    setLastQuestionAsked(sid, 'How long has it been going on?');
+    check('asking a new question clears the previous question\'s candidates', getLastQuestionCandidates(sid).length === 0);
+  }
+
+  section('Deterministic: an answer belongs to the symptom the question asked about (the demonstrated live bug)');
+  {
+    // Live: asked about leg pain, "2 days and 5 out of 10" was also applied
+    // to joint pain (overwriting its 6/10, few days) and the bot looped.
+    const copied = [
+      { term: 'joint pain', present: true, duration: '2 days', severity: '5/10' },
+      { term: 'leg pain', present: true, duration: '2 days', severity: '5/10' },
+    ];
+    const kept = keepAnswerOnAskedSymptom(copied, { askedSymptom: 'leg pain', knownTerms: ['joint pain', 'leg pain'], message: '2 days and 5 out of 10' });
+    check('the answer stays on leg pain only; joint pain keeps its own values', kept.length === 1 && kept[0].term === 'leg pain', JSON.stringify(kept));
+    const named = keepAnswerOnAskedSymptom(copied, { askedSymptom: 'leg pain', knownTerms: ['joint pain', 'leg pain'], message: 'both the joint and leg pain are 2 days, 5 out of 10' });
+    check('if the patient names the other symptom too, it is updated as well', named.length === 2);
+    const withNew = keepAnswerOnAskedSymptom(
+      [...copied, { term: 'fever', present: true, duration: null, severity: null }],
+      { askedSymptom: 'leg pain', knownTerms: ['joint pain', 'leg pain'], message: '2 days, 5 out of 10, and now a fever' }
+    );
+    check('a newly mentioned symptom is kept', withNew.some((s) => s.term === 'fever') && !withNew.some((s) => s.term === 'joint pain'));
+    check('no asked symptom: nothing is dropped', keepAnswerOnAskedSymptom(copied, { askedSymptom: null, knownTerms: ['joint pain', 'leg pain'], message: '2 days' }).length === 2);
+  }
+
+  section('Deterministic: the backup question never re-asks what is known (the demonstrated live bug)');
+  {
+    // Live: "only today" was given, the question AI was down, and the backup
+    // asked "how long has this been going on, and how bad is it?" anyway.
+    const gap = findMissingDetail([{ term: 'blurry vision', present: true, duration: 'today', severity: null }]);
+    check('only the missing piece (severity) is asked', gap?.missing === 'severity' && /how bad is the blurry vision/i.test(fallbackDetailQuestion(gap)) && !/how long/i.test(fallbackDetailQuestion(gap)), JSON.stringify(gap));
+    check('nothing missing: no question (moves on to the confirmation)', findMissingDetail([{ term: 'headache', present: true, duration: '2 days', severity: 'mild' }]) === null);
+    check('a removed symptom is ignored', findMissingDetail([{ term: 'nausea', present: false }, { term: 'headache', present: true, duration: '2 days', severity: null }])?.term === 'headache');
+  }
+
+  section('Deterministic: re-opened symptom stays in the round (the demonstrated live bug)');
+  {
+    // Live: "my joint pain is 8/10" after a recommendation re-opened joint
+    // pain, but on the next turn it dropped out of the round again.
+    const sid = 'test-reopened-terms';
+    appendAccumulatedSymptoms(sid, [{ term: 'joint pain', present: true, duration: 'few days', severity: '3/10' }]);
+    markAllSymptomsFinalized(sid);
+    addReopenedTerms(sid, ['Joint Pain']);
+    check('a restated finalized symptom is remembered as re-opened', getReopenedTerms(sid).includes('joint pain'), JSON.stringify(getReopenedTerms(sid)));
+    markAllSymptomsFinalized(sid);
+    check('finalizing the round clears the re-opened list', getReopenedTerms(sid).length === 0);
+  }
+
+  section('Deterministic: recommendation wording (the demonstrated live bugs)');
+  {
+    // Live: "Schedule ... a Dermatologist ... For that, you should see a Dermatologist."
+    check(
+      'cross-domain note never repeats the main recommendation',
+      pickDistinctSpecialist({ priorSpecialists: ['General Practitioner'], newSpecialists: ['Dermatologist'], mainSpecialists: ['Dermatologist'] }) === null
+    );
+    check(
+      'cross-domain note still names a genuinely different specialist',
+      pickDistinctSpecialist({ priorSpecialists: ['General Practitioner'], newSpecialists: ['Rheumatologist'], mainSpecialists: ['General Practitioner'] }) === 'Rheumatologist'
+    );
+    check(
+      'no cross-domain note without an earlier round to compare against',
+      pickDistinctSpecialist({ priorSpecialists: [], newSpecialists: ['Dermatologist'], mainSpecialists: ['General Practitioner'] }) === null
+    );
+    // Live: "handled with an in-person visit, though an in-person visit is always fine too"
+    const inPerson = channelSentence('personal_visit');
+    check('in-person channel sentence does not contradict itself', !/though an in-person visit/i.test(inPerson) && /in-person/i.test(inPerson), inPerson);
+    check('remote channel sentence still offers in-person as an option', /chat-based consultation.*in-person visit is always fine/i.test(channelSentence('text_teleconsultation')));
+    check('no channel, no sentence', channelSentence(null) === '');
+  }
+
+  section('Deterministic: sessions are RAM-only, 24h, deleted on "new session" (product requirement)');
+  {
+    const chatLogSource = await readFile(new URL('./chatLog.js', import.meta.url), 'utf8');
+    check('chatLog.js never touches the database', !/supabase/i.test(chatLogSource.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')));
+    const pid = 'test-patient-sessions';
+    const first = await getOrResumeSession(pid);
+    const again = await getOrResumeSession(pid);
+    check('a second message resumes the same session', first.isNew && !again.isNew && again.sessionId === first.sessionId);
+    appendAccumulatedSymptoms(first.sessionId, [{ term: 'headache', present: true, duration: null, severity: null }]);
+    const fresh = await getOrResumeSession(pid, { forceNew: true });
+    check('"new session" starts a different session', fresh.isNew && fresh.sessionId !== first.sessionId);
+    check('"new session" deletes the old session\'s data immediately', getAccumulatedSymptoms(first.sessionId).length === 0);
+    check('ending sessions reports what it deleted', endPatientSessions(pid) === 1 && endPatientSessions(pid) === 0);
+
+    // A failed turn must leave the conversation exactly as it was.
+    const { sessionId: sid } = await getOrResumeSession('test-patient-rollback');
+    appendAccumulatedSymptoms(sid, [{ term: 'joint pain', present: true, duration: 'few days', severity: '8/10' }]);
+    setLastQuestionAsked(sid, 'Have you noticed any swelling?');
+    const snap = snapshotSession(sid);
+    appendAccumulatedSymptoms(sid, [{ term: 'joint pain', present: false, duration: null, severity: null }]);
+    setLastQuestionAsked(sid, null);
+    restoreSession(sid, snap);
+    check('a failed turn is rolled back (symptoms and pending question kept)',
+      getAccumulatedSymptoms(sid).some((s) => s.term === 'joint pain' && s.present) && getLastQuestionCandidates(sid).length === 0);
+  }
+
+  section('Deterministic: confirmation is required before the clinical engine (product requirement)');
+  {
+    const src = await readFile(new URL('./processMessage.js', import.meta.url), 'utf8');
+    const code = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const calls = code.match(/await\s+finalizeAndRecommend\(/g) || [];
+    check('finalizeAndRecommend is called from exactly one place (the confirmed final gate)', calls.length === 1, `found ${calls.length}`);
+  }
+
+  section('Deterministic: flexible severity input (product requirement)');
+  {
+    const cases = {
+      '3/10': 'mild', '3 / 10': 'mild', '7 out of 10': 'severe', 'seven out of ten': 'severe', '5 on 10': 'moderate',
+      'level 8': 'severe', '2': 'mild', 'moderate': 'moderate', 'a lot': 'severe', 'not much': 'mild',
+      'bohat': 'severe', 'bahut zyada': 'severe', 'thora sa': 'mild', 'halka': 'mild', 'darmiyana': 'moderate',
+      'بہت': 'severe', '15/10': null,
+    };
+    const wrong = Object.entries(cases).filter(([raw, want]) => normalizeSeverityForParse(raw) !== want);
+    check('severity in numbers, words and Urdu all normalize correctly', wrong.length === 0,
+      `wrong: ${JSON.stringify(wrong.map(([raw]) => [raw, normalizeSeverityForParse(raw)]))}`);
+  }
+
+  section('Deterministic: carrying on after an emergency (product requirement)');
+  {
+    for (const yes of ['continue', 'Continue with this chat', 'ok continue', 'yes, continue', 'go ahead', 'carry on please', 'I want to continue']) {
+      check(`"${yes}" counts as Continue`, EMERGENCY_CONTINUE_RE.test(yes));
+    }
+    check('"my chest still hurts" is not a bare Continue (it is processed as new content)', !EMERGENCY_CONTINUE_RE.test('my chest still hurts'));
+    const sid = 'test-emergency-memory';
+    recordEmergencyFlag(sid, 'emergency_room');
+    check('the emergency is remembered for the rest of the session', getEmergencyHistory(sid).length === 1);
+    setEmergencyNoticePending(sid, true);
+    const noted = applyEmergencyContinueNote({ kind: 'clarification', reply: 'How long has it lasted?' }, sid);
+    check('the next reply acknowledges the earlier emergency once', noted.reply.startsWith(EMERGENCY_CONTINUE_NOTE));
+    const second = applyEmergencyContinueNote({ kind: 'clarification', reply: 'And how severe?' }, sid);
+    check('...and only once', second.reply === 'And how severe?');
+    setEmergencyNoticePending(sid, true);
+    const onEmergency = applyEmergencyContinueNote({ kind: 'emergency', reply: 'Call now.' }, sid);
+    check('never added on top of a new emergency notice', onEmergency.reply === 'Call now.');
+  }
+
+  section('Deterministic: removing a symptom is acknowledged (product requirement)');
+  {
+    const still = [{ term: 'fever', present: true, duration: '2 days', severity: null }];
+    const r = withRemovalNote({ kind: 'clarification', reply: 'How high has the fever been?' }, ['headache'], still);
+    check('a removal mixed with new info is acknowledged with what remains', /removed headache/i.test(r.reply) && /What I have now: ⟦fever/i.test(r.reply), r.reply);
+    const already = withRemovalNote({ kind: 'clarification', reply: "Got it, I've noted that you no longer have headache. So far I still have: fever." }, ['headache'], still);
+    check('not doubled when the reply already says it', !/removed headache/i.test(already.reply));
+  }
+
+  section('Deterministic: no false reassurance about a condition (product requirement)');
+  {
+    const bad = [
+      'Nausea is common in pregnancy, so this is likely nothing to worry about.',
+      'This is probably just your pregnancy.',
+      'This is most likely due to your diabetes.',
+      'Some tiredness is perfectly normal.',
+    ];
+    const good = [
+      "Nausea and tiredness can be associated with pregnancy, but given your pregnancy it's worth having them checked properly.",
+      'With your diabetes, numbness in your feet is worth having looked at soon. Schedule an appointment with a Neurologist.',
+    ];
+    for (const s of bad) check(`blocked: "${s}"`, DISMISSIVE_PHRASES.some((re) => re.test(s)));
+    for (const s of good) check(`allowed: "${s.slice(0, 60)}..."`, !DISMISSIVE_PHRASES.some((re) => re.test(s)));
+  }
+
+  section('Deterministic: AI-composed replies keep the safety nets (product requirement)');
+  {
+    // Which replies the AI rewrites vs only translates.
+    check('fixed replies are rewritten', composeModeFor({ kind: 'clarification' }, false) === 'rewrite');
+    check('AI-written questions are left alone in English', composeModeFor({ kind: 'clarification', aiWritten: true }, false) === 'none');
+    check('AI-written questions are translated for Urdu speakers', composeModeFor({ kind: 'clarification', aiWritten: true }, true) === 'translate');
+    check('recommendations are never reworded, only translated', composeModeFor({ kind: 'recommendation' }, false) === 'none' && composeModeFor({ kind: 'recommendation' }, true) === 'translate');
+    check('emergency notices are never reworded, only translated', composeModeFor({ kind: 'emergency' }, false) === 'none' && composeModeFor({ kind: 'emergency' }, true) === 'translate');
+    check('error replies are left as they are', composeModeFor({ kind: 'error' }, true) === 'none');
+
+    check('Roman Urdu is detected', looksNonEnglish(['mujhe 3 din se sar mein dard hai']));
+    check('Urdu script is detected', looksNonEnglish(['مجھے سر درد ہے']));
+    check('English is not mistaken for Urdu', !looksNonEnglish(['I have had a headache for 3 days and some nausea']));
+
+    check('list markers are stripped from what the patient sees', stripListMarkers(`So far I have: ${listMarker('headache (mild)')}.`) === 'So far I have: headache (mild).');
+
+    const orig = 'So far I have: {{LIST_1}}. Would you like to add anything, or should I go ahead?';
+    const ph = ['{{LIST_1}}'];
+    check('a faithful rewrite passes', validateComposed(orig, 'Here is what I have noted: {{LIST_1}}. Anything to add or remove, or shall I go ahead?', ph, { mode: 'rewrite' }) === null);
+    check('a Roman Urdu rewrite passes', validateComposed(orig, 'Ab tak mere paas yeh hai: {{LIST_1}}. Kuch add ya remove karna hai, ya main aage barhoon?', ph, { mode: 'rewrite' }) === null);
+    check('rejected: the AI wrote out / changed the symptom list', validateComposed(orig, 'So far I have headache and fever. Shall I go ahead?', ph, { mode: 'rewrite' }) !== null);
+    check('rejected: the list appears twice', validateComposed(orig, '{{LIST_1}} — just to repeat, {{LIST_1}}. Go ahead?', ph, { mode: 'rewrite' }) !== null);
+    check('rejected: the question was dropped', validateComposed(orig, 'Noted: {{LIST_1}}. I will go ahead now.', ph, { mode: 'rewrite' }) !== null);
+    check('rejected: diagnosis wording added', validateComposed(orig, 'Noted: {{LIST_1}}. This sounds like a migraine — shall I go ahead?', ph, { mode: 'rewrite' }) !== null);
+    check('rejected: false reassurance added', validateComposed(orig, 'Noted: {{LIST_1}}. This is probably nothing serious and not a concern. Go ahead?', ph, { mode: 'rewrite' }) !== null);
+    check('rejected: emergency wording added', validateComposed(orig, 'Noted: {{LIST_1}}. Should I go ahead, or call an ambulance?', ph, { mode: 'rewrite' }) !== null);
+    check('rejected: a translated recommendation lost the specialist name',
+      validateComposed('Schedule an appointment with a Rheumatologist.', 'Kisi jodon ke doctor se mil lein.', [], { mode: 'translate', mustKeep: ['Rheumatologist'] }) !== null);
+    const timed = 'You should aim to see a doctor within the next 24 hours.';
+    check('rejected: a number was dropped ("24 hours" -> "soon")', validateComposed(timed, 'Please see a doctor soon.', [], { mode: 'rewrite' }) !== null);
+    check('a number kept in Urdu digits passes', validateComposed(timed, 'اگلے ۲۴ گھنٹوں میں ڈاکٹر سے ملیں۔', [], { mode: 'translate' }) === null);
+    check('small-talk replies are written by the AI (greeting kind is rewritten)', composeModeFor({ kind: 'greeting' }, false) === 'rewrite');
+    for (const s of ["I don't have this symptom", 'I dont have that anymore', "it's gone now"]) {
+      check(`"${s}" is recognized as taking a symptom back (bot asks which one when there are several)`, PRONOUN_DENIAL_RE.test(s));
+    }
+    const offline = await composeReply({ reply: `So far I have: ${listMarker('cough')}. Go ahead?`, mode: 'none' });
+    check('with composing off, the original is sent with markers removed', offline.text === 'So far I have: cough. Go ahead?' && !offline.composed);
   }
 }
 
@@ -464,6 +748,50 @@ async function runLiveScenarios() {
       'plain-language symptom wording and a colloquial specialist alias are both recognized as grounded',
       result.ok === true,
       `violations: ${JSON.stringify(result.violations)}`
+    );
+  }
+
+  {
+    // Live-demonstrated case: "my knee is a bit sore after jogging".
+    // Infermedica matched "Joint pain, one knee"; the model wrote "mild
+    // joint pain" (the part before the comma plus the reported severity)
+    // and was blocked on both attempts as an ungrounded profile fact,
+    // falling back to the safe default.
+    const ctx = {
+      allowedSpecialists: ['Orthopedist'],
+      allowedLabTests: [],
+      allowedProfileFacts: [],
+      matchedSymptomNames: ['Joint pain, one knee', 'knee pain'],
+      reportedSeverities: ['mild'],
+      patientStatedText: "my knee is a bit sore after jogging yesterday\nthat's all",
+      graphUrgency: 'routine',
+      subjectInfo: { subject: 'self' },
+    };
+    const rec = (rationale) => ({
+      specialist_recommended: 'Orthopedist',
+      rationale,
+      next_steps: 'Schedule an appointment with an Orthopedist.',
+      referenced_lab_tests: [],
+      referenced_profile_facts: [],
+    });
+    const blockedOn = (result) => result.violations.filter((v) => !v.repaired).map((v) => v.detail);
+
+    const grounded = await verifyRecommendation(
+      rec('Mild joint pain after jogging is worth having an Orthopedist examine directly.'), ctx
+    );
+    check(
+      'the general part of a qualified finding name, with its reported severity, is grounded',
+      grounded.ok === true,
+      `violations: ${JSON.stringify(grounded.violations)}`
+    );
+
+    const invented = await verifyRecommendation(
+      rec('Knee pain like this, given your arthritis, is worth having an Orthopedist examine directly.'), ctx
+    );
+    check(
+      'an invented condition is still blocked',
+      blockedOn(invented).some((d) => /arthritis/i.test(d)),
+      `violations: ${JSON.stringify(invented.violations)}`
     );
   }
 

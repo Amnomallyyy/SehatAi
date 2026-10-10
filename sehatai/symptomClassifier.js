@@ -91,11 +91,19 @@ const SYMPTOM_SCHEMA = {
     // gets trusted as a real risk factor unless Infermedica's own engine
     // independently confirms it.
     mentionedConditions: { type: 'array', items: { type: 'string' } },
+    // "it got worse" / "it's getting better" — see SEVERITY CHANGED
+    // WITHOUT A NEW VALUE in the prompt. processMessage.js re-checks for
+    // an emergency with the symptoms in view when this is "worse".
+    severityTrend: { type: ['string', 'null'], enum: ['worse', 'better', null] },
   },
   required: ['symptoms'],
 };
 
-const SYMPTOM_SYSTEM = `You are a clinical text normalizer. Given a patient's free-text message, extract each symptom or physical complaint mentioned and reduce it to a SHORT, GENERIC term — e.g. "chest pain", "shortness of breath", "headache", "nausea". NEVER quote or closely paraphrase the patient's own sentence. NEVER include names, locations, exact dates, or any other identifying or narrative detail.
+const SYMPTOM_SYSTEM = `You are a clinical text normalizer. Given a patient's free-text message, extract each symptom or physical complaint mentioned and reduce it to a SHORT, GENERIC term — e.g. "chest pain", "shortness of breath", "headache", "nausea". NEVER quote or closely paraphrase the patient's own sentence. NEVER include names, places, exact dates, or any other identifying or narrative detail.
+
+ANY LANGUAGE IN, ENGLISH OUT: the patient may write in English, Urdu (Urdu script), Roman Urdu, Punjabi, or a mix within one sentence (e.g. "mujhe 3 din se sar mein bohat dard hai", "pait mein jalan", "bukhar aur khansi"). Understand all of them, and ALWAYS write every term, duration and severity in plain English ("headache", "3 days", "severe") — never leave a term in Urdu or Roman Urdu. Downstream matching only understands English terms, so an untranslated term is silently lost. Common words: dard = pain, sar = head, pait = stomach/abdomen, seena/chhati = chest, bukhar = fever, khansi = cough, ulti = vomiting, chakkar = dizziness, jalan = burning, sujan = swelling, kamar = back, jor/jodon = joints, din = days, hafta = week, bohat/zyada = severe/a lot, thora = mild.
+
+KEEP THE BODY LOCATION: when the message (or question_asked, for a reply to it) ties a complaint to a body part, keep that location in the term — "joint swelling", "joint redness", "knee pain", "eye redness" — never a bare "swelling" or "redness". A location-less term reads as a different complaint downstream (bare "redness" is matched as a skin problem) and routes the patient to the wrong specialist.
 
 PLAIN LANGUAGE, NOT MEDICAL JARGON: this term gets read back to the patient later ("So far I have: X") — it must stay recognizable as what they actually described, not a clinical label they never used. Prefer the everyday equivalent whenever one exists and is just as short/generic, even if it's less "official"-sounding: "no periods" or "missed periods" (NOT "amenorrhea"), "shortness of breath" (NOT "dyspnea"), "painful urination" (NOT "dysuria"), "blood in urine" (NOT "hematuria"), "itching" (NOT "pruritus"), "dizziness" (NOT "vertigo"), "fainting" (NOT "syncope"), "nosebleed" (NOT "epistaxis"), "ringing in ears" (NOT "tinnitus"), "light sensitivity" (NOT "photophobia"). This is about the WORD CHOICE only, not about being vague — still be specific and generic the same way "chest pain" or "nausea" already are; just say it the way the patient would recognize, not the way a chart would.
 
@@ -143,6 +151,9 @@ For each symptom also report:
 - present: false ONLY if the patient explicitly denied a SPECIFICALLY NAMED symptom (e.g. "no chest pain", "I don't have a fever", "the headache is gone now"). A bare, contentless "no"/"nope"/"not really" with no symptom named in it is NEVER a denial of anything in already_known_symptoms — it names nothing to deny, so treat it as containing no symptom information at all (return an empty array; do not mark any already_known_symptoms entry as present: false).
 - CRITICAL for a denial that refers to something in already_known_symptoms, even if the patient phrases it differently than how it's listed there (e.g. already_known_symptoms has "red-colored urine" and the patient says "I don't really have blood in urine" — same thing, different words; or already_known_symptoms has "shortness of breath" and the patient says "I can breathe fine now"): set the term field to the EXACT text of the matching already_known_symptoms entry, not a new paraphrase of the patient's own wording. This app tracks each symptom by matching term strings, so a denial recorded under different wording than the original entry silently fails to cancel it — always reuse the already_known_symptoms entry's own exact text when a denial is clearly about it.
 - ATTRIBUTE CORRECTION, NOT A DENIAL: "not" (or "isn't"/"wasn't") right before a DURATION, SEVERITY, or other descriptive qualifier — never right before the symptom noun itself — negates only that qualifier, not the symptom's presence. E.g. "my eye pain is not for 6 days" (correcting a WRONG duration this app itself applied — the patient still has eye pain, they're only saying the 6-day figure is wrong), "the headache isn't that bad", "it wasn't constant, more on and off" are all attribute corrections: present stays true (or unchanged if already true in already_known_symptoms), never present: false for these. For the specific attribute being corrected (duration and/or severity), set it to null AND set the matching durationCorrected/severityCorrected flag to true (a correction that doesn't also state what the RIGHT value is means that detail is now genuinely unknown again, not that the symptom disappeared — the flag is what tells this app to actually clear the old wrong value instead of quietly keeping it). Contrast with an actual denial, where "not"/"don't" sits directly on the symptom itself: "I don't have eye pain (anymore)", "no eye pain", "eye pain is gone" — THOSE are present: false, and durationCorrected/severityCorrected don't apply. When genuinely unsure which one a message means, prefer the attribute-correction reading over presence denial — wrongly discarding a symptom the patient still has is a worse failure than leaving one attribute blank for one more turn.
+- VAGUE "I FEEL BAD": "I suddenly feel bad", "I feel sick", "I'm not feeling well", "something feels off", "tabiyat kharab hai" — a general physical complaint with nothing more specific named — is ONE entry, term "feeling unwell", present: true (keep any duration/severity stated). The app's follow-up question will find out what exactly is wrong. Only treat it as mood instead (and extract nothing) when it is clearly about feelings, e.g. "I feel bad about what I said".
+- SEVERITY CHANGED WITHOUT A NEW VALUE: "it got worse", "the severity just increased", "the pain is worse now", "it's getting better", "dard barh gaya" — this updates already-known symptom(s), it is not a new symptom. Apply it to the symptom it names; if it names none, use the one question_asked was about, else every already_known_symptoms entry. On each: present: true, severity: null, severityCorrected: true (the old severity is out of date, so the app asks again). If a new value IS given ("it's a 9 now", "much worse, 8/10"), set severity to that value instead. In both cases also set the top-level severityTrend to "worse" or "better".
+- "WHICH ONE IS GONE?": if question_asked asks which symptom is gone / no longer present, every symptom named in the reply is present: false, using the exact already_known_symptoms term.
 - PRONOUN DENIAL: a denial can also refer to a symptom with a bare pronoun instead of naming it — "actually I don't have that anymore", "it's gone now", "that's better now". Judge by MEANING whether this is really a denial (walking back a specific already-reported symptom) versus something else that merely contains the same words — "I don't have that severe of a headache" is NOT a denial, "that" there modifies severity, not presence; "not that bad" similarly isn't a denial. When it genuinely IS a pronoun denial: if already_known_symptoms has EXACTLY ONE entry, resolve the pronoun to that entry's exact term and mark it present: false, same as any other denial. If already_known_symptoms has MORE than one entry, a bare pronoun denial is genuinely ambiguous about which one it means — do NOT guess which one; return an empty symptoms array instead (the app will ask a follow-up naturally). If already_known_symptoms is empty, there is nothing for the pronoun to refer to — also return an empty array.
 - duration: a short GENERIC duration if the patient stated one (e.g. "3 days", "2 weeks", "since this morning") — null if not stated. Never include an exact calendar date.
 - severity: a short generic severity word if stated (e.g. "mild", "moderate", "severe") — null if not stated.
@@ -261,6 +272,24 @@ export const BLANKET_WELLNESS_RE =
 export const RESTART_INTENT_RE =
   /\b(?:let'?s\s+start\s+(?:fresh|over)|start\s+(?:fresh|over)|start\s+(?:this|everything)\s+over|start\s+again|begin\s+again)\b|\bforget\s+(?:all\s+that|everything|what\s+i\s+(?:said|told\s+you))\b|\b(?:can\s+we\s+|please\s+)?(?:restart|reset)(?:\s+(?:this|the\s+conversation|everything))?\b|\bscratch\s+(?:that|all\s+that)\b/i;
 
+// Deterministic backstop for a BARE AFFIRMATION ("yes", "haan", "ji")
+// answering a targeted question that proposed new symptoms — see
+// processMessage.js's use of it with getLastQuestionCandidates. Anchored
+// to the WHOLE message so "yes but only in the morning" or "yes, the
+// swelling" (which carry their own content for the classifier to read)
+// never match. English plus the Urdu/Roman Urdu forms patients actually
+// type.
+export const BARE_AFFIRMATION_RE =
+  /^\s*(?:y+e+s+|y+e+a+h*|yep|yup|ya|yah|sure|definitely|correct|right|i\s+do|i\s+have|i\s+did|that'?s\s+right|for\s+sure|haa?n+|haa?n\s*ji|ji+|jee+|ji\s+haa?n|bilkul|han\s+ji|جی|ہاں|جی\s*ہاں)\s*[.!]*\s*$/i;
+
+// A BARE denial ("no", "nope", "nahi") -- the mirror of BARE_AFFIRMATION_RE.
+// Used to recognise a one-word answer that only makes sense as a reply to a
+// question this session no longer remembers (see processMessage.js's
+// LOST-CONTEXT reply). Anchored to the WHOLE message so "no, but my knee
+// hurts" never matches.
+export const BARE_NEGATION_RE =
+  /^\s*(?:no+|nope|nah+|na+h?|none|nothing|not\s+really|naa?hi+n?|nahin|نہیں)\s*[.!]*\s*$/i;
+
 export async function classifySymptoms(message, knownSymptomTerms = [], questionAsked = null) {
   if (!message || !message.trim()) return { symptoms: [], ambiguous: false, ambiguousValue: null, mentionedConditions: [] };
   try {
@@ -282,6 +311,12 @@ export async function classifySymptoms(message, knownSymptomTerms = [], question
         present: s.present !== false,
         duration: s.duration && String(s.duration).trim() ? String(s.duration).trim() : null,
         severity: s.severity && String(s.severity).trim() ? String(s.severity).trim() : null,
+        // BUG (found while adding "it got worse" handling): these were
+        // dropped here, so chatLog.js's appendAccumulatedSymptoms — which
+        // clears a stored value when its *Corrected flag is set — never
+        // saw them, and a corrected duration/severity silently stayed.
+        durationCorrected: s.durationCorrected === true,
+        severityCorrected: s.severityCorrected === true,
       }))
       // FIXED (demonstrated live): the prompt above is explicit that
       // present:false requires the symptom to be SPECIFICALLY NAMED in
@@ -375,6 +410,7 @@ export async function classifySymptoms(message, knownSymptomTerms = [], question
       ambiguous,
       ambiguousValue: ambiguous ? rawAmbiguousValue : null,
       mentionedConditions,
+      severityTrend: parsed?.severityTrend === 'worse' || parsed?.severityTrend === 'better' ? parsed.severityTrend : null,
     };
   } catch (err) {
     console.error('[symptomClassifier] classifySymptoms failed:', err.message);
@@ -416,76 +452,89 @@ export function formatClassifiedSymptoms(symptoms) {
 }
 
 // ============================================
-// NATURAL-LANGUAGE COMPOSITION FOR INFERMEDICA'S /parse INPUT
+// INFERMEDICA /parse INPUT — DETERMINISTIC
 //
-// finalizeAndRecommend() (processMessage.js) used to build the text it
-// sends to Infermedica's /parse by mechanically joining formatted tags
-// — "headache (mild, for 2 days); eye pain" — which reads nothing like
-// real patient language. That format is what a real conversation
-// diagnosed as the likely cause of a stuck-loop bug: /parse returned a
-// correct match but without its `orig_text` field populated, and
-// filterGroundedMentions (processMessage.js) — which exists to reject
-// mentions Infermedica invents with no basis in what was actually
-// sent — had no substring to verify, so it dropped a real finding.
+// REPLACED (demonstrated live): this used to be an LLM call at
+// temperature 0.4 that rephrased the symptom list into "natural" prose.
+// The same recorded symptoms came out worded differently every time,
+// and Infermedica's parser reacted to the wording: "joint pain (3/10,
+// for three days)" went to /parse once as "...with a severity of 3..."
+// (read as "Joint pain, severe, after trauma" -> Surgeon, urgent) and
+// once as "moderate joint pain..." (-> Orthopedist, routine).
 //
-// Per the explicit decision that produced this function: rather than
-// patch that failure by regrounding against a NEW hand-maintained list
-// of known terms/synonyms, give Groq a LITTLE more room (temperature)
-// to turn the already-decided structured symptom list into one natural
-// sentence — the kind of phrasing Infermedica's own NLP is tuned to
-// parse in the first place, since that's the kind of text real patients
-// type. This is composing PROSE from data we already fully trust (the
-// structured list itself, produced by classifySymptoms/
-// resolveFinalConfirmation above), not making a new clinical judgment —
-// there's no new fact being asserted here that classifySymptoms didn't
-// already decide, so a little temperature is safe in a way it would not
-// be for the classification step itself (which stays temperature 0).
-// The caller still runs a deterministic sanity check on the output
-// (see processMessage.js) and falls back to the old mechanical format
-// if the check fails, so a bad composition can never silently drop or
-// invent a symptom.
+// Measured against /parse directly: a bare symptom term always maps to
+// the plain finding; adding a plain severity word maps correctly to the
+// severity variant where one exists ("Headache, mild", "Abdominal pain,
+// moderate"); adding a DURATION is what derails it — "mild eye pain for
+// 3 days" came back "Eye pain, unbearable" (-> emergency), "joint pain
+// for three days" -> "Joint pain, mechanical", "severe headache for 2
+// days" -> "Headache, lasting more than 3 days" (severity lost), and
+// most durations landed in the wrong bucket. So the text sent is one
+// fixed sentence per symptom — term plus a normalized severity word,
+// no duration — and an explicit "I don't have X." for a denial (which
+// /parse reads as absent). Same input, same text, same evidence, every
+// time. Duration still reaches the recommendation prose through
+// formatClassifiedSymptoms; it just never goes through /parse.
 // ============================================
 
-const NATURAL_TEXT_SCHEMA = {
-  type: 'object',
-  properties: { sentence: { type: 'string' } },
-  required: ['sentence'],
-};
-
-const NATURAL_TEXT_SYSTEM = `You are turning a structured list of a patient's already-recorded symptoms into ONE short, natural-sounding description, the way a patient might actually say it to a doctor — not a mechanical list of tags.
-
-Rules:
-- Mention EVERY symptom term in the list. Use plain everyday phrasing where there's an obvious one, but keep each symptom clearly recognizable — do not merge or drop any of them.
-- If a symptom is marked present: false, phrase it as a clear, explicit denial ("no chest pain", "hasn't had a fever", "no nausea") — never omit it, and never phrase it so it could be misread as present.
-- Naturally weave in duration and severity ONLY where given for that symptom — do not invent or mechanically restate one that isn't there.
-- Do not add any symptom, cause, detail, or narrative that isn't in the list. Do not diagnose or speculate about a cause.
-- Keep it to 1-3 short sentences of plain English.
-
-Return ONLY the JSON — no commentary.`;
+// Standard 0-10 pain-scale bands: 1-3 mild, 4-6 moderate, 7-10 severe.
+function severityWordFromScale(n) {
+  if (!(n > 0) || n > 10) return null;
+  if (n <= 3) return 'mild';
+  if (n <= 6) return 'moderate';
+  return 'severe';
+}
 
 /**
- * @param {Array<{term:string, present:boolean, duration:string|null, severity:string|null}>} symptoms
- * @returns {Promise<string>} - empty string on failure or empty input;
- *   caller falls back to the mechanical template in that case.
+ * Normalize a recorded severity ("3/10", "3", "a bit", "Moderate") to
+ * one of mild/moderate/severe, or null when it isn't recognizable —
+ * never a number or the word "severity", both of which /parse misreads.
+ *
+ * @param {string|null} raw
+ * @returns {'mild'|'moderate'|'severe'|null}
  */
-export async function composeNaturalDescription(symptoms) {
-  if (!symptoms || !symptoms.length) return '';
-  try {
-    const parsed = await callAIStructured({
-      system: NATURAL_TEXT_SYSTEM,
-      message: JSON.stringify({ symptoms }),
-      schema: NATURAL_TEXT_SCHEMA,
-      // A bit more room than the classification calls (which stay at 0)
-      // — see the doc comment above this function for why that's safe
-      // here specifically: this call composes phrasing, not a new
-      // clinical fact.
-      temperature: 0.4,
-    });
-    return String(parsed?.sentence || '').trim();
-  } catch (err) {
-    console.error('[symptomClassifier] composeNaturalDescription failed (non-fatal, caller falls back to templated text):', err.message);
-    return '';
+export function normalizeSeverityForParse(raw) {
+  const NUMBER_WORDS = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  const s = String(raw || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => String(NUMBER_WORDS[w]));
+  if (!s) return null;
+  // "3/10", "3 / 10", "3 out of 10", "3 of 10", "3 on 10", "level 3", "3/10 pain", a bare "3"
+  const scale =
+    s.match(/(\d+(?:\.\d+)?)\s*(?:\/|out\s+of|of|on)\s*10\b/) ||
+    s.match(/\b(?:level|scale|rating|rated|rate\s+it)\s*(?:of\s+|at\s+|a\s+)?(\d+(?:\.\d+)?)\b/) ||
+    s.match(/^(\d+(?:\.\d+)?)$/);
+  if (scale) {
+    const n = parseFloat(scale[1]);
+    if (n >= 0 && n <= 10) return severityWordFromScale(n);
   }
+  // English, plus the Urdu / Roman Urdu words patients actually use
+  // (the classifier is asked to translate, this is the backstop).
+  if (/\b(severe|extreme|excruciating|unbearable|intense|worst|terrible|very bad|really bad|a lot|very painful|really painful|killing me|high|bohat|bahut|buhat|boht|zyada|ziada|shadeed|sakht)\b|بہت|شدید|زیادہ/.test(s)) return 'severe';
+  if (/\b(moderate|medium|average|so so|okay-ish|darmiyana|darmiyani|theek theek)\b|درمیانہ/.test(s)) return 'moderate';
+  if (/\b(mild|slight|slightly|minor|light|a bit|a little|low|not much|not bad|thora|thoda|halka|halki|kam)\b|تھوڑا|ہلکا|کم/.test(s)) return 'mild';
+  return null;
+}
+
+/**
+ * The exact text sent to Infermedica's /parse for a list of recorded
+ * symptoms: "I have mild joint pain. I don't have nausea."
+ *
+ * @param {Array<{term:string, present:boolean, severity?:string|null}>} symptoms
+ * @returns {string}
+ */
+export function describeSymptomsForParse(symptoms) {
+  return (symptoms || [])
+    .map((s) => {
+      const term = String(s?.term || '').trim();
+      if (!term) return '';
+      if (!s.present) return `I don't have ${term}.`;
+      const severity = normalizeSeverityForParse(s.severity);
+      return `I have ${severity ? `${severity} ` : ''}${term}.`;
+    })
+    .filter(Boolean)
+    .join(' ');
 }
 
 const COMPLAINT_SCHEMA = {

@@ -14,7 +14,7 @@ from ..dependencies import (
     ensure_report_participant,
     get_conversation_or_404,
     get_report_or_404,
-    has_reports_access_grant,
+    ensure_report_viewer,
 )
 from ..security import get_current_user, require_doctor_role
 
@@ -163,11 +163,6 @@ def list_reports_for_patient(
         )
         if connected is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not connected to this patient")
-        if not has_reports_access_grant(db, patient_id, current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This patient has not granted you access to their reports history",
-            )
 
     reports = (
         db.query(models.Report)
@@ -185,7 +180,7 @@ def get_report(
     current_user: models.User = Depends(get_current_user),
 ):
     report = get_report_or_404(db, report_id)
-    ensure_report_participant(report, current_user)
+    ensure_report_viewer(db, report, current_user)
     return _serialize_report(report)
 
 
@@ -201,7 +196,7 @@ def download_report_file(
     frontend (browsers don't attach custom headers to navigations); the
     contract doc shows the fetch+blob pattern needed instead."""
     report = get_report_or_404(db, report_id)
-    ensure_report_participant(report, current_user)
+    ensure_report_viewer(db, report, current_user)
 
     file_path = UPLOAD_DIR / report.pdf_path
     if not file_path.exists():
