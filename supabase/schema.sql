@@ -544,5 +544,33 @@ begin
             constraint uq_slot_doctor_start unique (doctor_id, starts_at)
         );
         create index if not exists appointment_slots_open_idx on appointment_slots (doctor_id, status, starts_at);
+
+        -- one row per line of the intake form's tables (allergies, existing
+        -- conditions, family history). detail1..3 meaning depends on `section`:
+        --   allergy   name=allergen,  detail1=reaction, detail2=severity
+        --   condition name=condition, detail1=since,    detail2=status
+        --   family    name=condition, detail1=relative
+        -- The bots keep reading patient_intake_form; saving the form refreshes
+        -- those lists from the names here.
+        create table if not exists intake_entries (
+            id          serial primary key,
+            user_id     integer not null references users (id) on delete cascade,
+            section     varchar(20) not null,           -- allergy | condition | family
+            position    integer not null default 0,
+            name        varchar(200) not null,
+            detail1     varchar(100),
+            detail2     varchar(100),
+            detail3     varchar(100),
+            created_at  timestamp not null default now()
+        );
+        create index if not exists intake_entries_user_idx on intake_entries (user_id, section, position);
+
+        -- top health concerns (ranked, up to 5) + when the main problem began
+        create table if not exists intake_profile (
+            user_id        integer primary key references users (id) on delete cascade,
+            concerns       json not null default '[]',
+            concern_began  varchar(100),
+            updated_at     timestamp not null default now()
+        );
     end if;
 end $$;

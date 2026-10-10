@@ -14,6 +14,8 @@ Created automatically by the backend on start (`create_all`, with row-level secu
 | `emergency_contacts` | the loved one a patient wants alerted |
 | `emergency_alerts` | audit trail and rate limit for alerts (never stores chat text) |
 | `appointment_slots` | doctor availability; booking creates a normal `appointments` row |
+| `intake_entries` | one row per line of the intake form's tables (allergies, existing conditions, family history); the bots' lists in `patient_intake_form` are refreshed from the names |
+| `intake_profile` | top health concerns (ranked, up to 5) and when the main problem began |
 
 Reused as-is: `patient_intake_form` (the triage and diet bots already read it), `medicines`, `medicine_prescriptions`, `appointments`, `connections`.
 
