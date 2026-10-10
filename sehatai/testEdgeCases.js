@@ -71,7 +71,7 @@ import {
 import { readFile } from 'node:fs/promises';
 import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers, validateComposed } from './replyComposer.js';
 import { buildSafeDefault, SAFE_DEFAULT_RESPONSE } from './safedefault.js';
-import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, describeSymptomsForParse, normalizeSeverityForParse } from './symptomClassifier.js';
+import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, BARE_NEGATION_RE, describeSymptomsForParse, normalizeSeverityForParse } from './symptomClassifier.js';
 import { verifyRecommendation, DISMISSIVE_PHRASES } from './groundingVerifier.js';
 import { mapTriageToUrgency } from './infermedicaClient.js';
 import { applyMixedDiagnosisDecline } from './processMessage.js';
@@ -425,6 +425,19 @@ async function runDeterministicChecks() {
       wrong.length === 0,
       `wrong: ${JSON.stringify(wrong.map(([level]) => [level, mapTriageToUrgency(level)]))}`
     );
+  }
+
+  section('Deterministic: bare "no" (a one-word answer that needs a remembered question)');
+  {
+    // Live: "no" to "any itching, discharge, or changes in your vision?" arrived
+    // at a session with no symptoms on file (server restart) and was answered
+    // "I couldn't identify any symptoms in your message".
+    for (const no of ['no', 'No.', 'nope', 'nah', 'none', 'nothing', 'not really', 'nahi', 'nahin', 'نہیں']) {
+      check(`"${no}" is a bare negation`, BARE_NEGATION_RE.test(no));
+    }
+    for (const notBare of ['no, but my knee hurts', 'yes', 'I have no appetite', 'nothing helps the pain', 'nose bleed']) {
+      check(`"${notBare}" is NOT a bare negation`, !BARE_NEGATION_RE.test(notBare));
+    }
   }
 
   section('Deterministic: bare "yes" to a follow-up question (the demonstrated live bug)');

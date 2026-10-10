@@ -473,3 +473,76 @@ $$;
 revoke execute on function atomic_upsert_document(jsonb) from anon, authenticated;
 revoke execute on function get_patient_timeline(uuid) from anon, authenticated;
 revoke execute on function match_patient_history(vector, uuid, integer) from anon, authenticated;
+
+-- ====================================== portal accounts / scheduling / safety
+-- CareLink-owned tables. The backend's create_all creates these on startup
+-- (and enables RLS), so running this file is OPTIONAL -- it documents them and
+-- lets you create them from the Supabase SQL editor instead. Nothing here
+-- alters an existing table. Guarded because `users` / `appointments` are
+-- created by the backend, not by this file.
+do $$
+begin
+    if to_regclass('public.users') is not null and to_regclass('public.appointments') is not null then
+        -- city / country collected at sign-up (patients and doctors)
+        create table if not exists user_locations (
+            user_id     integer primary key references users (id) on delete cascade,
+            city        varchar(100) not null,
+            country     varchar(100) not null,
+            updated_at  timestamp not null default now()
+        );
+
+        -- a row = this account's email is not confirmed yet. Accounts that
+        -- predate email confirmation have no row, so they count as confirmed.
+        create table if not exists unconfirmed_users (
+            user_id     integer primary key references users (id) on delete cascade,
+            created_at  timestamp not null default now()
+        );
+
+        -- one-time emailed tokens; only the SHA-256 hash is stored
+        create table if not exists auth_tokens (
+            id          serial primary key,
+            user_id     integer not null references users (id) on delete cascade,
+            purpose     varchar(30) not null,           -- confirm_email | reset_password
+            token_hash  varchar(64) not null unique,
+            expires_at  timestamp not null,
+            used_at     timestamp,
+            created_at  timestamp not null default now()
+        );
+        create index if not exists auth_tokens_user_idx on auth_tokens (user_id);
+
+        create table if not exists emergency_contacts (
+            user_id       integer primary key references users (id) on delete cascade,
+            name          varchar(200) not null,
+            relationship  varchar(100) not null,
+            email         varchar(255) not null,
+            phone         varchar(50),
+            updated_at    timestamp not null default now()
+        );
+
+        -- audit + rate limiting; never stores chat text
+        create table if not exists emergency_alerts (
+            id             serial primary key,
+            patient_id     integer not null references users (id) on delete cascade,
+            contact_email  varchar(255) not null,
+            trigger        varchar(20) not null,        -- button | triage
+            category       varchar(100),
+            status         varchar(20) not null,        -- sent | dry_run | failed
+            error          text,
+            created_at     timestamp not null default now()
+        );
+        create index if not exists emergency_alerts_patient_idx on emergency_alerts (patient_id, created_at);
+
+        -- doctor availability; booking creates a normal appointments row
+        create table if not exists appointment_slots (
+            id              serial primary key,
+            doctor_id       integer not null references users (id) on delete cascade,
+            starts_at       timestamp not null,
+            ends_at         timestamp not null,
+            status          varchar(10) not null default 'open',   -- open | booked
+            appointment_id  integer unique references appointments (id) on delete set null,
+            created_at      timestamp not null default now(),
+            constraint uq_slot_doctor_start unique (doctor_id, starts_at)
+        );
+        create index if not exists appointment_slots_open_idx on appointment_slots (doctor_id, status, starts_at);
+    end if;
+end $$;

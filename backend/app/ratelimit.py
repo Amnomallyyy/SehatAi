@@ -63,6 +63,11 @@ def check_login_attempt(request: Request, email: str, limit: int = 10, window_se
     _check(f"login:{client_ip(request)}:{email.lower()}", limit, window_seconds)
 
 
+def check_key(key: str, limit: int, window_seconds: float) -> None:
+    """Rate-limit on an arbitrary key (e.g. per email address)."""
+    _check(key, limit, window_seconds)
+
+
 def reset() -> None:
     """Test helper."""
     with _lock:

@@ -282,6 +282,14 @@ export const RESTART_INTENT_RE =
 export const BARE_AFFIRMATION_RE =
   /^\s*(?:y+e+s+|y+e+a+h*|yep|yup|ya|yah|sure|definitely|correct|right|i\s+do|i\s+have|i\s+did|that'?s\s+right|for\s+sure|haa?n+|haa?n\s*ji|ji+|jee+|ji\s+haa?n|bilkul|han\s+ji|جی|ہاں|جی\s*ہاں)\s*[.!]*\s*$/i;
 
+// A BARE denial ("no", "nope", "nahi") -- the mirror of BARE_AFFIRMATION_RE.
+// Used to recognise a one-word answer that only makes sense as a reply to a
+// question this session no longer remembers (see processMessage.js's
+// LOST-CONTEXT reply). Anchored to the WHOLE message so "no, but my knee
+// hurts" never matches.
+export const BARE_NEGATION_RE =
+  /^\s*(?:no+|nope|nah+|na+h?|none|nothing|not\s+really|naa?hi+n?|nahin|نہیں)\s*[.!]*\s*$/i;
+
 export async function classifySymptoms(message, knownSymptomTerms = [], questionAsked = null) {
   if (!message || !message.trim()) return { symptoms: [], ambiguous: false, ambiguousValue: null, mentionedConditions: [] };
   try {

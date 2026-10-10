@@ -169,7 +169,7 @@ function applyProfileNudge() {
   const user = auth.user();
   const nudge = document.getElementById('sidebar-nudge');
   if (!nudge) return;
-  nudge.style.display = (user?.role === 'doctor' && !user.specialization) ? 'block' : 'none';
+  nudge.style.display = (user?.role === 'doctor' && (!user.specialization || !user.city || !user.country)) ? 'block' : 'none';
 }
 
 /* Doctor-only UI affordances that aren't per-render-function conditional
@@ -190,12 +190,22 @@ function applyRoleVisibility() {
   // routers/lab_reports.py's require_patient_role.
   const uploadWrap = document.getElementById('upload-lab-report-wrap');
   if (uploadWrap) uploadWrap.style.display = isDoctor ? 'none' : '';
+  // Health intake and the Emergency button belong to patients only.
+  const intakeLink = document.getElementById('intake-nav-link');
+  if (intakeLink) intakeLink.style.display = isDoctor ? 'none' : '';
+  const emergencyBtn = document.getElementById('emergency-btn');
+  if (emergencyBtn) emergencyBtn.style.display = (auth.user() && !isDoctor) ? '' : 'none';
 }
 
 /* ── Page routing ── */
 let currentPage = null;
 
 function showPage(id) {
+  // Patients must finish the health intake before anything else.
+  if (intakeGate.locked && id !== 'intake' && id !== 'auth') {
+    if (currentPage !== 'intake') toast('Please finish your health intake first.');
+    id = 'intake';
+  }
   // Leaving the chat (by any route, not just its Back button) ends its
   // polling and drops its state, so nothing keeps running in the
   // background. A report opened FROM the chat is part of it: polling just
@@ -240,20 +250,90 @@ function showPage(id) {
 /* ============================================================
    AUTH
    ============================================================ */
+/* Which auth panel is showing: login | signup | forgot | reset | notice. The
+   Log in / Create account tabs only belong to the first two. */
+function showAuthPanel(name) {
+  const panels = {
+    login: document.getElementById('login-form'),
+    signup: document.getElementById('signup-form'),
+    forgot: document.getElementById('forgot-form'),
+    reset: document.getElementById('reset-form'),
+    notice: document.getElementById('auth-notice'),
+  };
+  Object.entries(panels).forEach(([key, el]) => { el.style.display = key === name ? 'block' : 'none'; });
+  const tabsOn = name === 'login' || name === 'signup';
+  document.querySelector('.auth-tabs').style.display = tabsOn ? '' : 'none';
+  document.querySelector('.auth-welcome').textContent = tabsOn ? 'Welcome back' : 'Your account';
+  if (tabsOn) document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+}
+
+async function authPost(path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* non-JSON error body */ }
+  return { res, data };
+}
+
+/* Opens the auth page for ?confirm=<token> / ?reset=<token> links from the
+   emails. Returns true when it took over the screen. */
+function handleAuthLinkFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const confirmToken = params.get('confirm');
+  const resetToken = params.get('reset');
+  if (!confirmToken && !resetToken) return false;
+  // Don't leave a one-time token sitting in the address bar / history.
+  history.replaceState(null, '', location.pathname);
+  showPage('auth');
+
+  if (confirmToken) {
+    showAuthNotice('Confirming your email…', 'One moment.');
+    authPost('/auth/confirm-email', { token: confirmToken }).then(({ res, data }) => {
+      if (res.ok) showAuthNotice('Email confirmed', 'Your account is ready. You can log in now.');
+      else showAuthNotice('That link didn\'t work', errMsg(data) + ' You can request a new confirmation email from the log-in page.');
+    }).catch(() => showAuthNotice('Could not reach the server', 'Please try the link again in a moment.'));
+  } else {
+    authResetToken = resetToken;
+    showAuthPanel('reset');
+  }
+  return true;
+}
+
+let authResetToken = null;
+let authResendEmail = null; // who the "Resend" button on the notice panel is for
+
+function showAuthNotice(title, text, { resendEmail = null } = {}) {
+  document.getElementById('auth-notice-title').textContent = title;
+  document.getElementById('auth-notice-text').textContent = text;
+  authResendEmail = resendEmail;
+  document.getElementById('auth-notice-resend').style.display = resendEmail ? '' : 'none';
+  showAuthPanel('notice');
+}
+
 function initAuth() {
   const tabs = document.querySelectorAll('.auth-tab');
   const loginForm = document.getElementById('login-form');
   const signupForm = document.getElementById('signup-form');
+  const forgotForm = document.getElementById('forgot-form');
+  const resetForm = document.getElementById('reset-form');
+  const resendLink = document.getElementById('resend-link');
 
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const mode = tab.dataset.tab;
-      loginForm.style.display  = mode === 'login'  ? 'block' : 'none';
-      signupForm.style.display = mode === 'signup' ? 'block' : 'none';
-    });
+    tab.addEventListener('click', () => showAuthPanel(tab.dataset.tab));
   });
+  document.querySelectorAll('[data-auth-back]').forEach(b => b.addEventListener('click', () => {
+    resendLink.style.display = 'none';
+    showAuthPanel('login');
+  }));
+
+  const showError = (form, msg) => {
+    const el = form.querySelector('.error-banner');
+    el.textContent = msg;
+    el.style.display = 'block';
+  };
 
   /* Login */
   loginForm.addEventListener('submit', async (e) => {
@@ -261,25 +341,79 @@ function initAuth() {
     const btn = loginForm.querySelector('button[type="submit"]');
     const errEl = loginForm.querySelector('.error-banner');
     errEl.style.display = 'none';
+    resendLink.style.display = 'none';
     btn.classList.add('btn-loading');
 
     try {
-      const res = await fetch(`${API}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email:    loginForm.querySelector('[name="email"]').value.trim(),
-          password: loginForm.querySelector('[name="password"]').value
-        })
+      const { res, data } = await authPost('/auth/login', {
+        email:    loginForm.querySelector('[name="email"]').value.trim(),
+        password: loginForm.querySelector('[name="password"]').value
       });
-      const data = await res.json();
-      if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
+      if (!res.ok) {
+        showError(loginForm, errMsg(data));
+        // 403 on login only ever means "email not confirmed yet".
+        if (res.status === 403) resendLink.style.display = '';
+        return;
+      }
       auth.save(data.access_token, data.user);
       onLogin();
     } catch (err) {
-      errEl.textContent = 'Could not reach the server. Is it running?';
-      errEl.style.display = 'block';
+      showError(loginForm, 'Could not reach the server. Is it running?');
     } finally { btn.classList.remove('btn-loading'); }
+  });
+
+  resendLink.addEventListener('click', async () => {
+    const email = loginForm.querySelector('[name="email"]').value.trim();
+    if (!email) { showError(loginForm, 'Enter your email above first.'); return; }
+    await resendConfirmation(email);
+  });
+  document.getElementById('auth-notice-resend').addEventListener('click', () => {
+    if (authResendEmail) resendConfirmation(authResendEmail);
+  });
+
+  async function resendConfirmation(email) {
+    try {
+      const { res, data } = await authPost('/auth/resend-confirmation', { email });
+      if (!res.ok) { toast(errMsg(data), 'error'); return; }
+      showAuthNotice('Check your email', data.message || 'If that account still needs confirming, we\'ve sent a new link.', { resendEmail: email });
+    } catch { toast('Could not reach the server.', 'error'); }
+  }
+
+  /* Forgot password */
+  document.getElementById('forgot-link').addEventListener('click', () => {
+    forgotForm.querySelector('[name="email"]').value = loginForm.querySelector('[name="email"]').value;
+    forgotForm.querySelector('.error-banner').style.display = 'none';
+    showAuthPanel('forgot');
+  });
+  forgotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = forgotForm.querySelector('button[type="submit"]');
+    forgotForm.querySelector('.error-banner').style.display = 'none';
+    btn.classList.add('btn-loading');
+    try {
+      const { res, data } = await authPost('/auth/forgot-password', { email: forgotForm.querySelector('[name="email"]').value.trim() });
+      if (!res.ok) { showError(forgotForm, errMsg(data)); return; }
+      showAuthNotice('Check your email', data.message + ' The link works for one hour.');
+    } catch { showError(forgotForm, 'Could not reach the server. Is it running?'); }
+    finally { btn.classList.remove('btn-loading'); }
+  });
+
+  /* Choose a new password */
+  resetForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = resetForm.querySelector('button[type="submit"]');
+    resetForm.querySelector('.error-banner').style.display = 'none';
+    const pw = resetForm.querySelector('[name="password"]').value;
+    if (pw !== resetForm.querySelector('[name="password2"]').value) { showError(resetForm, 'The two passwords don\'t match.'); return; }
+    btn.classList.add('btn-loading');
+    try {
+      const { res, data } = await authPost('/auth/reset-password', { token: authResetToken, new_password: pw });
+      if (!res.ok) { showError(resetForm, errMsg(data)); return; }
+      authResetToken = null;
+      resetForm.reset();
+      showAuthNotice('Password updated', data.message);
+    } catch { showError(resetForm, 'Could not reach the server. Is it running?'); }
+    finally { btn.classList.remove('btn-loading'); }
   });
 
   /* Signup: show/require date of birth + sex only for the patient role --
@@ -302,7 +436,7 @@ function initAuth() {
   // required state out of sync with the actually-selected role.
   toggleSignupPatientFields();
 
-  /* Signup */
+  /* Signup -- no auto-login: the emailed link must be used first. */
   signupForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = signupForm.querySelector('button[type="submit"]');
@@ -317,6 +451,8 @@ function initAuth() {
         name:     signupForm.querySelector('[name="name"]').value.trim(),
         email:    signupForm.querySelector('[name="email"]').value.trim(),
         password: signupForm.querySelector('[name="password"]').value,
+        city:     signupForm.querySelector('[name="city"]').value.trim(),
+        country:  signupForm.querySelector('[name="country"]').value.trim(),
         role
       };
       if (role === 'patient') {
@@ -328,15 +464,15 @@ function initAuth() {
         if (dob) body.date_of_birth = dob;
         if (sex) body.sex = sex;
       }
-      const res = await fetch(`${API}/auth/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
+      const { res, data } = await authPost('/auth/signup', body);
       if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
-      auth.save(data.access_token, data.user);
-      onLogin();
+      signupForm.reset();
+      toggleSignupPatientFields();
+      showAuthNotice(
+        'Check your email',
+        `We sent a confirmation link to ${data.email}. Click it to activate your account, then log in. The link works for 24 hours.`,
+        { resendEmail: data.email }
+      );
     } catch (err) {
       errEl.textContent = 'Could not reach the server. Is it running?';
       errEl.style.display = 'block';
@@ -352,16 +488,24 @@ function onLogin() {
   applyProfileNudge();
   applyRoleVisibility();
   updatePendingBadge();
-  if (user.role === 'doctor') loadDoctorNotifications();
-  showPage('connections');
-  loadConnections();
+  if (user.role === 'doctor') {
+    setIntakeLocked(false);
+    loadDoctorNotifications();
+    showPage('connections');
+    loadConnections();
+  } else {
+    // Patients land on the health intake until it's complete; once it is,
+    // loadIntakePage({initial:true}) moves them on to Connections.
+    setIntakeLocked(true);
+    showPage('intake');
+    loadIntakePage({ initial: true });
+  }
 }
 
 /* ============================================================
    CONNECTIONS
    ============================================================ */
 let connectionsCache = [];
-let reportsAccessCache = []; // patient-only: which doctors they've granted reports access to
 let doctorNotificationsCache = []; // doctor-only: unreviewed lab documents across all granted patients
 
 async function loadConnections() {
@@ -370,17 +514,9 @@ async function loadConnections() {
     const data = await res.json();
     if (!res.ok) { toast(errMsg(data), 'error'); return; }
     connectionsCache = data;
-    if (auth.user()?.role === 'patient') await loadReportsAccessCache();
     renderConnections(data);
     updatePendingBadge();
   } catch (err) { toast('Failed to load connections.', 'error'); }
-}
-
-async function loadReportsAccessCache() {
-  try {
-    const res = await apiFetch('/reports-access');
-    reportsAccessCache = res.ok ? await res.json() : [];
-  } catch { reportsAccessCache = []; }
 }
 
 function updatePendingBadge() {
@@ -499,9 +635,6 @@ function emptyState(iconKey, msg, hint) {
 function connectionCard(user, type, conn) {
   const me = auth.user();
   const isDoctorViewing = me.role === 'doctor';
-  const grantedDoctorIds = new Set(reportsAccessCache.filter(g => g.status === 'granted').map(g => g.doctor_id));
-  const isGranted = grantedDoctorIds.has(user.id);
-
   const div = document.createElement('div');
   div.className = `blueprint connection-card ${type}`;
   div.innerHTML = `
@@ -538,7 +671,6 @@ function connectionCard(user, type, conn) {
     const doctorId  = me.role === 'doctor'  ? me.id : user.id;
     await openConversation(patientId, doctorId, user);
   }));
-  div.querySelectorAll('.grant-toggle-input').forEach(cb => cb.addEventListener('change', () => toggleReportsAccess(cb)));
   div.querySelectorAll('.nickname-btn').forEach(b => b.addEventListener('click', () => editNickname(b)));
   div.querySelectorAll('.disconnect-btn').forEach(b => b.addEventListener('click', () => deleteConnection(
     b.dataset.id, b,
@@ -591,29 +723,6 @@ async function deleteConnection(id, btn, title, message, confirmLabel, successMs
     await loadConnections();
   } catch { toast('Failed to update connection.', 'error'); }
   finally { btn.disabled = false; }
-}
-
-async function toggleReportsAccess(cb) {
-  cb.disabled = true;
-  const doctorId = Number(cb.dataset.doctorId);
-  try {
-    if (cb.checked) {
-      const res = await apiFetch('/reports-access/grant', { method: 'POST', body: JSON.stringify({ doctor_id: doctorId }) });
-      const data = await res.json();
-      if (!res.ok) { toast(errMsg(data), 'error'); cb.checked = false; return; }
-      toast('Reports history shared with this doctor.', 'success');
-    } else {
-      const grant = reportsAccessCache.find(g => g.doctor_id === doctorId && g.status === 'granted');
-      if (grant) {
-        const res = await apiFetch(`/reports-access/${grant.id}/revoke`, { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok) { toast(errMsg(data), 'error'); cb.checked = true; return; }
-      }
-      toast('Reports history access revoked.', 'success');
-    }
-    await loadReportsAccessCache();
-  } catch { toast('Failed to update sharing setting.', 'error'); cb.checked = !cb.checked; }
-  finally { cb.disabled = false; }
 }
 
 async function editNickname(btn) {
@@ -2331,6 +2440,9 @@ function medicineDurationLabel(med) {
 
 /* Past its end date counts as finished even if never explicitly stopped. */
 function medicineIsCurrent(med) {
+  // The server computes status (active | paused | ended); older payloads
+  // fall back to the active flag and end date.
+  if (med.status) return med.status === 'active';
   if (!med.active) return false;
   const end = parseLocalDate(med.end_date);
   if (!end) return true;
@@ -2347,13 +2459,20 @@ async function loadMedicinesPage() {
     subtitle.textContent = 'Write and manage medicines for your connected patients.';
     await renderDoctorMedicines(layout);
   } else {
-    subtitle.textContent = 'Medicines prescribed by your doctors. Only your doctor can change these.';
+    subtitle.textContent = 'Medicines prescribed by your doctors. Tell us which ones you are taking; only your doctor can change the rest.';
     await renderPatientMedicines(layout);
   }
 }
 
-function medicineCard(med, { canEdit = false } = {}) {
+const MEDICINE_STATUS_PILL = {
+  active: { cls: 'accepted', label: 'Active' },
+  paused: { cls: 'pending', label: 'Paused by patient' },
+  ended: { cls: 'rejected', label: 'Ended' },
+};
+
+function medicineCard(med, { canEdit = false, patientView = false } = {}) {
   const current = medicineIsCurrent(med);
+  const pill = MEDICINE_STATUS_PILL[med.status] || MEDICINE_STATUS_PILL[current ? 'active' : 'ended'];
   const div = document.createElement('div');
   div.className = `blueprint medicine-card${current ? '' : ' stopped'}`;
   div.dataset.id = med.id;
@@ -2372,13 +2491,15 @@ function medicineCard(med, { canEdit = false } = {}) {
       ${med.notes ? `<div class="medicine-notes">${escHtml(med.notes)}</div>` : ''}
     </div>
     <div class="medicine-actions">
-      <span class="status-pill ${current ? 'accepted' : 'rejected'}">${current ? 'Active' : 'Stopped'}</span>
+      <span class="status-pill ${pill.cls}">${pill.label}</span>
+      ${patientView ? `<label class="med-taking"><input type="checkbox" class="med-taking-input" ${med.status === 'active' ? 'checked' : ''} ${med.status === 'ended' ? 'disabled' : ''}> I'm taking this</label>` : ''}
       ${med.has_attachment ? '<button class="btn btn-secondary btn-sm med-attachment-btn">View file</button>' : ''}
       ${canEdit ? '<button class="btn btn-ghost btn-sm med-edit-btn">Edit</button>' : ''}
-      ${canEdit && current ? '<button class="btn btn-danger btn-sm med-stop-btn">Stop</button>' : ''}
     </div>`;
   const attBtn = div.querySelector('.med-attachment-btn');
   if (attBtn) attBtn.addEventListener('click', () => openMedicineAttachment(med, attBtn));
+  const takingInput = div.querySelector('.med-taking-input');
+  if (takingInput) takingInput.addEventListener('change', () => setMedicineTaking(med, takingInput.checked, takingInput));
   return div;
 }
 
@@ -2414,7 +2535,7 @@ async function openMedicineAttachment(med, btn) {
   finally { btn.disabled = false; }
 }
 
-function renderMedicineList(container, meds, { canEditFor = null, emptyMsg, emptyHint = '' } = {}) {
+function renderMedicineList(container, meds, { canEditFor = null, patientView = false, emptyMsg, emptyHint = '' } = {}) {
   container.innerHTML = '';
   if (!meds.length) { container.innerHTML = emptyState('file', emptyMsg, emptyHint); return; }
   const current = meds.filter(medicineIsCurrent);
@@ -2429,24 +2550,39 @@ function renderMedicineList(container, meds, { canEditFor = null, emptyMsg, empt
     wrap.className = 'medicine-list';
     list.forEach(m => {
       const canEdit = canEditFor != null && m.source === 'doctor' && m.doctor_id === canEditFor;
-      const card = medicineCard(m, { canEdit });
+      const card = medicineCard(m, { canEdit, patientView });
       if (canEdit) wireDoctorMedicineCard(card, m);
       wrap.appendChild(card);
     });
     container.appendChild(wrap);
   };
   section('Current', current);
-  section('Past / stopped', past);
+  section('Inactive', past);
 }
 
-/* ── Patient: read-only ── */
+/* ── Patient: sees what the doctor wrote; can mark each medicine taking / not taking ── */
+async function setMedicineTaking(med, taking, input) {
+  input.disabled = true;
+  try {
+    const res = await apiFetch(`/medicines/${med.id}/taking`, { method: 'PATCH', body: JSON.stringify({ taking }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { toast(errMsg(data), 'error'); input.checked = !taking; input.disabled = false; return; }
+    toast(taking ? `Marked ${med.name} as taking.` : `Marked ${med.name} as not taking.`, 'success');
+    renderPatientMedicines(document.getElementById('medicines-layout'));
+  } catch (err) {
+    toast(err.message || 'Could not reach the server.', 'error');
+    input.checked = !taking; input.disabled = false;
+  }
+}
+
 async function renderPatientMedicines(layout) {
   try {
     const res = await apiFetch('/medicines/me');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { layout.innerHTML = emptyState('alert', 'Failed to load medicines.', errMsg(data)); return; }
-    layout.innerHTML = '<div class="medicine-readonly-note">These are set by your doctor and can\'t be edited here. Ask your doctor if something looks wrong.</div><div id="medicine-list-wrap"></div>';
+    layout.innerHTML = '<div class="medicine-readonly-note">Your doctor sets the medicine, dose and dates. Use the checkbox to tell us whether you are taking it. Your doctor and the assistant can see this.</div><div id="medicine-list-wrap"></div>';
     renderMedicineList(layout.querySelector('#medicine-list-wrap'), data, {
+      patientView: true,
       emptyMsg: 'No medicines yet.',
       emptyHint: 'Medicines your doctor prescribes will appear here.',
     });
@@ -2609,15 +2745,6 @@ async function loadDoctorPatientMedicines() {
 }
 
 function wireDoctorMedicineCard(card, med) {
-  const stopBtn = card.querySelector('.med-stop-btn');
-  if (stopBtn) {
-    stopBtn.addEventListener('click', async () => {
-      if (!confirm(`Stop ${med.name}? It will stay in the patient's history as stopped.`)) return;
-      const fd = new FormData();
-      fd.append('stop', 'true');
-      await patchMedicine(med, fd, stopBtn, `${med.name} stopped.`);
-    });
-  }
   const editBtn = card.querySelector('.med-edit-btn');
   if (editBtn) editBtn.addEventListener('click', () => openMedicineEditor(card, med));
 }
@@ -2683,15 +2810,19 @@ async function patchMedicine(med, formData, btn, successMsg, showErr = null) {
 async function loadCalendarPage() {
   const layout = document.getElementById('calendar-layout');
   const me = auth.user();
+  const isDoctor = me.role === 'doctor';
+  // Doctors can still add an appointment directly; patients can only book
+  // one of their doctor's open slots (the server enforces this too).
   layout.innerHTML = `
+    <div id="slots-section"></div>
     <div class="calendar-toolbar">
       <div class="calendar-scope-tabs">
         <button class="tag tag-accent calendar-scope-chip active" data-scope="upcoming">Upcoming</button>
         <button class="tag tag-outline calendar-scope-chip" data-scope="past">Past</button>
       </div>
-      <button class="btn btn-primary btn-sm" id="add-appointment-btn">+ Add appointment</button>
+      ${isDoctor ? '<button class="btn btn-primary btn-sm" id="add-appointment-btn">+ Add appointment</button>' : ''}
     </div>
-    <div class="blueprint add-appointment-form" id="add-appointment-form">
+    ${isDoctor ? `<div class="blueprint add-appointment-form" id="add-appointment-form">
       <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
       <div class="error-banner" id="appt-form-error" style="display:none"></div>
       <div class="upload-form-row">
@@ -2712,11 +2843,12 @@ async function loadCalendarPage() {
         <button type="button" class="btn btn-primary btn-sm" id="appt-submit-btn">Create appointment</button>
         <button type="button" class="btn btn-ghost btn-sm" id="appt-cancel-btn">Cancel</button>
       </div>
-    </div>
+    </div>` : ''}
     <div class="appointments-list" id="appointments-list"></div>`;
 
-  await populateAppointmentOtherSelect();
+  if (isDoctor) await populateAppointmentOtherSelect();
   wireCalendarToolbar(layout);
+  renderSlotsSection(layout.querySelector('#slots-section'));
   await loadAppointmentsList('upcoming');
 }
 
@@ -2724,6 +2856,7 @@ async function populateAppointmentOtherSelect() {
   const me = auth.user();
   const role = me.role === 'doctor' ? 'patient' : 'doctor';
   const sel = document.getElementById('appt-other-select');
+  if (!sel) return;
   try {
     const res = await apiFetch(`/users?role=${role}`);
     const users = res.ok ? await res.json() : [];
@@ -2738,15 +2871,6 @@ async function populateAppointmentOtherSelect() {
 }
 
 function wireCalendarToolbar(layout) {
-  const form = document.getElementById('add-appointment-form');
-  const toggleBtn = document.getElementById('add-appointment-btn');
-  const cancelBtn = document.getElementById('appt-cancel-btn');
-  const submitBtn = document.getElementById('appt-submit-btn');
-  const errEl = document.getElementById('appt-form-error');
-
-  toggleBtn.addEventListener('click', () => { form.classList.toggle('open'); errEl.style.display = 'none'; });
-  cancelBtn.addEventListener('click', () => { form.classList.remove('open'); errEl.style.display = 'none'; });
-
   layout.querySelectorAll('.calendar-scope-chip').forEach(tab => {
     tab.addEventListener('click', () => {
       layout.querySelectorAll('.calendar-scope-chip').forEach((t) => {
@@ -2758,6 +2882,16 @@ function wireCalendarToolbar(layout) {
       loadAppointmentsList(tab.dataset.scope);
     });
   });
+
+  const form = document.getElementById('add-appointment-form');
+  if (!form) return; // patients have no free-form "add appointment"
+  const toggleBtn = document.getElementById('add-appointment-btn');
+  const cancelBtn = document.getElementById('appt-cancel-btn');
+  const submitBtn = document.getElementById('appt-submit-btn');
+  const errEl = document.getElementById('appt-form-error');
+
+  toggleBtn.addEventListener('click', () => { form.classList.toggle('open'); errEl.style.display = 'none'; });
+  cancelBtn.addEventListener('click', () => { form.classList.remove('open'); errEl.style.display = 'none'; });
 
   submitBtn.addEventListener('click', async () => {
     errEl.style.display = 'none';
@@ -2812,6 +2946,217 @@ async function loadAppointmentsList(scope) {
     }
     data.forEach(a => listEl.appendChild(appointmentCard(a)));
   } catch { listEl.innerHTML = emptyState('alert', 'Failed to load appointments.', ''); }
+}
+
+/* ── Availability (doctor) + booking (patient) ──
+   Server: routers/appointment_slots.py. Times are naive UTC strings. */
+function slotDate(iso) { return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')); }
+function fmtSlotTime(iso) { return slotDate(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); }
+function fmtSlotDay(iso) {
+  return slotDate(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+function groupSlotsByDay(slots) {
+  const groups = new Map();
+  slots.forEach((sl) => {
+    const key = fmtSlotDay(sl.starts_at);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(sl);
+  });
+  return groups;
+}
+
+function renderSlotsSection(wrap) {
+  if (!wrap) return;
+  if (auth.user().role === 'doctor') renderDoctorAvailability(wrap);
+  else renderPatientBooking(wrap);
+}
+
+function renderDoctorAvailability(wrap) {
+  wrap.innerHTML = `
+    <div class="blueprint slots-card">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="slots-head">
+        <h3>My availability</h3>
+        <button class="btn btn-secondary btn-sm" id="slots-add-toggle">+ Add availability</button>
+      </div>
+      <p class="t-xs">Connected patients can book these times. A booked time disappears for everyone else.</p>
+      <div class="slots-form" id="slots-form" style="display:none">
+        <div class="error-banner" id="slots-error" style="display:none"></div>
+        <div class="upload-form-row">
+          <div class="field"><label for="slots-date">Day</label><input type="date" id="slots-date"></div>
+          <div class="field"><label for="slots-from">From</label><input type="time" id="slots-from" value="09:00"></div>
+          <div class="field"><label for="slots-to">To</label><input type="time" id="slots-to" value="12:00"></div>
+          <div class="field"><label for="slots-length">Each slot</label>
+            <select id="slots-length"><option value="15">15 min</option><option value="20">20 min</option><option value="30" selected>30 min</option><option value="45">45 min</option><option value="60">60 min</option></select>
+          </div>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="slots-create-btn">Publish availability</button>
+      </div>
+      <div id="slots-list"></div>
+    </div>`;
+  const form = wrap.querySelector('#slots-form');
+  wrap.querySelector('#slots-add-toggle').addEventListener('click', () => {
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+  });
+  const errEl = wrap.querySelector('#slots-error');
+  wrap.querySelector('#slots-create-btn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    errEl.style.display = 'none';
+    const day = wrap.querySelector('#slots-date').value;
+    const from = wrap.querySelector('#slots-from').value;
+    const to = wrap.querySelector('#slots-to').value;
+    const fail = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+    if (!day || !from || !to) return fail('Please choose a day and a start and end time.');
+    const start = new Date(`${day}T${from}`);
+    const end = new Date(`${day}T${to}`);
+    if (isNaN(start) || isNaN(end) || end <= start) return fail('The end time must be after the start time.');
+    btn.disabled = true; btn.classList.add('btn-loading');
+    try {
+      const res = await apiFetch('/appointment-slots', {
+        method: 'POST',
+        body: JSON.stringify({ start: start.toISOString(), end: end.toISOString(), slot_minutes: Number(wrap.querySelector('#slots-length').value) })
+      });
+      const data = await res.json();
+      if (!res.ok) return fail(errMsg(data));
+      toast(`${data.length} slot${data.length === 1 ? '' : 's'} added.`, 'success');
+      loadDoctorSlots(wrap);
+    } catch { fail('Failed to add availability.'); }
+    finally { btn.disabled = false; btn.classList.remove('btn-loading'); }
+  });
+  loadDoctorSlots(wrap);
+}
+
+async function loadDoctorSlots(wrap) {
+  const list = wrap.querySelector('#slots-list');
+  list.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch('/appointment-slots/mine');
+    const slots = await res.json();
+    if (!res.ok) { list.innerHTML = `<p class="t-xs">${escHtml(errMsg(slots))}</p>`; return; }
+    if (!slots.length) { list.innerHTML = '<p class="t-xs" style="margin-top:12px">No upcoming availability yet. Add some so patients can book you.</p>'; return; }
+    list.innerHTML = '';
+    for (const [day, daySlots] of groupSlotsByDay(slots)) {
+      const h = document.createElement('div');
+      h.className = 'slots-day'; h.textContent = day;
+      list.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'slots-grid';
+      daySlots.forEach((sl) => {
+        const item = document.createElement('div');
+        item.className = `slot-chip ${sl.status}`;
+        const time = document.createElement('span');
+        time.textContent = `${fmtSlotTime(sl.starts_at)} – ${fmtSlotTime(sl.ends_at)}`;
+        item.appendChild(time);
+        const tag = document.createElement('span');
+        tag.className = 'slot-tag';
+        tag.textContent = sl.status === 'booked' ? (sl.patient_name ? `Booked · ${sl.patient_name}` : 'Booked') : 'Open';
+        item.appendChild(tag);
+        if (sl.status === 'open') {
+          const del = document.createElement('button');
+          del.type = 'button'; del.className = 'tag-x'; del.textContent = '×'; del.title = 'Remove this slot';
+          del.addEventListener('click', async () => {
+            del.disabled = true;
+            try {
+              const r = await apiFetch(`/appointment-slots/${sl.id}`, { method: 'DELETE' });
+              if (!r.ok) { toast(errMsg(await r.json().catch(() => ({}))), 'error'); del.disabled = false; return; }
+              loadDoctorSlots(wrap);
+            } catch { toast('Could not remove the slot.', 'error'); del.disabled = false; }
+          });
+          item.appendChild(del);
+        }
+        row.appendChild(item);
+      });
+      list.appendChild(row);
+    }
+  } catch { list.innerHTML = '<p class="t-xs">Failed to load availability.</p>'; }
+}
+
+async function renderPatientBooking(wrap) {
+  wrap.innerHTML = `
+    <div class="blueprint slots-card">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="slots-head"><h3>Book an appointment</h3></div>
+      <p class="t-xs">Pick a time your doctor has made available. Only doctors you are connected to are listed.</p>
+      <div class="field" style="max-width:320px;margin-top:10px"><label for="book-doctor">Doctor</label><select id="book-doctor"></select></div>
+      <div id="book-slots"></div>
+    </div>`;
+  const sel = wrap.querySelector('#book-doctor');
+  const out = wrap.querySelector('#book-slots');
+  let doctors = [];
+  try {
+    const res = await apiFetch('/users?role=doctor');
+    doctors = res.ok ? await res.json() : [];
+  } catch { /* handled below */ }
+  if (!doctors.length) {
+    sel.innerHTML = '<option value="">No connected doctors</option>';
+    out.innerHTML = '<p class="t-xs">Connect with a doctor first (Connections page) to see their availability.</p>';
+    return;
+  }
+  sel.innerHTML = doctors.map(d => `<option value="${d.id}">${escHtml(d.name)}${d.specialization ? ' · ' + escHtml(d.specialization) : ''}</option>`).join('');
+  const load = () => loadOpenSlots(out, Number(sel.value), doctors.find(d => d.id === Number(sel.value))?.name || 'your doctor');
+  sel.addEventListener('change', load);
+  load();
+}
+
+async function loadOpenSlots(out, doctorId, doctorName) {
+  out.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch(`/appointment-slots?doctor_id=${doctorId}`);
+    const slots = await res.json();
+    if (!res.ok) { out.innerHTML = `<p class="t-xs">${escHtml(errMsg(slots))}</p>`; return; }
+    if (!slots.length) { out.innerHTML = `<p class="t-xs" style="margin-top:10px">${escHtml(doctorName)} has no open times right now. Check back later.</p>`; return; }
+    out.innerHTML = '';
+    for (const [day, daySlots] of groupSlotsByDay(slots)) {
+      const h = document.createElement('div');
+      h.className = 'slots-day'; h.textContent = day;
+      out.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'slots-grid';
+      daySlots.forEach((sl) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'slot-chip open slot-book';
+        b.textContent = `${fmtSlotTime(sl.starts_at)} – ${fmtSlotTime(sl.ends_at)}`;
+        b.addEventListener('click', () => bookSlot(sl, doctorName, () => loadOpenSlots(out, doctorId, doctorName)));
+        row.appendChild(b);
+      });
+      out.appendChild(row);
+    }
+  } catch { out.innerHTML = '<p class="t-xs">Failed to load available times.</p>'; }
+}
+
+function bookSlot(slot, doctorName, refresh) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:420px">
+      <div class="modal-header"><h2>Book this time?</h2></div>
+      <div style="padding:16px 20px">
+        <p style="margin:0 0 12px;line-height:1.5"><strong>${escHtml(doctorName)}</strong><br>${escHtml(fmtSlotDay(slot.starts_at))}, ${escHtml(fmtSlotTime(slot.starts_at))} – ${escHtml(fmtSlotTime(slot.ends_at))}</p>
+        <div class="field" style="margin:0"><label for="book-reason">Reason (optional)</label><input type="text" id="book-reason" maxlength="500" placeholder="e.g. Follow-up checkup"></div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" id="book-cancel">Never mind</button>
+        <button class="btn btn-primary btn-sm" id="book-ok">Book</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#book-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  const ok = overlay.querySelector('#book-ok');
+  ok.addEventListener('click', async () => {
+    ok.disabled = true;
+    try {
+      const res = await apiFetch(`/appointment-slots/${slot.id}/book`, {
+        method: 'POST', body: JSON.stringify({ reason: overlay.querySelector('#book-reason').value.trim() || null })
+      });
+      const data = await res.json();
+      if (!res.ok) { toast(errMsg(data), 'error'); close(); refresh(); return; }
+      toast('Appointment booked.', 'success');
+      close(); refresh();
+      loadAppointmentsList(document.querySelector('.calendar-scope-chip.active')?.dataset.scope || 'upcoming');
+    } catch { toast('Could not book the appointment.', 'error'); ok.disabled = false; }
+  });
 }
 
 const REMINDER_LABELS = { '2h': 'In ~2 hours', '1d': 'Tomorrow', '3d': 'In ~3 days' };
@@ -2883,6 +3228,16 @@ function renderProfilePage(user) {
         <label for="profile-name-input">Full name</label>
         <input type="text" id="profile-name-input" value="${escHtml(user.name)}" maxlength="200">
       </div>
+      <div class="auth-row-2">
+        <div class="field">
+          <label for="profile-city-input">City</label>
+          <input type="text" id="profile-city-input" value="${escHtml(user.city || '')}" maxlength="100" placeholder="e.g. Lahore">
+        </div>
+        <div class="field">
+          <label for="profile-country-input">Country</label>
+          <input type="text" id="profile-country-input" value="${escHtml(user.country || '')}" maxlength="100" placeholder="e.g. Pakistan">
+        </div>
+      </div>
 
       ${isDoctor ? `
       <div class="field">
@@ -2938,6 +3293,10 @@ async function saveProfile(isDoctor) {
   const payload = {};
   const name = document.getElementById('profile-name-input').value.trim();
   if (name) payload.name = name;
+  const city = document.getElementById('profile-city-input').value.trim();
+  const country = document.getElementById('profile-country-input').value.trim();
+  if (city) payload.city = city;
+  if (country) payload.country = country;
   if (isDoctor) {
     const sel = document.getElementById('profile-specialization-select').value;
     const other = document.getElementById('profile-specialization-other')?.value.trim();
@@ -3011,6 +3370,9 @@ function initNav() {
       } else if (page === 'medicines') {
         showPage('medicines');
         loadMedicinesPage();
+      } else if (page === 'intake') {
+        showPage('intake');
+        loadIntakePage();
       } else if (page === 'profile') {
         showPage('profile');
         loadProfilePage();
@@ -3034,11 +3396,13 @@ function initNav() {
     stopCommentPolling();
     auth.clear();
     connectionsCache = [];
-    reportsAccessCache = [];
     convState = null;
     reportState = null;
+    setIntakeLocked(false);
+    document.getElementById('emergency-btn').style.display = 'none';
     showPage('auth');
   });
+  document.getElementById('emergency-btn').addEventListener('click', () => sendEmergencyAlert('button'));
 }
 
 /* ============================================================
@@ -3256,9 +3620,12 @@ function renderAssistantReply(result) {
           showPage('profile');
           loadProfilePage();
         } else {
-          // "notify" -- no real integration to emergency services/
-          // contacts in this app, just acknowledges the choice.
-          actionsDiv.innerHTML = '<span class="t-xs" style="color:var(--text-light)">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
+          // "notify": email the patient's emergency contact (after a confirm
+          // step). The other buttons stay usable, so they can still Continue.
+          sendEmergencyAlert('triage', result.emergencyCategory || null).then((outcome) => {
+            actionsDiv.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+            if (outcome === 'sent') { btn.disabled = true; btn.textContent = 'Contact notified'; }
+          });
         }
       });
       actionsDiv.appendChild(btn);
@@ -3318,6 +3685,12 @@ async function sendAssistantMessage(explicitText) {
       assistantBubble('bot', `<span style="color:var(--red)">${escHtml(result.error || `HTTP ${res.status}`)}</span>`);
     } else {
       sehataiSessionIds[assistantMode] = result.sessionId || sehataiSessionIds[assistantMode];
+      // We expected to continue an existing conversation, but the server had
+      // to start a fresh one (it restarted, or the session expired -- sessions
+      // are RAM-only). Say so, instead of letting the next answer look ignored.
+      if (result.sessionIsNew && !isFirstMessageThisMode) {
+        assistantBubble('bot', '<em>Heads up: the assistant lost track of this conversation (it may have restarted), so your earlier symptoms are no longer on file. Please tell me your symptoms again.</em>');
+      }
       renderAssistantReply(result);
     }
     saveAssistantThread();
@@ -3608,6 +3981,293 @@ function initEvidenceComposer() {
 /* ============================================================
    BOOT
    ============================================================ */
+/* ============================================================
+   HEALTH INTAKE (patients) -- required before using the portal
+   Server: routers/intake.py. The four health lists land in SehatAI's own
+   patient_intake_form table, which the triage/diet bots already read.
+   ============================================================ */
+const intakeGate = { locked: false };
+
+/* The four tables on the form. `key` is the API field; the first column is the
+   row's name (required when anything else on the row is filled in). */
+const SEVERITY_OPTIONS = [['', 'Select…'], ['mild', 'Mild'], ['moderate', 'Moderate'], ['severe', 'Severe']];
+const STATUS_OPTIONS = [['', 'Select…'], ['ongoing', 'Ongoing'], ['managed', 'Managed'], ['resolved', 'Resolved']];
+const INTAKE_TABLES = [
+  { key: 'allergies', title: 'Allergies', none: 'I have no known allergies', grid: '2fr 2fr 1.3fr 34px',
+    hint: 'Medicines, foods, or anything else that has caused a reaction.',
+    cols: [{ k: 'name', label: 'Allergic to', ph: 'e.g. Penicillin' }, { k: 'reaction', label: 'Reaction', ph: 'e.g. Rash, swelling' },
+           { k: 'severity', label: 'Severity', options: SEVERITY_OPTIONS }] },
+  { key: 'conditions', title: 'Existing medical conditions', none: 'I have no existing conditions', grid: '2fr 1.2fr 1.4fr 34px',
+    hint: 'Long-term or past conditions, for example diabetes, asthma, high blood pressure.',
+    cols: [{ k: 'name', label: 'Condition', ph: 'e.g. Asthma' }, { k: 'since', label: 'Since (year)', ph: 'e.g. 2015' },
+           { k: 'status', label: 'Status', options: STATUS_OPTIONS }] },
+  { key: 'family_history', title: 'Family medical history', none: 'Nothing relevant in my family', grid: '3fr 2fr 34px',
+    hint: 'Conditions that run in your close family.',
+    cols: [{ k: 'name', label: 'Condition', ph: 'e.g. Heart disease' }, { k: 'relative', label: 'Relative', ph: 'e.g. Mother, father, sibling' }] },
+];
+
+function setIntakeLocked(locked) {
+  intakeGate.locked = !!locked;
+  const nav = document.querySelector('.sidebar-nav');
+  if (nav) nav.classList.toggle('locked', intakeGate.locked);
+  const badge = document.getElementById('intake-badge');
+  if (badge) badge.style.display = intakeGate.locked ? '' : 'none';
+}
+
+async function loadIntakePage({ initial = false } = {}) {
+  const layout = document.getElementById('intake-layout');
+  layout.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch('/me/intake');
+    const data = await res.json();
+    if (!res.ok) {
+      layout.innerHTML = emptyState('alert', 'Couldn\'t load your health intake.', escHtml(errMsg(data)))
+        + '<button class="btn btn-secondary btn-sm" id="intake-retry" style="margin-top:12px">Try again</button>';
+      document.getElementById('intake-retry').addEventListener('click', () => loadIntakePage({ initial }));
+      return;
+    }
+    setIntakeLocked(!data.completed);
+    if (initial && data.completed) { showPage('connections'); loadConnections(); return; }
+    renderIntakeForm(layout, data);
+  } catch (err) {
+    layout.innerHTML = emptyState('alert', 'Failed to load your health intake.', 'The server may be restarting. Try again in a moment.')
+      + '<button class="btn btn-secondary btn-sm" id="intake-retry" style="margin-top:12px">Try again</button>';
+    document.getElementById('intake-retry').addEventListener('click', () => loadIntakePage({ initial }));
+  }
+}
+
+/* One row of one of the tables. Values are set via the DOM (never innerHTML). */
+function addIntakeRow(section, def, values = {}) {
+  const rows = section.querySelector('.intake-rows');
+  const row = document.createElement('div');
+  row.className = 'intake-tr intake-row';
+  row.style.gridTemplateColumns = def.grid;
+  def.cols.forEach((c) => {
+    const cell = document.createElement('div');
+    cell.className = 'intake-td';
+    cell.dataset.label = c.label;
+    let el;
+    if (c.options) {
+      el = document.createElement('select');
+      c.options.forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; el.appendChild(o); });
+    } else {
+      el = document.createElement('input');
+      el.type = 'text'; el.maxLength = c.k === 'name' ? 200 : 100; el.placeholder = c.ph || '';
+    }
+    el.className = 'intake-cell'; el.dataset.k = c.k; el.setAttribute('aria-label', c.label); el.autocomplete = 'off';
+    el.value = values[c.k] || '';
+    cell.appendChild(el);
+    row.appendChild(cell);
+  });
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'tag-x intake-del'; x.textContent = '×'; x.title = 'Remove this row'; x.setAttribute('aria-label', 'Remove this row');
+  x.addEventListener('click', () => row.remove());
+  row.appendChild(x);
+  rows.appendChild(row);
+  return row;
+}
+
+function intakeSectionRows(section) {
+  return [...section.querySelectorAll('.intake-row')]
+    .map((row) => {
+      const obj = {};
+      row.querySelectorAll('.intake-cell').forEach((el) => { obj[el.dataset.k] = el.value.trim(); });
+      return obj;
+    })
+    .filter((o) => Object.values(o).some(Boolean));
+}
+
+function renderIntakeForm(layout, data) {
+  const locked = intakeGate.locked;
+  document.getElementById('intake-subtitle').textContent = locked
+    ? 'Please complete this before using the portal. It takes about five minutes and helps the assistant and your doctors.'
+    : 'Keep this up to date. The assistant and your connected doctors use it.';
+  const hasHistory = !(data.missing || []).includes('health_history');
+  const ec = data.emergency_contact || {};
+  const needLocation = !data.city || !data.country;
+  const concerns = data.concerns || [];
+  let n = 0;
+
+  const tableSection = (def) => `
+    <section class="intake-sec" data-key="${def.key}">
+      <h2 class="intake-section-title"><span class="intake-num">${++n}</span>${escHtml(def.title)}</h2>
+      <p class="t-xs intake-hint">${escHtml(def.hint)}</p>
+      <div class="intake-table">
+        <div class="intake-tr intake-th" style="grid-template-columns:${def.grid}">${def.cols.map(c => `<div>${escHtml(c.label)}</div>`).join('')}<div></div></div>
+        <div class="intake-rows"></div>
+      </div>
+      <div class="intake-table-foot">
+        <button type="button" class="btn btn-ghost btn-sm intake-add">+ Add row</button>
+        <label class="check-row"><input type="checkbox" class="tag-none"> ${escHtml(def.none)}</label>
+      </div>
+    </section>`;
+
+  layout.innerHTML = `
+    <form id="intake-form" class="blueprint intake-form" novalidate>
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="intake-paper-title">Medical Intake Form</div>
+      <p class="intake-paper-sub">Please complete all of the following as accurately as possible.</p>
+
+      ${INTAKE_TABLES.map(tableSection).join('')}
+
+      <section class="intake-sec">
+        <h2 class="intake-section-title"><span class="intake-num">${++n}</span>Your most concerning health problems right now</h2>
+        <p class="t-xs intake-hint">List them in order of importance. Leave the rest blank.</p>
+        <ol class="intake-concerns">
+          ${[0, 1, 2, 3, 4].map(i => `<li><input type="text" class="intake-concern" maxlength="200" aria-label="Concern ${i + 1}" value="${escHtml(concerns[i] || '')}"></li>`).join('')}
+        </ol>
+        <div class="field" style="max-width:420px"><label for="ic-began">When did your main problem begin?</label>
+          <input type="text" id="ic-began" maxlength="100" placeholder="e.g. About 3 months ago" value="${escHtml(data.concern_began || '')}"></div>
+      </section>
+
+      <section class="intake-sec">
+        <h2 class="intake-section-title"><span class="intake-num">${++n}</span>Emergency contact</h2>
+        <p class="t-xs intake-hint">Someone we can email if you press the Emergency button. The email says who and where you are, never your chat or medical details.</p>
+        <div class="auth-row-2">
+          <div class="field"><label for="ic-name">Their name</label><input type="text" id="ic-name" maxlength="200" value="${escHtml(ec.name || '')}"></div>
+          <div class="field"><label for="ic-rel">Relationship</label><input type="text" id="ic-rel" maxlength="100" placeholder="e.g. Mother, spouse, friend" value="${escHtml(ec.relationship || '')}"></div>
+        </div>
+        <div class="auth-row-2">
+          <div class="field"><label for="ic-email">Their email</label><input type="email" id="ic-email" maxlength="255" value="${escHtml(ec.email || '')}"></div>
+          <div class="field"><label for="ic-phone">Their phone (optional)</label><input type="tel" id="ic-phone" maxlength="50" value="${escHtml(ec.phone || '')}"></div>
+        </div>
+      </section>
+
+      ${needLocation ? `
+      <section class="intake-sec">
+        <h2 class="intake-section-title"><span class="intake-num">${++n}</span>Your location</h2>
+        <div class="auth-row-2">
+          <div class="field"><label for="ic-city">City</label><input type="text" id="ic-city" maxlength="100" value="${escHtml(data.city || '')}"></div>
+          <div class="field"><label for="ic-country">Country</label><input type="text" id="ic-country" maxlength="100" value="${escHtml(data.country || '')}"></div>
+        </div>
+      </section>` : ''}
+
+      <div class="error-banner" id="intake-error" style="display:none"></div>
+      <button type="submit" class="btn btn-primary" id="intake-save-btn">${locked ? 'Save and continue' : 'Save changes'}</button>
+    </form>`;
+
+  INTAKE_TABLES.forEach((def) => {
+    const section = layout.querySelector(`.intake-sec[data-key="${def.key}"]`);
+    const none = section.querySelector('.tag-none');
+    const addBtn = section.querySelector('.intake-add');
+    const saved = data[def.key] || [];
+    saved.forEach((vals) => addIntakeRow(section, def, vals));
+    if (hasHistory && saved.length === 0) {
+      none.checked = true; addBtn.disabled = true;           // saved earlier as "none"
+    } else if (saved.length === 0) {
+      addIntakeRow(section, def);                           // one blank row to start
+    }
+    addBtn.addEventListener('click', () => {
+      none.checked = false;
+      const row = addIntakeRow(section, def);
+      row.querySelector('.intake-cell').focus();
+    });
+    none.addEventListener('change', () => {
+      addBtn.disabled = none.checked;
+      if (none.checked) section.querySelector('.intake-rows').innerHTML = '';
+      else if (!section.querySelector('.intake-row')) addIntakeRow(section, def);
+    });
+  });
+
+  layout.querySelector('#intake-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveIntake(layout, needLocation);
+  });
+}
+
+async function saveIntake(layout, needLocation) {
+  const errEl = layout.querySelector('#intake-error');
+  const btn = layout.querySelector('#intake-save-btn');
+  errEl.style.display = 'none';
+  const fail = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; errEl.scrollIntoView({ block: 'nearest' }); };
+
+  const body = {};
+  for (const def of INTAKE_TABLES) {
+    const section = layout.querySelector(`.intake-sec[data-key="${def.key}"]`);
+    const rows = intakeSectionRows(section);
+    const none = section.querySelector('.tag-none').checked;
+    if (rows.length === 0 && !none) return fail(`Please add at least one row to "${def.title}", or tick "${def.none}".`);
+    if (rows.some((r) => !r.name)) return fail(`In "${def.title}", every row needs a ${def.cols[0].label.toLowerCase()}.`);
+    body[def.key] = rows;
+  }
+  body.concerns = [...layout.querySelectorAll('.intake-concern')].map((i) => i.value.trim()).filter(Boolean);
+  body.concern_began = layout.querySelector('#ic-began').value.trim() || null;
+
+  const val = (id) => layout.querySelector(id).value.trim();
+  const contact = { name: val('#ic-name'), relationship: val('#ic-rel'), email: val('#ic-email'), phone: val('#ic-phone') || null };
+  if (!contact.name || !contact.relationship) return fail('Please give your emergency contact\'s name and relationship.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) return fail('Please enter a valid email address for your emergency contact.');
+  body.emergency_contact = contact;
+  if (needLocation) {
+    body.city = val('#ic-city'); body.country = val('#ic-country');
+    if (!body.city || !body.country) return fail('Please enter your city and country.');
+  }
+
+  const wasLocked = intakeGate.locked;
+  btn.classList.add('btn-loading'); btn.disabled = true;
+  try {
+    const res = await apiFetch('/me/intake', { method: 'PUT', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) return fail(errMsg(data));
+    auth.updateUser({ ...auth.user(), city: data.city, country: data.country });
+    setIntakeLocked(!data.completed);
+    toast('Health intake saved.', 'success');
+    if (wasLocked && data.completed) { showPage('connections'); loadConnections(); }
+    else renderIntakeForm(layout, data);
+  } catch (err) { fail('Failed to save. Please try again.'); }
+  finally { btn.classList.remove('btn-loading'); btn.disabled = false; }
+}
+
+/* ============================================================
+   EMERGENCY ALERT (patients)
+   One path for the always-visible Emergency button and the triage bot's
+   "Notify someone" action. Always asks first; the server emails the saved
+   contact (no chat text, no medical details) and reports honestly whether
+   it was sent. Server: routers/emergency.py.
+   Returns 'sent' | 'dry_run' | 'failed' | 'cancelled' | 'no_contact' | 'error'.
+   ============================================================ */
+let emergencyInFlight = false;
+
+async function sendEmergencyAlert(trigger, category = null) {
+  if (emergencyInFlight) return 'cancelled';
+  emergencyInFlight = true;
+  try {
+    let contact = null;
+    try {
+      const res = await apiFetch('/me/intake');
+      const data = await res.json();
+      if (res.ok) contact = data.emergency_contact;
+    } catch { /* fall through to the no-contact path */ }
+    if (!contact) {
+      toast('Add an emergency contact first.', 'error');
+      setIntakeLocked(false);
+      showPage('intake');
+      loadIntakePage();
+      return 'no_contact';
+    }
+    const ok = await confirmDialog(
+      `Alert ${contact.name}?`,
+      `We'll email ${contact.name} (${contact.relationship}) that you need help, with your name, the time and your city. ` +
+      'This does NOT contact emergency services. If you are in danger, call your local emergency number now.',
+      'Send alert'
+    );
+    if (!ok) return 'cancelled';
+
+    const res = await apiFetch('/emergency/notify', { method: 'POST', body: JSON.stringify({ trigger, category }) });
+    const data = await res.json();
+    if (!res.ok) {
+      if (data.detail === 'no_contact') { toast('Add an emergency contact first.', 'error'); showPage('intake'); loadIntakePage(); return 'no_contact'; }
+      toast(errMsg(data), 'error');
+      return 'error';
+    }
+    toast(data.detail, data.status === 'sent' ? 'success' : 'error');
+    return data.status;
+  } catch (err) {
+    toast('Could not send the alert. If this is an emergency, call your local emergency number.', 'error');
+    return 'error';
+  } finally { emergencyInFlight = false; }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initNav();
@@ -3625,7 +4285,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
   });
 
-  if (auth.token() && auth.user()) {
+  if (handleAuthLinkFromUrl()) {
+    // Opened from an emailed confirm / reset link: the auth page is showing.
+  } else if (auth.token() && auth.user()) {
     onLogin();
   } else {
     showPage('auth');

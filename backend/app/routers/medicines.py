@@ -1,6 +1,8 @@
 """
 Medicines: a connected doctor writes medicines for a patient (with an
-optional prescription file); the patient sees them read-only.
+optional prescription file). The patient sees them and can mark each one
+"taking" / "not taking"; the doctor has no stop button -- a medicine simply
+becomes inactive once its last date passes.
 
 Rows go into SehatAI's existing `medicines` table (so the triage bot's
 patient profile sees doctor-prescribed medicines too), with the
@@ -33,6 +35,25 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # same cap as prescriptions/reports
 MEDICINE_UPLOAD_DIR = UPLOAD_DIR / "medicines"
 
 
+def expire_finished_medicines(db: Session) -> int:
+    """Marks medicines whose end date has passed as inactive. Nothing else
+    does this, and the triage/diet bots only look at `active`, so without it
+    a finished course would look current to them forever. Idempotent."""
+    changed = (
+        db.query(models.Medicine)
+        .filter(models.Medicine.active.is_(True), models.Medicine.end_date.isnot(None), models.Medicine.end_date < date.today())
+        .update({models.Medicine.active: False}, synchronize_session=False)
+    )
+    db.commit()
+    return changed
+
+
+def _status(medicine: models.Medicine) -> str:
+    if medicine.end_date is not None and medicine.end_date < date.today():
+        return "ended"
+    return "active" if medicine.active else "paused"
+
+
 def _serialize(medicine: models.Medicine) -> schemas.MedicineOut:
     rx = medicine.prescription
     return schemas.MedicineOut(
@@ -41,7 +62,8 @@ def _serialize(medicine: models.Medicine) -> schemas.MedicineOut:
         dosage=medicine.dosage,
         start_date=medicine.start_date,
         end_date=medicine.end_date,
-        active=bool(medicine.active),
+        active=bool(medicine.active) and _status(medicine) != "ended",
+        status=_status(medicine),
         notes=rx.notes if rx else None,
         source="doctor" if rx else "lab_report",
         doctor_id=rx.doctor_id if rx else None,
@@ -128,6 +150,7 @@ def list_my_medicines(db: Session = Depends(get_db), current_user: models.User =
     """Patient, read-only. A patient who has never used SehatAI has no
     `patients` row yet -- that's just an empty list, not an error."""
     require_patient_role(current_user)
+    expire_finished_medicines(db)
     return _list_for(db, current_user.sehatai_patient_id)
 
 
@@ -138,6 +161,7 @@ def list_patient_medicines(
     current_user: models.User = Depends(get_current_user),
 ):
     patient = _connected_patient_or_403(db, patient_user_id, current_user)
+    expire_finished_medicines(db)
     return _list_for(db, patient.sehatai_patient_id)
 
 
@@ -203,13 +227,14 @@ async def update_medicine(
     start_date: Optional[date] = Form(None),
     end_date: Optional[date] = Form(None),
     notes: Optional[str] = Form(None),
-    stop: bool = Form(False),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     """Only the prescribing doctor, and only while still connected. Fields
-    left out are unchanged; stop=true marks it stopped (kept as history)."""
+    left out are unchanged. There is no stop: set an end date instead and the
+    medicine turns inactive after it. The patient's own taking / not-taking
+    choice (`active`) is only touched when the END DATE actually changes."""
     require_doctor_role(current_user)
     medicine = _medicine_or_404(db, medicine_id)
     rx = medicine.prescription
@@ -230,21 +255,44 @@ async def update_medicine(
         medicine.dosage = _clean(dosage, 200)
     if start_date is not None:
         medicine.start_date = start_date
-    if end_date is not None:
+    if end_date is not None and end_date != medicine.end_date:
+        was_expired = medicine.end_date is not None and medicine.end_date < date.today()
         medicine.end_date = end_date
+        if end_date < date.today():
+            medicine.active = False
+        elif was_expired:
+            # The course was extended past today; it's current again.
+            medicine.active = True
     if notes is not None:
         rx.notes = _clean(notes, 1000)
-    if stop:
-        medicine.active = False
-        if medicine.end_date is None or medicine.end_date > date.today():
-            medicine.end_date = date.today()
-    elif end_date is not None:
-        medicine.active = end_date >= date.today()
     _check_dates(medicine.start_date, medicine.end_date)
 
     if file is not None and file.filename:
         rx.attachment_path, rx.attachment_name, rx.attachment_mime = await _save_attachment(file)
     rx.updated_at = models.utc_now()
+    db.commit()
+    db.refresh(medicine)
+    return _serialize(medicine)
+
+
+@router.patch("/medicines/{medicine_id}/taking", response_model=schemas.MedicineOut)
+def set_medicine_taking(
+    medicine_id: str,
+    payload: schemas.MedicineTakingUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """The patient says whether they are taking this medicine. Stored in
+    `active`, which is what the triage/diet bots already read. Works for
+    medicines from lab reports too. A finished course can't be switched on."""
+    require_patient_role(current_user)
+    medicine = _medicine_or_404(db, medicine_id)
+    if current_user.sehatai_patient_id is None or current_user.sehatai_patient_id != medicine.patient_id:
+        # Same as "not found" -- don't confirm someone else's medicine exists.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medicine not found")
+    if payload.taking and medicine.end_date is not None and medicine.end_date < date.today():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This course has ended, so it can't be switched back on")
+    medicine.active = payload.taking
     db.commit()
     db.refresh(medicine)
     return _serialize(medicine)

@@ -176,6 +176,26 @@ def normalize_to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt
 
 
+def set_user_location(db: Session, user: models.User, city: Optional[str], country: Optional[str]) -> None:
+    """Creates/updates the user's city/country (user_locations). A partial
+    update (only city or only country) keeps whatever the other already is;
+    an account with no location yet needs both. Caller commits."""
+    city = (city or "").strip() or None
+    country = (country or "").strip() or None
+    if city is None and country is None:
+        return
+    loc = user.location
+    if loc is None:
+        if city is None or country is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please give both a city and a country")
+        user.location = models.UserLocation(city=city, country=country)
+        return
+    if city is not None:
+        loc.city = city
+    if country is not None:
+        loc.country = country
+
+
 def has_accepted_connection(db: Session, patient_id: int, doctor_id: int) -> bool:
     """The connection-authorization check repeated inline across users.py/
     reports.py/conversations.py, promoted here for new call sites

@@ -60,6 +60,10 @@
         <input type="password" id="login-password" name="password" autocomplete="current-password" required placeholder="••••••••">
       </div>
       <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Log in</button>
+      <div class="auth-links">
+        <button type="button" class="link-btn" id="forgot-link">Forgot password?</button>
+        <button type="button" class="link-btn" id="resend-link" style="display:none">Resend confirmation email</button>
+      </div>
     </form>
 
     <!-- Signup form -->
@@ -112,8 +116,55 @@
           <div class="field-hint">Used by the AI Assistant's symptom triage to give an age/sex-appropriate recommendation — without this on file, it can't give you one.</div>
         </div>
       </div>
+      <div class="auth-row-2">
+        <div class="field">
+          <label for="signup-city">City</label>
+          <input type="text" id="signup-city" name="city" autocomplete="address-level2" required maxlength="100" placeholder="e.g. Lahore">
+        </div>
+        <div class="field">
+          <label for="signup-country">Country</label>
+          <input type="text" id="signup-country" name="country" autocomplete="country-name" required maxlength="100" placeholder="e.g. Pakistan">
+        </div>
+      </div>
+      <div class="field-hint" style="margin:-6px 0 4px">Your location is shared with your connected doctors and, if you use the Emergency button, with the person you choose to alert.</div>
       <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Create account</button>
     </form>
+
+    <!-- Forgot password -->
+    <form id="forgot-form" style="display:none">
+      <h2 class="auth-panel-title">Reset your password</h2>
+      <p class="auth-panel-text">Enter your account email and we'll send you a link to choose a new password.</p>
+      <div class="error-banner" style="display:none"></div>
+      <div class="field">
+        <label for="forgot-email">Email</label>
+        <input type="email" id="forgot-email" name="email" autocomplete="email" required placeholder="you@example.com">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Send reset link</button>
+      <div class="auth-links"><button type="button" class="link-btn" data-auth-back>Back to log in</button></div>
+    </form>
+
+    <!-- Choose a new password (opened from the emailed link) -->
+    <form id="reset-form" style="display:none">
+      <h2 class="auth-panel-title">Choose a new password</h2>
+      <div class="error-banner" style="display:none"></div>
+      <div class="field">
+        <label for="reset-password">New password</label>
+        <input type="password" id="reset-password" name="password" autocomplete="new-password" required minlength="8" maxlength="72" placeholder="8+ characters">
+      </div>
+      <div class="field">
+        <label for="reset-password2">Confirm new password</label>
+        <input type="password" id="reset-password2" name="password2" autocomplete="new-password" required minlength="8" maxlength="72" placeholder="Repeat it">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Update password</button>
+    </form>
+
+    <!-- Message panel: "check your email", link results -->
+    <div id="auth-notice" style="display:none">
+      <h2 class="auth-panel-title" id="auth-notice-title"></h2>
+      <p class="auth-panel-text" id="auth-notice-text"></p>
+      <button type="button" class="btn btn-secondary btn-full" id="auth-notice-resend" style="display:none">Resend email</button>
+      <div class="auth-links"><button type="button" class="link-btn" data-auth-back>Back to log in</button></div>
+    </div>
 
     <div class="auth-compliance">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -201,6 +252,14 @@
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
           </svg>
           <span>Clinical Evidence</span>
+        </a>
+        <a href="#" class="nav-link" data-page="intake" id="intake-nav-link" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          <span>Health intake</span>
+          <div class="nav-badge" id="intake-badge" style="display:none">!</div>
         </a>
         <a href="#" class="nav-link" data-page="profile">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -454,6 +513,17 @@
         </div>
       </div>
 
+      <!-- ── Health intake page (patients) ── -->
+      <div id="intake-page" class="page">
+        <div class="page-header" style="padding-top:28px">
+          <h1>Health intake</h1>
+          <p id="intake-subtitle">Tell us about your health so the assistant and your doctors start with the full picture.</p>
+        </div>
+        <div class="intake-layout" id="intake-layout">
+          <!-- Dynamically rendered -->
+        </div>
+      </div>
+
       <!-- ── Profile page ── -->
       <div id="profile-page" class="page">
         <div class="page-header" style="padding-top:28px">
@@ -467,6 +537,11 @@
 
     </main>
   </div>
+  <!-- Patients only (shown by applyRoleVisibility). Fixed so it is also reachable on the mobile layout. -->
+  <button type="button" id="emergency-btn" class="emergency-fab" style="display:none" aria-label="Emergency: alert my emergency contact">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <span>Emergency</span>
+  </button>
 </div>
 
 <script>window.SEHAT_CONFIG = {{ sehat_config | tojson }};</script>

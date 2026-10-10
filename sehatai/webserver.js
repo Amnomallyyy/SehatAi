@@ -336,7 +336,11 @@ const server = http.createServer({
         ? await processDietMessage(message, patientId, resumed.sessionId)
         : await processPatientMessage(message, patientId, resumed.sessionId);
 
-      sendJson(res, 200, result);
+      // sessionIsNew: this turn started a brand-new (empty) session. A client
+      // that thought it was continuing a chat (newSession !== true) uses it
+      // to tell the patient their earlier answers were lost -- sessions are
+      // RAM-only, so a server restart or expiry silently empties them.
+      sendJson(res, 200, { ...result, sessionIsNew: Boolean(resumed.isNew) });
       return;
     }
 

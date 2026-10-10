@@ -1,7 +1,10 @@
 """
-Med Calendar: appointments between a connected patient/doctor pair. Either
-participant may create, edit, or cancel -- mirroring the "either participant"
-convention already used for report uploads. Reminders are computed
+Med Calendar: appointments between a connected patient/doctor pair.
+
+Patients book from the doctor's published availability (routers/
+appointment_slots.py) rather than creating free-form appointments; a doctor
+may still create one directly. Either participant may cancel, and
+cancelling re-opens the booked slot. Reminders are computed
 statelessly at request time (see dependencies.compute_active_reminder); there
 is no background scheduler and no dismissal/read-tracking table.
 """
@@ -58,6 +61,11 @@ def create_appointment(
     if current_user.id not in (payload.patient_id, payload.doctor_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="You can only create an appointment you are a part of"
+        )
+    if current_user.role == models.UserRole.patient:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please book one of your doctor's open time slots instead.",
         )
 
     patient = db.query(models.User).filter(models.User.id == payload.patient_id).first()
@@ -135,11 +143,29 @@ def update_appointment(
     _ensure_appointment_participant(appointment, current_user)
 
     if payload.scheduled_at is not None:
+        if current_user.role == models.UserRole.patient:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="To change the time, cancel this appointment and book another open slot.",
+            )
         appointment.scheduled_at = payload.scheduled_at
     if payload.reason is not None:
         appointment.reason = payload.reason
     if payload.status is not None:
         appointment.status = models.AppointmentStatus.cancelled
+
+    # A slot tied to this appointment is released when the appointment is
+    # cancelled or moved (a moved appointment no longer matches the slot).
+    if payload.status is not None or payload.scheduled_at is not None:
+        slot = (
+            db.query(models.AppointmentSlot)
+            .filter(models.AppointmentSlot.appointment_id == appointment.id)
+            .first()
+        )
+        if slot is not None:
+            slot.appointment_id = None
+            # Past slots stay booked-looking history; future ones can be booked again.
+            slot.status = "open" if slot.starts_at > models.utc_now() else "booked"
 
     db.commit()
     db.refresh(appointment)

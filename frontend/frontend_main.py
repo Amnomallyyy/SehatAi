@@ -35,18 +35,20 @@ SEHAT_CONFIG = {
 
 
 def _asset_version() -> str:
-    """Content hash of the static bundle, appended as ?v= to the CSS/JS
-    URLs. Lets the gateway cache /static/* aggressively while a new deploy
-    still reaches every browser immediately (the URL changes with the
-    content)."""
+    """Fingerprint of the static bundle (path, size, modified time of every
+    file), appended as ?v= to the CSS/JS URLs. Lets the gateway cache
+    /static/* aggressively while a change still reaches every browser
+    immediately (the URL changes with the files). Recomputed on each page
+    load -- it only stats a handful of files -- so editing a stylesheet or
+    script takes effect on the next refresh without restarting this server;
+    it used to be computed once at start-up, which left browsers on a stale
+    stylesheet after an edit."""
     digest = hashlib.sha256()
     for path in sorted((BASE / "static").rglob("*")):
         if path.is_file():
-            digest.update(path.read_bytes())
+            st = path.stat()
+            digest.update(f"{path.relative_to(BASE)}:{st.st_size}:{st.st_mtime_ns}".encode())
     return digest.hexdigest()[:12]
-
-
-ASSET_VERSION = _asset_version()
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
@@ -64,7 +66,7 @@ async def catch_all(request: Request, full_path: str):
     response = templates.TemplateResponse(
         request,
         "index.html",
-        {"sehat_config": SEHAT_CONFIG, "asset_version": ASSET_VERSION},
+        {"sehat_config": SEHAT_CONFIG, "asset_version": _asset_version()},
     )
     # The shell itself must never be cached -- it's what points browsers
     # at the current (versioned) assets.

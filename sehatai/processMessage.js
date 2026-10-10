@@ -114,7 +114,7 @@ import {
   MAX_CLARIFICATION_ROUNDS,
 } from './infermedicaClient.js';
 import { assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested, extractQuestionOptions } from './clarificationCheck.js';
-import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, describeSymptomsForParse, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, PRONOUN_DENIAL_RE } from './symptomClassifier.js';
+import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, describeSymptomsForParse, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, BARE_NEGATION_RE, PRONOUN_DENIAL_RE } from './symptomClassifier.js';
 import { sanityFilterSymptoms } from './symptomSanityGate.js';
 import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers } from './replyComposer.js';
 import { getDietResponse } from './dietBotClient.js';
@@ -2872,7 +2872,18 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // mentioned condition ("I'm pregnant") instead of a fully generic
     // "I couldn't identify any symptoms" when that's the only real
     // content in the very first message(s) of a session.
-    const reply = turnMentionedConditions.length
+    // LOST CONTEXT (found live): a one-word "yes"/"no" can only answer a
+    // question this session asked -- if the session holds NO symptoms at all,
+    // the earlier conversation is gone (the assistant restarted, or the
+    // session expired; sessions are RAM-only). "I couldn't identify any
+    // symptoms in your message" blamed the patient for that. Say what
+    // actually happened and ask them to restate.
+    const isBareYesNo = BARE_AFFIRMATION_RE.test(message) || BARE_NEGATION_RE.test(message);
+    const reply = isBareYesNo && !turnMentionedConditions.length
+      ? "I've lost track of our earlier conversation (the assistant may have restarted), so I don't have your " +
+        'symptoms on file anymore and that answer has nothing to attach to. Sorry about that — could you tell me ' +
+        "again what you're feeling physically, where it hurts, and how long it has been going on?"
+      : turnMentionedConditions.length
       ? `Thanks, I've noted that. What symptoms are you experiencing right now — where does it hurt, and how long has it been going on?`
       : streak > 2
       ? "I'm still not able to tell what's bothering you physically from your messages. Let's try once more, " +
@@ -3492,24 +3503,18 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     // emergency in this conversation, offering Continue here again was an
     // endless loop — Continue replays the same confirmation, Infermedica
     // scores the same evidence as an emergency again, Continue again...
-    // This IS the final answer for this round: give it without a Continue
-    // lock and close the round, so the next message starts fresh.
-    if (getEmergencyHistory(sessionId).length > 0) {
-      markAllSymptomsFinalized(sessionId);
-      resetClarificationCount(sessionId);
-      return envelope({
-        kind: 'emergency',
-        sessionId,
-        isEmergency: true,
-        urgency: 'emergency',
-        triageLevel,
-        emergencyCategory: triageLevel === 'emergency_ambulance' ? 'ambulance' : 'emergency_room',
-        resolvedAge: age,
-        resolvedSex: sex,
-        reply: cleanReply(`${reply} Based on everything you've described, please get emergency care now rather than booking a regular appointment.`),
-        source: 'infermedica_triage',
-      });
-    }
+    // This IS the final answer for this round -- never another Continue
+    // lock. UPDATED (product decision): it used to be a second, bare
+    // "this is an emergency" message with NO specialist, which read as the
+    // bot being stuck in a loop. The patient has already been warned and
+    // chose to continue, so fall through to the normal recommendation
+    // below: it names the specialist to see, keeps the emergency note
+    // (TRIAGE_LEVEL_NOTES) and the earlier-emergency reminder, keeps the
+    // urgency at 'emergency' (the grounding verifier repairs it to the
+    // clinical engine's level and still rejects dismissive wording), and
+    // closes the round (markAllSymptomsFinalized) so the next message
+    // starts fresh.
+    if (getEmergencyHistory(sessionId).length === 0) {
     return envelope(markEmergencyAcknowledgeable({
       kind: 'emergency',
       sessionId,
@@ -3522,6 +3527,7 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       reply: cleanReply(reply),
       source: 'infermedica_triage',
     }, sessionId, message));
+    }
   }
 
   // ------------------------------------------------------------------
