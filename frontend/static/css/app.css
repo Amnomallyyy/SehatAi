@@ -668,6 +668,16 @@ img { max-width: 100%; }
 }
 .msg-row.mine .msg-meta { text-align: right; }
 
+/* Doctor/patient chat: plain-text messages keep their line breaks;
+   pending and failed states; 44px touch targets. */
+.msg-text { white-space: pre-wrap; }
+.msg-row.msg-pending .msg-bubble { opacity: .7; }
+.msg-row.msg-failed .msg-bubble { background: transparent; color: var(--text); border: 1px solid var(--red); }
+.msg-row.msg-failed .msg-meta { color: var(--red); }
+.msg-retry-btn { min-height: 44px; margin: 0 4px 8px auto; display: flex; }
+#msg-form #msg-send-btn { min-height: 44px; min-width: 44px; }
+#msg-send-btn:focus-visible, .msg-retry-btn:focus-visible { outline: 2px solid var(--navy-mid); outline-offset: 2px; }
+
 /* ===== Clinical Evidence (EvidenceBoard) =====
    Structured data (scores, claims, ranked sources) rendered inside a
    chat bubble -- blueprint/sharp-corner treatment for the data itself,

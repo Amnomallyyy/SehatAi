@@ -301,7 +301,7 @@
           </div>
         </div>
 
-        <div class="conv-thread" id="conv-thread"></div>
+        <div class="conv-thread" id="conv-thread" aria-live="polite" aria-label="Messages"></div>
 
         <div class="conv-composer">
           <div class="upload-panel">
@@ -336,15 +336,15 @@
               </div>
             </div>
           </div>
-          <div class="composer-inner">
-            <textarea id="msg-textarea" placeholder="Type a message… (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
-            <button class="btn btn-primary" id="msg-send-btn" aria-label="Send message">
+          <form class="composer-inner" id="msg-form" novalidate>
+            <textarea id="msg-textarea" placeholder="Type a message… (Enter to send, Shift+Enter for new line)" rows="1" aria-label="Message"></textarea>
+            <button type="submit" class="btn btn-primary" id="msg-send-btn" aria-label="Send message">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"/>
                 <polygon points="22 2 15 22 11 13 2 9 22 2"/>
               </svg>
             </button>
-          </div>
+          </form>
         </div>
       </div>
 
@@ -453,6 +453,7 @@
 
 <script>window.SEHAT_CONFIG = {{ sehat_config | tojson }};</script>
 <script src="/static/js/scan3d.js?v={{ asset_version }}"></script>
+<script src="/static/js/evidence-view.js?v={{ asset_version }}"></script>
 <script src="/static/js/app.js?v={{ asset_version }}"></script>
 </body>
 </html>

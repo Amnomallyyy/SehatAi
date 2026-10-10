@@ -152,6 +152,16 @@ function applyRoleVisibility() {
 let currentPage = null;
 
 function showPage(id) {
+  // Leaving the chat (by any route, not just its Back button) ends its
+  // polling and drops its state, so nothing keeps running in the
+  // background. A report opened FROM the chat is part of it: polling just
+  // pauses, and the report's Back button resumes it (startConvPolling
+  // always clears the old timer first -- each report round-trip used to
+  // add another 3s poll on top of the existing one).
+  if (convState && id !== 'conv') {
+    if (id === 'report' && currentPage === 'conv') stopConvPolling();
+    else closeConversation();
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
 
@@ -697,7 +707,122 @@ function renderDashboard(convs) {
 /* ============================================================
    CONVERSATION VIEW
    ============================================================ */
-let convState = null; // { conv, other, msgLastId, reportLastId, pollTimer }
+/* ------------------------------------------------------------
+   One chat implementation serves BOTH portals (doctor and patient
+   open the same #conv-page through openConvById), so every fix here
+   applies to both.
+
+   DUPLICATE-MESSAGE FIX (root cause): sendMsg appended the server's copy
+   of a sent message to the DOM, and pollMessages appended every message
+   newer than msgLastId -- with no check that a message was already on
+   screen. A poll in flight when Send was pressed returned the same
+   message, so it showed twice (one request, two entries). Sending also
+   jumped msgLastId to the new id, which could skip the other side's
+   messages that arrived in between.
+
+   Now: one keyed collection (convState.items) is the only source of
+   truth and the thread is always rendered from it with replaceChildren.
+   A sent message is a pending entry with a local-only clientId; the
+   server copy (POST response or poll) replaces it instead of adding a
+   second entry. Polls from a previous conversation are discarded.
+   ------------------------------------------------------------ */
+let convState = null; // { conv, other, items: Map, msgLastId, pollTimer, polling }
+
+// Keys in convState.items. Server messages are keyed by id so a message
+// can never be added twice; pending sends are keyed by their clientId.
+const msgKey = (id) => `m:${id}`;
+const pendingKey = (clientId) => `c:${clientId}`;
+const reportKey = (id) => `r:${id}`;
+const prescriptionKey = (id) => `p:${id}`;
+
+function newClientId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  // Fallback for browsers without randomUUID (local-only id, never sent).
+  return 'cid-' + Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('');
+}
+
+/* advanceCursor: only messages that came from a fetch of the message list
+   move msgLastId. A POST response must not — the other side may have
+   sent something with a lower id that the next poll still has to fetch. */
+function addServerMessage(msg, advanceCursor = true) {
+  if (!convState || convState.items.has(msgKey(msg.id))) return false;
+  convState.items.set(msgKey(msg.id), { kind: 'msg', state: 'sent', msg });
+  if (advanceCursor && msg.id > convState.msgLastId) convState.msgLastId = msg.id;
+  return true;
+}
+
+/* Puts the server copy of a message on screen exactly once. Match order
+   (from the spec): already known by server id -> nothing to add; this
+   request's own pending entry (clientId known for a POST response); else
+   the OLDEST unmatched pending entry from the same sender with exactly
+   the same text. A pending entry consumes at most one echo, so the same
+   text sent twice on purpose still shows twice. */
+function reconcileServerMessage(msg, ownClientId = null) {
+  if (!convState) return;
+  if (convState.items.has(msgKey(msg.id))) {
+    // Already shown (e.g. the poll beat the POST response): drop the
+    // pending entry this response belonged to, if it's still there.
+    if (ownClientId) convState.items.delete(pendingKey(ownClientId));
+    return;
+  }
+  let matchKey = ownClientId && convState.items.has(pendingKey(ownClientId)) ? pendingKey(ownClientId) : null;
+  if (!matchKey && msg.sender_id === auth.user()?.id) {
+    for (const [key, item] of convState.items) {
+      if (item.kind === 'pending' && !item.matched && item.text === msg.text) { matchKey = key; break; }
+    }
+  }
+  if (matchKey) {
+    const pending = convState.items.get(matchKey);
+    pending.matched = true;
+    convState.items.delete(matchKey);
+    // Remember which server message replaced it, so this entry's own POST
+    // response (arriving later) doesn't add the message a second time.
+    convState.replacedBy.set(pending.clientId, msg.id);
+  }
+  addServerMessage(msg, !ownClientId);
+}
+
+function sortedThreadItems() {
+  const ts = (item) => {
+    const t = item.kind === 'msg' ? item.msg.timestamp : item.kind === 'pending' ? null : item.data.timestamp;
+    return t ? new Date(t).getTime() : Infinity; // pending sends sort last
+  };
+  // Map iteration order is insertion order; it's the stable tie-break.
+  return [...convState.items.values()]
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => (ts(a.item) - ts(b.item)) || (a.i - b.i))
+    .map(({ item }) => item);
+}
+
+function isNearBottom(el) {
+  return el.scrollHeight - el.scrollTop <= el.clientHeight + 80;
+}
+
+/* The only function that writes the message list. `scroll`: 'always' |
+   'if-near-bottom' | 'never'. Newest message stays in view after a send
+   or receive unless the reader has scrolled up. */
+function renderConvThread(scroll = 'if-near-bottom') {
+  if (!convState) return;
+  const thread = document.getElementById('conv-thread');
+  const wasNearBottom = isNearBottom(thread);
+  const nodes = sortedThreadItems().map((item) => {
+    if (item.kind === 'msg') return renderMessage(item.msg, convState.conv);
+    if (item.kind === 'pending') return renderPendingMessage(item);
+    if (item.kind === 'report') return renderReportInline(item.data);
+    return renderPrescriptionInline(item.data);
+  });
+  thread.replaceChildren(...nodes);
+  if (scroll === 'always' || (scroll === 'if-near-bottom' && wasNearBottom)) scrollToBottom(thread);
+}
+
+/* Leaving the chat: stop polling and ignore anything still in flight.
+   Called from showPage whenever the conversation page is left, not only
+   from its Back button (sidebar navigation used to leave the 3s poll
+   running in the background). */
+function closeConversation() {
+  stopConvPolling();
+  convState = null;
+}
 
 async function openConversation(patientId, doctorId, other) {
   const btn = event?.target;
@@ -716,7 +841,7 @@ async function openConversation(patientId, doctorId, other) {
 
 async function openConvById(conv, other) {
   stopConvPolling();
-  convState = { conv, other, msgLastId: 0, pollTimer: null };
+  convState = { conv, other, items: new Map(), msgLastId: 0, pollTimer: null, polling: false, replacedBy: new Map() };
 
   document.getElementById('conv-other-name').textContent = other.name;
   document.getElementById('conv-other-role').textContent = other.role;
@@ -736,7 +861,8 @@ async function openConvById(conv, other) {
 
 async function loadConvThread() {
   if (!convState) return;
-  const { conv } = convState;
+  const state = convState;
+  const { conv } = state;
 
   // Load messages, reports, and prescriptions in parallel
   const [msgRes, repRes, prescRes] = await Promise.all([
@@ -747,40 +873,71 @@ async function loadConvThread() {
   const messages = msgRes.ok ? await msgRes.json() : [];
   const reports  = repRes.ok ? await repRes.json() : [];
   const prescriptions = prescRes.ok ? await prescRes.json() : [];
+  if (convState !== state) return; // the user opened another chat meanwhile
 
-  if (messages.length) convState.msgLastId = messages[messages.length - 1].id;
+  messages.forEach((m) => reconcileServerMessage(m));
+  reports.forEach((r) => state.items.set(reportKey(r.id), { kind: 'report', data: r }));
+  prescriptions.forEach((p) => state.items.set(prescriptionKey(p.id), { kind: 'prescription', data: p }));
+  renderConvThread('always');
+}
 
-  // Merge and sort by timestamp
-  const items = [
-    ...messages.map(m => ({ ...m, _type: 'msg' })),
-    ...reports.map(r  => ({ ...r, _type: 'rep', timestamp: r.timestamp })),
-    ...prescriptions.map(p => ({ ...p, _type: 'presc', timestamp: p.timestamp }))
-  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-  const thread = document.getElementById('conv-thread');
-  thread.innerHTML = '';
-  items.forEach(item => {
-    if (item._type === 'msg') thread.appendChild(renderMessage(item, conv));
-    else if (item._type === 'rep') thread.appendChild(renderReportInline(item));
-    else thread.appendChild(renderPrescriptionInline(item));
-  });
-  scrollToBottom(thread);
+/* Message text is inserted with textContent only (never innerHTML);
+   .msg-text keeps line breaks. */
+function buildMessageRow({ isMine, senderName, text, metaText }) {
+  const row = document.createElement('div');
+  row.className = `msg-row${isMine ? ' mine' : ''}`;
+  if (!isMine) {
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.title = senderName;
+    avatar.textContent = initials(senderName);
+    row.appendChild(avatar);
+  }
+  const col = document.createElement('div');
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble msg-text';
+  bubble.textContent = text;
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = metaText;
+  col.append(bubble, meta);
+  row.appendChild(col);
+  return { row, col, bubble, meta };
 }
 
 function renderMessage(msg, conv) {
   const me = auth.user();
   const isMine = msg.sender_id === me.id;
   const senderName = isMine ? 'You' : (me.id === conv.patient_id ? conv.doctor.name : conv.patient.name);
-
-  const row = document.createElement('div');
-  row.className = `msg-row${isMine ? ' mine' : ''}`;
+  const { row } = buildMessageRow({
+    isMine,
+    senderName,
+    text: msg.text,
+    metaText: `${isMine ? '' : senderName + ' · '}${fmtTime(msg.timestamp)}`,
+  });
   row.dataset.msgId = msg.id;
-  row.innerHTML = `
-    ${!isMine ? `<div class="avatar" title="${escHtml(senderName)}">${initials(senderName)}</div>` : ''}
-    <div>
-      <div class="msg-bubble">${escHtml(msg.text)}</div>
-      <div class="msg-meta">${isMine ? '' : escHtml(senderName) + ' · '}${fmtTime(msg.timestamp)}</div>
-    </div>`;
+  return row;
+}
+
+/* A message the user sent that the server hasn't confirmed yet: shown as
+   "Sending…", or "Not sent" with a Retry button. */
+function renderPendingMessage(item) {
+  const failed = item.state === 'failed';
+  const { row, col, meta } = buildMessageRow({
+    isMine: true,
+    senderName: 'You',
+    text: item.text,
+    metaText: failed ? 'Not sent' : 'Sending…',
+  });
+  row.classList.add(failed ? 'msg-failed' : 'msg-pending');
+  if (failed) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-secondary btn-sm msg-retry-btn';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', () => retrySend(item.clientId), { once: true });
+    col.appendChild(retry);
+  }
   return row;
 }
 
@@ -890,67 +1047,115 @@ function showPrescriptionModal(presc) {
   })();
 }
 
-/* Polling */
+/* Polling: one timer per open chat, cleared by stopConvPolling (Back
+   button, opening another chat, or leaving the page via showPage). */
 function startConvPolling() {
   if (!convState) return;
+  stopConvPolling();
   convState.pollTimer = setInterval(pollMessages, 3000);
 }
 function stopConvPolling() {
   if (convState?.pollTimer) clearInterval(convState.pollTimer);
+  if (convState) convState.pollTimer = null;
 }
 
 async function pollMessages() {
-  if (!convState) return;
+  const state = convState;
+  if (!state || state.polling) return; // never two polls at once
+  state.polling = true;
   try {
-    const res = await apiFetch(`/conversations/${convState.conv.id}/messages?after_id=${convState.msgLastId}`);
+    const res = await apiFetch(`/conversations/${state.conv.id}/messages?after_id=${state.msgLastId}`);
     const newMsgs = await res.json();
-    if (!res.ok || !newMsgs.length) return;
-    convState.msgLastId = newMsgs[newMsgs.length - 1].id;
-    const thread = document.getElementById('conv-thread');
-    const wasBottom = thread.scrollHeight - thread.scrollTop <= thread.clientHeight + 80;
-    newMsgs.forEach(msg => thread.appendChild(renderMessage(msg, convState.conv)));
-    if (wasBottom) scrollToBottom(thread);
-  } catch {}
+    // A poll for a chat that has since been closed or switched is ignored.
+    if (convState !== state || !res.ok || !newMsgs.length) return;
+    newMsgs.forEach((msg) => reconcileServerMessage(msg));
+    renderConvThread('if-near-bottom');
+  } catch {
+  } finally {
+    state.polling = false;
+  }
 }
 
 function scrollToBottom(el) {
   setTimeout(() => { el.scrollTop = el.scrollHeight; }, 30);
 }
 
-/* Composer */
-function initComposer() {
-  const textarea = document.getElementById('msg-textarea');
-  const btn = document.getElementById('msg-send-btn');
-
-  async function sendMsg() {
-    const text = textarea.value.trim();
-    if (!text || !convState) return;
-    btn.disabled = true;
-    textarea.disabled = true;
-    try {
-      const res = await apiFetch(`/conversations/${convState.conv.id}/messages`, {
-        method: 'POST', body: JSON.stringify({ text })
-      });
-      const data = await res.json();
-      if (!res.ok) { toast(errMsg(data), 'error'); return; }
-      textarea.value = '';
-      textarea.style.height = '';
-      const thread = document.getElementById('conv-thread');
-      thread.appendChild(renderMessage(data, convState.conv));
-      scrollToBottom(thread);
-      convState.msgLastId = data.id;
-    } catch { toast('Failed to send message.', 'error'); }
-    finally { btn.disabled = false; textarea.disabled = false; textarea.focus(); }
+/* Sends one pending entry. The request body is unchanged ({ text }); the
+   clientId stays in the browser. */
+async function deliverPending(clientId) {
+  const state = convState;
+  const item = state?.items.get(pendingKey(clientId));
+  if (!item || item.inFlight) return;
+  item.inFlight = true;
+  item.state = 'pending';
+  renderConvThread('never');
+  try {
+    const res = await apiFetch(`/conversations/${state.conv.id}/messages`, {
+      method: 'POST', body: JSON.stringify({ text: item.text })
+    });
+    const data = await res.json();
+    if (convState !== state) return;
+    if (!res.ok) {
+      item.state = 'failed';
+      toast(errMsg(data), 'error');
+    } else if (state.replacedBy.get(clientId) !== data.id) {
+      reconcileServerMessage(data, clientId);
+    }
+  } catch {
+    if (convState === state) item.state = 'failed';
+  } finally {
+    item.inFlight = false;
+    if (convState === state) renderConvThread('if-near-bottom');
   }
+}
 
-  btn.addEventListener('click', sendMsg);
+function retrySend(clientId) {
+  deliverPending(clientId);
+  document.getElementById('msg-textarea')?.focus();
+}
+
+/* Composer: ONE send path -- the form's submit handler. Enter (without
+   Shift) requests that same submit; the Send button is type="submit".
+   Bound once at boot; the AbortController lets a teardown remove every
+   composer listener in one call. */
+let composerController = null;
+
+function initComposer() {
+  if (composerController) return; // idempotent: never bind twice
+  composerController = new AbortController();
+  const { signal } = composerController;
+  const form = document.getElementById('msg-form');
+  const textarea = document.getElementById('msg-textarea');
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = textarea.value.trim();
+    if (!text || !convState) return; // empty messages are ignored
+    // Clear synchronously so a second Enter/click can't send it again.
+    textarea.value = '';
+    textarea.style.height = '';
+    const clientId = newClientId();
+    convState.items.set(pendingKey(clientId), { kind: 'pending', clientId, text, state: 'pending', inFlight: false, matched: false });
+    renderConvThread('if-near-bottom');
+    deliverPending(clientId);
+    textarea.focus();
+  }, { signal });
+
   textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
-  });
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  }, { signal });
   textarea.addEventListener('input', () => {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
-  });
+  }, { signal });
+}
+
+function teardownComposer() {
+  composerController?.abort();
+  composerController = null;
 }
 
 /* Upload */
@@ -992,9 +1197,10 @@ function initUpload() {
       uploadForm.classList.remove('open');
       fileInput.value = '';
       document.getElementById('report-display-name').value = '';
-      const thread = document.getElementById('conv-thread');
-      thread.appendChild(renderReportInline(data));
-      scrollToBottom(thread);
+      if (convState) {
+        convState.items.set(reportKey(data.id), { kind: 'report', data });
+        renderConvThread('always');
+      }
       toast('Report uploaded.', 'success');
     } catch { errEl.textContent = 'Upload failed. Please try again.'; errEl.style.display = 'block'; }
     finally { submitBtn.classList.remove('btn-loading'); submitBtn.disabled = false; }
@@ -1043,9 +1249,10 @@ function initPrescriptionUpload() {
       uploadForm.classList.remove('open');
       fileInput.value = '';
       document.getElementById('prescription-display-name').value = '';
-      const thread = document.getElementById('conv-thread');
-      thread.appendChild(renderPrescriptionInline(data));
-      scrollToBottom(thread);
+      if (convState) {
+        convState.items.set(prescriptionKey(data.id), { kind: 'prescription', data });
+        renderConvThread('always');
+      }
       toast('Prescription uploaded.', 'success');
     } catch { errEl.textContent = 'Upload failed. Please try again.'; errEl.style.display = 'block'; }
     finally { submitBtn.classList.remove('btn-loading'); submitBtn.disabled = false; }
@@ -2562,7 +2769,11 @@ function renderAssistantReply(result) {
   const kind = result.kind || 'unknown';
   const kindLabel = kind.replace(/_/g, ' ');
   const isEmergency = kind === 'emergency';
-  let html = `<div class="t-xs" style="margin-bottom:4px;color:${isEmergency ? 'var(--red)' : 'var(--text-light)'};text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>${escHtml(result.reply || '(no reply)')}`;
+  // Small talk reads like a normal chat bubble — no "GREETING" tag on it.
+  const labelHtml = kind === 'greeting'
+    ? ''
+    : `<div class="t-xs" style="margin-bottom:4px;color:${isEmergency ? 'var(--red)' : 'var(--text-light)'};text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>`;
+  let html = `${labelHtml}${escHtml(result.reply || '(no reply)')}`;
   if (result.recommendation) {
     html += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:.85rem;color:var(--navy);font-weight:600">→ ${escHtml(result.recommendation.specialist_recommended)}</div>`;
   }
@@ -2739,6 +2950,16 @@ function initAssistantPage() {
   // saved copy -- a deliberate restart must not resurrect itself on the
   // next reload.
   document.getElementById('assistant-new-session-btn').addEventListener('click', () => {
+    // Delete both server-side sessions now instead of on the next
+    // message (sessions are RAM-only on the server; this is the deletion).
+    // Best-effort: the next message also sends newSession: true anyway.
+    if (sehataiToken) {
+      fetch(`${SEHATAI_API}/api/session/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sehataiToken}` },
+        body: '{}',
+      }).catch(() => {});
+    }
     sehataiSessionIds = { symptom: null, diet: null };
     clearAssistantThread();
     document.getElementById('assistant-thread').innerHTML = '';
@@ -2775,93 +2996,13 @@ function evidenceBubble(role, html, extraClass = '') {
   return row;
 }
 
-/* Neither of these numbers comes from the API as a single field --
-   EvidenceBoard's own contract never returns one "overall score" (see
-   api/contract.md's Report schema). Both are real aggregates computed
-   here from fields the API does return, scoped to the claims/sources
-   that actually made it into the answer (kept + flagged), not the
-   whole appraised pool -- a source the pipeline looked at but never
-   cited shouldn't move a score describing what's actually being shown. */
-function computeEvidenceScores(report) {
-  const shownClaims = (report.claims || []).filter((c) => c.status === 'kept' || c.status === 'flagged');
-  if (!shownClaims.length) return null;
-
-  const citedSids = new Set();
-  shownClaims.forEach((c) => (c.citations || []).forEach((cit) => citedSids.add(cit.sid)));
-  const evidenceBySid = {};
-  (report.evidence || []).forEach((ev) => { evidenceBySid[ev.sid] = ev; });
-  const relevanceScores = [...citedSids].map((sid) => evidenceBySid[sid]?.relevance_score).filter((n) => typeof n === 'number');
-  const confidences = shownClaims.map((c) => c.confidence).filter((n) => typeof n === 'number');
-
-  const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  return {
-    relevanceScore: relevanceScores.length ? Math.round(avg(relevanceScores)) : null,
-    relevanceCount: relevanceScores.length,
-    confidencePct: confidences.length ? Math.round(avg(confidences) * 100) : null,
-    confidenceCount: confidences.length,
-  };
-}
-
-function renderEvidenceScoreRow(scores) {
-  if (!scores) return '';
-  const tile = (value, label, caption) => value == null ? '' : `
-    <div class="evidence-score-tile">
-      <div class="score-value">${value}${label.includes('confidence') ? '%' : '/100'}</div>
-      <div class="score-label">${escHtml(label)}</div>
-      <div class="score-caption">${escHtml(caption)}</div>
-    </div>`;
-  return `<div class="evidence-score-row">
-    ${tile(scores.relevanceScore, 'Evidence score', `Avg. relevance of ${scores.relevanceCount} cited source${scores.relevanceCount === 1 ? '' : 's'}`)}
-    ${tile(scores.confidencePct, 'Verification confidence', `Avg. entailment confidence, ${scores.confidenceCount} claim${scores.confidenceCount === 1 ? '' : 's'}`)}
-  </div>`;
-}
-
-function renderEvidenceClaimRow(claim) {
-  const verdictClass = ['SUPPORTS', 'REFUTES', 'NEI'].includes(claim.verdict) ? claim.verdict : '';
-  const verdictTag = claim.verdict ? `<span class="evidence-claim-verdict ${verdictClass}">${escHtml(claim.verdict)}</span>` : '';
-  const flaggedTag = claim.status === 'flagged' ? '<span class="evidence-claim-flag">⚠ flagged</span>' : '';
-  const confidencePct = typeof claim.confidence === 'number' ? Math.round(claim.confidence * 100) + '% confidence' : '';
-  const citations = (claim.citations || []).map((cit) => cit.url
-    ? `<a href="${escHtml(cit.url)}" target="_blank" rel="noopener">[${escHtml(cit.sid)}] ${escHtml(cit.citation_key)}</a>`
-    : `<span class="t-xs">[${escHtml(cit.sid)}] ${escHtml(cit.citation_key)}</span>`
-  ).join('');
-  return `<div class="evidence-claim-row">
-    <div>${verdictTag}${escHtml(claim.text)}</div>
-    <div class="evidence-claim-meta">${[confidencePct, flaggedTag].filter(Boolean).join(' · ')}</div>
-    ${citations ? `<div class="evidence-claim-citations">${citations}</div>` : ''}
-  </div>`;
-}
-
-/* Some journals (structured abstracts) embed literal markup in the
-   abstract text itself, e.g. "<h4>Purpose of review</h4>..." -- seen
-   live in real EvidenceBoard data. Strip tags rather than render them:
-   this is third-party text, not trusted HTML to execute as innerHTML. */
-function stripHtmlTags(text) {
-  return text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function renderEvidenceSourceCard(ev) {
-  const warnings = [];
-  if (ev.is_retracted) warnings.push('<span class="tag" style="border:1px solid var(--red);color:var(--red)">Retracted</span>');
-  if (ev.is_preprint) warnings.push('<span class="tag" style="border:1px solid var(--amber);color:var(--amber)">Preprint, not peer reviewed</span>');
-  if (ev.study_design) warnings.push(`<span class="tag tag-outline">${escHtml(ev.study_design.replace(/_/g, ' '))}</span>`);
-  const abstractId = `evidence-abstract-${ev.sid}`;
-  const link = ev.url || (ev.doi ? `https://doi.org/${ev.doi}` : null);
-  return `<div class="blueprint evidence-source-card">
-    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-    <div class="evidence-source-title">${escHtml(ev.sid)} · ${link ? `<a href="${escHtml(link)}" target="_blank" rel="noopener">${escHtml(ev.title || ev.citation_key)}</a>` : escHtml(ev.title || ev.citation_key)}</div>
-    <div class="evidence-source-meta">${[ev.journal, ev.publication_date, ev.source].filter(Boolean).map(escHtml).join(' · ')}</div>
-    ${warnings.length ? `<div class="evidence-source-tags">${warnings.join('')}</div>` : ''}
-    ${typeof ev.relevance_score === 'number' ? `
-      <div class="evidence-relevance-row">
-        <div class="evidence-relevance-bar"><div class="evidence-relevance-fill" style="width:${ev.relevance_score}%"></div></div>
-        <div class="evidence-relevance-num">${ev.relevance_score}/100</div>
-      </div>` : ''}
-    ${ev.abstract ? `
-      <div class="evidence-abstract" id="${abstractId}">${escHtml(stripHtmlTags(ev.abstract))}</div>
-      <span class="evidence-abstract-toggle" data-target="${abstractId}">Show full abstract</span>` : ''}
-  </div>`;
-}
+/* The answer itself is drawn by static/js/evidence-view.js (EvidenceView):
+   topic headings, short claim summaries and numbered citation chips that
+   open each paper's details -- a deterministic function of the response,
+   no extra requests. The old "Evidence score" tiles are gone: relevance
+   reflects retrieval ranking only, never evidence quality. What stays
+   here are the response's own notes around the answer. */
+let evidenceAnswerCount = 0;
 
 function renderEvidenceAnswer(report) {
   if (report.abstained) {
@@ -2869,57 +3010,28 @@ function renderEvidenceAnswer(report) {
     evidenceBubble('bot', `<div class="t-xs" style="color:var(--amber);font-weight:600;margin-bottom:4px">ABSTAINED</div>${escHtml(reasons)}`);
     return;
   }
+  const row = evidenceBubble('bot', '', 'evidence-answer-bubble');
+  const bubble = row.querySelector('.msg-bubble');
+  const viewHost = document.createElement('div');
+  bubble.appendChild(viewHost);
+  evidenceAnswerCount += 1;
+  window.EvidenceView.render(viewHost, report, { idPrefix: `eb${evidenceAnswerCount}` });
+
+  const note = (text, color, italic = false) => {
+    const el = document.createElement('div');
+    el.className = 't-xs';
+    el.style.cssText = `margin-top:8px;color:${color}${italic ? ';font-style:italic' : ''}`;
+    el.textContent = text;
+    bubble.appendChild(el);
+  };
   const f = report.funnel || {};
-  const scores = computeEvidenceScores(report);
-  const shownClaims = (report.claims || []).filter((c) => c.status === 'kept' || c.status === 'flagged');
-  // Best-first already (see api/contract.md: "S1 is the highest-ranked
-  // record") -- re-sorting here is just defensive, not load-bearing.
-  const sources = [...(report.evidence || [])].sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-
-  // A thorough answer can run to 30+ verified claims; as one paragraph it
-  // pushed the scores, funnel and citations off-screen. Preview the
-  // opening lines and let the reader expand the rest.
-  const answerText = report.answer_text || '';
-  const answerId = `evidence-answer-${report.run_id || Date.now()}`;
-  let html = answerText.length > 600
-    ? `<div class="evidence-answer-text" id="${escHtml(answerId)}">${escHtml(answerText)}</div>
-       <span class="evidence-abstract-toggle" data-target="${escHtml(answerId)}" data-more="Read full answer">Read full answer</span>`
-    : `<div>${escHtml(answerText)}</div>`;
-  html += renderEvidenceScoreRow(scores);
-
   if (f.claims_generated != null) {
-    const deletionTags = Object.entries(f.by_reason || {}).map(([reason, count]) =>
-      `<span class="tag tag-outline deletion-tag">${count}× ${escHtml(reason)}</span>`
-    ).join('');
-    html += `<div class="evidence-funnel-strip">${f.claims_generated} claims generated → ${f.claims_deleted} deleted → ${f.claims_kept} shown${deletionTags ? '<br>' + deletionTags : ''}</div>`;
+    note(`${f.claims_generated} claims generated → ${f.claims_deleted} removed by verification → ${f.claims_kept} shown`, 'var(--text-light)');
   }
-
-  if (shownClaims.length) {
-    html += `<details class="evidence-section"><summary>Claims and citations (${shownClaims.length})</summary>
-      ${shownClaims.map(renderEvidenceClaimRow).join('')}
-    </details>`;
-  }
-
-  if (sources.length) {
-    html += `<details class="evidence-section"><summary>Ranked sources (${sources.length})</summary>
-      ${sources.map(renderEvidenceSourceCard).join('')}
-    </details>`;
-  }
-
   if (report.unanswered_aspects && report.unanswered_aspects.length) {
-    html += `<div class="t-xs" style="margin-top:10px;color:var(--amber)">Not addressed by the evidence: ${escHtml(report.unanswered_aspects.join('; '))}</div>`;
+    note(`Not addressed by the evidence: ${report.unanswered_aspects.join('; ')}`, 'var(--amber)');
   }
-  if (report.disclaimer) {
-    html += `<div class="t-xs" style="margin-top:8px;color:var(--text-light);font-style:italic">${escHtml(report.disclaimer)}</div>`;
-  }
-  const row = evidenceBubble('bot', html, 'evidence-answer-bubble');
-  row.querySelectorAll('.evidence-abstract-toggle').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const el = document.getElementById(btn.dataset.target);
-      const expanded = el.classList.toggle('expanded');
-      btn.textContent = expanded ? 'Show less' : (btn.dataset.more || 'Show full abstract');
-    });
-  });
+  if (report.disclaimer) note(report.disclaimer, 'var(--text-light)', true);
 }
 
 // Real per-stage labels for EvidenceBoard's actual pipeline (see its own
@@ -2959,9 +3071,18 @@ async function sendEvidenceQuestion(explicitText) {
   try {
     // The gateway only lets a signed-in doctor through to EvidenceBoard
     // (auth_request against /auth/verify) -- it has no login of its own.
+    // Same-origin (behind the gateway): send the doctor's token for the
+    // gateway's check. Cross-origin (local dev, EvidenceBoard on its own
+    // port): EvidenceBoard has no login and its CORS allows only
+    // Content-Type, so an Authorization header made the browser block the
+    // request ("Failed to fetch").
+    const evidenceSameOrigin = new URL(EVIDENCE_API, location.href).origin === location.origin;
     const res = await fetch(`${EVIDENCE_API}/api/ask/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${auth.token()}` },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(evidenceSameOrigin ? { 'Authorization': `Bearer ${auth.token()}` } : {}),
+      },
       body: JSON.stringify({ question: text }),
     });
     if (!res.ok) {
