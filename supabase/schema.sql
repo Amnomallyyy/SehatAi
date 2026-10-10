@@ -123,6 +123,26 @@ create table if not exists medicines (
 );
 create index if not exists medicines_patient_idx on medicines (patient_id, active);
 
+-- Portal-owned (also auto-created by the backend's create_all): which
+-- CareLink doctor prescribed a medicines row, plus an optional file.
+-- Guarded because `users` is created by the backend, not by this file.
+do $$
+begin
+    if to_regclass('public.users') is not null then
+        create table if not exists medicine_prescriptions (
+            id               serial primary key,
+            medicine_id      uuid not null unique references medicines (id) on delete cascade,
+            doctor_id        integer not null references users (id),
+            notes            text,
+            attachment_path  varchar(500),
+            attachment_name  varchar(255),
+            attachment_mime  varchar(100),
+            created_at       timestamp not null default now(),
+            updated_at       timestamp not null default now()
+        );
+    end if;
+end $$;
+
 create table if not exists clinical_advice (
     id            uuid primary key default gen_random_uuid(),
     patient_id    uuid not null references patients (id) on delete cascade,

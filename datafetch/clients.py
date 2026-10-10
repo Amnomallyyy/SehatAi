@@ -171,6 +171,39 @@ class OCRspaceClient:
 # ============================================================
 # 2. Gemini Client (Batch API for OCR fallback)
 # ============================================================
+def _mime_for_file_type(file_type: str) -> str:
+    """'JPG' -> image/jpeg (image/jpg is not a real MIME type and some APIs
+    reject it), 'PDF' -> application/pdf, otherwise image/<type>."""
+    ft = (file_type or "JPG").strip().lower()
+    if ft == "pdf":
+        return "application/pdf"
+    if ft in ("jpg", "jpeg"):
+        return "image/jpeg"
+    if ft in ("tif", "tiff"):
+        return "image/tiff"
+    return f"image/{ft}"
+
+
+def _parse_json_object(text: str):
+    """Parses a JSON object from a model reply that may be wrapped in
+    ```json fences or surrounded by commentary. Returns None if none found."""
+    if not text:
+        return None
+    cleaned = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text.strip(), flags=re.IGNORECASE)
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    start = cleaned.find("{")
+    while start != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+            return obj
+        except (json.JSONDecodeError, ValueError):
+            start = cleaned.find("{", start + 1)
+    return None
+
+
 class GeminiClient:
     """
     Client for Google Gemini API (Batch API for asynchronous OCR).
@@ -181,7 +214,7 @@ class GeminiClient:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY not set in environment")
-        self.model = "gemini-3.5-flash"
+        self.model = os.getenv("GEMINI_OCR_MODEL") or "gemini-3.5-flash"
         self.batch_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:batchGenerateContent"
         self.get_batch_endpoint = "https://generativelanguage.googleapis.com/v1beta/batchJobs"
         print("[OK] GeminiClient initialized (using gemini-3.5-flash Batch API)")
@@ -203,9 +236,7 @@ class GeminiClient:
         contents = []
         for req in requests_list:
             base64_image = base64.b64encode(req['image_bytes']).decode('utf-8')
-            mime_type = f"image/{req.get('file_type', 'JPG').lower()}"
-            if req.get('file_type', '').lower() == "pdf":
-                mime_type = "application/pdf"
+            mime_type = _mime_for_file_type(req.get('file_type', 'JPG'))
             contents.append({
                 "parts": [
                     {"text": "Transcribe this medical document faithfully. Preserve all numbers, tables, and handwriting. Do not summarize. Return only the raw text."},
@@ -277,7 +308,7 @@ class GeminiClient:
         OCRspaceClient.extract() and extract_text_with_pdfplumber() above.
         """
         print("[INFO] Sending image to Gemini for synchronous vision OCR...")
-        mime_type = "application/pdf" if file_type.upper() == "PDF" else f"image/{file_type.lower()}"
+        mime_type = _mime_for_file_type(file_type)
         base64_data = base64.b64encode(image_bytes).decode('utf-8')
         payload = {
             "contents": [{
@@ -364,14 +395,13 @@ class NVIDIAClient:
         )
         messages = [{"role": "user", "content": prompt}]
         response_text = self._chat(messages)
-        try:
-            result = json.loads(response_text)
-        except json.JSONDecodeError:
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                raise RuntimeError("NVIDIA response not valid JSON")
+        result = _parse_json_object(response_text)
+        if not isinstance(result, dict) or "is_medical" not in result:
+            # An unreadable classifier reply used to fail the whole upload.
+            # The patient uploaded this on the Lab Reports page, so assume
+            # medical and let the structuring step decide what's in it.
+            print("[WARN] Classifier reply was not readable JSON -- treating as medical")
+            return {"is_medical": True, "reason": "classifier reply unreadable; uploaded as a lab report"}
         print("[OK] Classification result received")
         return result
 

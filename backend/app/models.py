@@ -433,6 +433,7 @@ class Document(Base):
     status = Column(String, nullable=True)
     raw_ocr = Column(Text, nullable=True)
     ocr_engine = Column(String, nullable=True)
+    ai_summary = Column(Text, nullable=True)
     superseded_by = Column(UUID(as_uuid=True), nullable=True)
 
 
@@ -496,6 +497,49 @@ class DocumentNote(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
+    doctor = relationship("User", foreign_keys=[doctor_id])
+
+
+class Medicine(Base):
+    """SehatAI/DataFetch's existing `medicines` table (bridge table -- not
+    created here). Doctor-prescribed medicines are written straight into it
+    (document_id null) so the triage bot's patient profile, which already
+    reads this table, accounts for what the doctor prescribed."""
+    __tablename__ = "medicines"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4)
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True)
+    name = Column(Text, nullable=False)
+    dosage = Column(Text, nullable=True)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    recorded_at = Column(DateTime, default=utc_now)
+
+    prescription = relationship("MedicinePrescription", back_populates="medicine", uselist=False)
+
+
+class MedicinePrescription(Base):
+    """CareLink-owned side table: which doctor prescribed a `medicines` row,
+    plus an optional attached file. Same pattern as DocumentNote -- a
+    portal table pointing at a bridge table, auto-created by create_all.
+    Medicines without a row here came from DataFetch's lab extraction."""
+    __tablename__ = "medicine_prescriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    medicine_id = Column(
+        UUID(as_uuid=True), ForeignKey("medicines.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    doctor_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    notes = Column(Text, nullable=True)
+    attachment_path = Column(String(500), nullable=True)
+    attachment_name = Column(String(255), nullable=True)
+    attachment_mime = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    medicine = relationship("Medicine", back_populates="prescription")
     doctor = relationship("User", foreign_keys=[doctor_id])
 
 

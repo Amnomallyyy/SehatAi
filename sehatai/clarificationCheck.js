@@ -714,3 +714,39 @@ HARD RULES:
     return fallback;
   }
 }
+// ============================================================
+// extractQuestionOptions — recovers the symptom option(s) a follow-up
+// question proposed ("any changes in your vision or redness in the eye?"
+// -> ["vision changes", "eye redness"]) when assessIntake didn't declare
+// them in askedAboutSymptoms. Without this, a bare "yes" answering that
+// question had nothing to attach to and the patient was told no symptom
+// was recognised. Returns [] on any failure — the caller then falls back
+// to its normal behaviour.
+// ============================================================
+const QUESTION_OPTIONS_SCHEMA = {
+  type: "object",
+  properties: { options: { type: "array", items: { type: "string" } } },
+  required: ["options"],
+};
+
+export async function extractQuestionOptions(question, knownSymptoms = []) {
+  if (!question || typeof question !== "string") return [];
+  const system = `An assistant asked a patient a yes/no follow-up question. List each NEW symptom the question asks whether the patient has, as a short plain-English term that keeps the body location the question implies ("redness in the eye" -> "eye redness", "changes in your vision" -> "vision changes").
+- Do not include symptoms already in known_symptoms.
+- Do not include durations, severities, triggers, or anything that is not a symptom.
+- If the question asks about no new symptom, return an empty list.
+Respond with the JSON shape you were given.`;
+  const message = JSON.stringify({ question, known_symptoms: knownSymptoms });
+  try {
+    const parsed = await callAIStructured({ system, message, schema: QUESTION_OPTIONS_SCHEMA });
+    const known = new Set(knownSymptoms.map((t) => String(t).toLowerCase().trim()));
+    return (Array.isArray(parsed?.options) ? parsed.options : [])
+      .filter((t) => typeof t === "string" && t.trim() && t.length <= 60)
+      .map((t) => t.trim())
+      .filter((t) => !known.has(t.toLowerCase()))
+      .slice(0, 4);
+  } catch (err) {
+    console.error("[clarificationCheck] extractQuestionOptions failed (non-fatal):", err.message);
+    return [];
+  }
+}

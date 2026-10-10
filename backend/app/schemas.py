@@ -391,6 +391,8 @@ class LabReportUploadOut(BaseModel):
     document_id: Optional[str] = None
     status: str
     detail: Optional[str] = None
+    # Set when status == "queued": poll GET /me/lab-reports/jobs/{job_id}.
+    job_id: Optional[str] = None
 
 
 # ── Structured lab data (routers/structured_reports.py) ──────────────────
@@ -441,6 +443,8 @@ class StructuredDocumentSummaryOut(BaseModel):
     has_source_file: bool = False
     doctor_reviewed: bool = False
     retracted: bool = False
+    mime_type: Optional[str] = None
+    ai_summary: Optional[str] = None
 
 
 class StructuredDocumentDetailOut(StructuredDocumentSummaryOut):
@@ -519,3 +523,20 @@ class UnifiedReportItemOut(BaseModel):
     marker_count: int = 0
     abnormal_count: int = 0
     spark: List[float] = []
+
+
+class MedicineOut(BaseModel):
+    id: str
+    name: str
+    dosage: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    active: bool = True
+    notes: Optional[str] = None
+    source: Literal["doctor", "lab_report"] = "doctor"
+    doctor_id: Optional[int] = None
+    doctor_name: Optional[str] = None
+    has_attachment: bool = False
+    attachment_name: Optional[str] = None
+    recorded_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

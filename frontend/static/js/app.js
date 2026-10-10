@@ -63,6 +63,50 @@ function errMsg(data) {
   return String(data.detail);
 }
 
+/* ── File downloads ── */
+const MIME_EXT = {
+  'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',
+  'image/gif': 'gif', 'image/tiff': 'tif', 'image/bmp': 'bmp', 'image/webp': 'webp',
+};
+
+/* The server's own filename (Content-Disposition) wins; otherwise the
+   extension comes from the file's real type -- a JPG saved as ".pdf" was
+   the "unreadable PDF" download bug. */
+function downloadNameFor(res, blob, baseName) {
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const safeBase = (baseName || 'document').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'document';
+  const ext = MIME_EXT[(blob.type || '').split(';')[0].trim()] ||
+    (m ? (decodeURIComponent(m[1]).split('.').pop() || '').toLowerCase() : '') || 'pdf';
+  return `${safeBase.replace(/\.(pdf|jpe?g|png|gif|tiff?|bmp|webp)$/i, '')}.${ext}`;
+}
+
+/* fetch -> check -> blob. Throws with the server's message on failure, so
+   an error JSON body is never saved to disk as if it were the file. */
+async function fetchFileBlob(path) {
+  const res = await apiFetch(path);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(errMsg(data) || `Download failed (${res.status})`);
+  }
+  return { res, blob: await res.blob() };
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function downloadFile(path, baseName) {
+  try {
+    const { res, blob } = await fetchFileBlob(path);
+    saveBlob(blob, downloadNameFor(res, blob, baseName));
+  } catch (err) { toast(err.message || 'Download failed.', 'error'); }
+}
+
 /* ── Toast ── */
 function toast(msg, type = '') {
   const c = document.getElementById('toast-container');
@@ -477,11 +521,6 @@ function connectionCard(user, type, conn) {
         <button class="btn btn-success btn-sm accept-btn" data-id="${conn.id}">Accept</button>
         <button class="btn btn-danger btn-sm reject-btn" data-id="${conn.id}">Decline</button>
       ` : ''}
-      ${type === 'accepted' && !isDoctorViewing ? `
-        <label class="grant-toggle">
-          <input type="checkbox" class="grant-toggle-input" data-doctor-id="${user.id}" ${isGranted ? 'checked' : ''}>
-          Share reports
-        </label>` : ''}
       ${type === 'accepted' && isDoctorViewing ? `
         <button class="btn btn-ghost btn-sm nickname-btn" data-conn-id="${conn.id}" data-current="${escHtml(conn.doctor_nickname || '')}">
           ✎ ${conn.doctor_nickname ? escHtml(conn.doctor_nickname) : 'Add nickname'}
@@ -1031,18 +1070,15 @@ function showPrescriptionModal(presc) {
 
   (async () => {
     try {
-      const res = await apiFetch(presc.pdf_url);
-      const blob = await res.blob();
+      const { res, blob } = await fetchFileBlob(presc.pdf_url);
       const objUrl = URL.createObjectURL(blob);
       overlay.querySelector('#presc-pdf-preview').innerHTML = `<iframe src="${objUrl}" title="PDF preview"></iframe>`;
       overlay.querySelector('#presc-download-btn').addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.href = objUrl;
-        a.download = (presc.display_name || 'prescription') + '.pdf';
-        a.click();
+        saveBlob(blob, downloadNameFor(res, blob, presc.display_name || 'prescription'));
       });
-    } catch {
-      overlay.querySelector('#presc-pdf-preview').innerHTML = `<div class="pdf-loading" style="color:var(--red)">Could not load PDF preview.</div>`;
+    } catch (err) {
+      overlay.querySelector('#presc-pdf-preview').innerHTML = `<div class="pdf-loading" style="color:var(--red)">${escHtml(err.message || 'Could not load PDF preview.')}</div>`;
+      overlay.querySelector('#presc-download-btn').disabled = true;
     }
   })();
 }
@@ -1450,6 +1486,14 @@ function renderStructuredDocument(doc) {
     </div>
     <div class="structured-detail-grid">
       <div class="structured-detail-main">
+        <div class="blueprint ai-doc-summary">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div class="doc-kicker">AI summary</div>
+          ${doc.ai_summary
+            ? `<div class="ai-doc-summary-text">${escHtml(doc.ai_summary)}</div>
+               <div class="ai-doc-summary-caveat">AI-generated from the uploaded report — not a diagnosis. Discuss results with your doctor.</div>`
+            : `<div class="t-xs" style="margin-top:6px">Summary not available for this report.</div>`}
+        </div>
         <div class="blueprint marker-table">
           <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
           <div class="marker-head">
@@ -1467,8 +1511,8 @@ function renderStructuredDocument(doc) {
         <div class="blueprint" style="padding:18px">
           <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
           <div class="doc-kicker">Source document</div>
-          <div class="source-preview-box">
-            <div class="t-xs">${doc.has_source_file ? 'Preview unavailable yet' : 'Original file not stored'}</div>
+          <div class="source-preview-box" id="doc-source-preview">
+            <div class="t-xs">${doc.has_source_file ? 'Loading preview…' : 'Original file not stored'}</div>
           </div>
           <div class="source-actions">
             <button class="btn btn-secondary btn-sm" id="doc-download-btn" ${doc.has_source_file ? '' : 'disabled'}>Download</button>
@@ -1513,20 +1557,30 @@ function renderStructuredDocument(doc) {
   if (downloadBtn && doc.has_source_file) {
     // fetch+blob, not window.open/<a href> -- this is an authenticated
     // route (real medical documents, no public URL), and a plain
-    // navigation can't carry the Authorization header. Same pattern
-    // downloadPdf() already uses for CareLink reports.
+    // navigation can't carry the Authorization header. The file is
+    // fetched once and reused for both the preview and the download, and
+    // the extension follows the real file type (JPG/PNG uploads used to
+    // be saved as ".pdf", which then wouldn't open).
+    const filePath = `/structured/documents/${doc.document_id}/file?patient_id=${structuredDocState.patientId}`;
+    const baseName = (doc.original_filename || doc.category || 'lab_report').replace(/\s+/g, '_');
+    const filePromise = fetchFileBlob(filePath);
+    filePromise.then(({ blob }) => {
+      const box = layout.querySelector('#doc-source-preview');
+      if (!box || structuredDocState?.doc?.document_id !== doc.document_id) return;
+      const url = URL.createObjectURL(blob);
+      if ((blob.type || '').startsWith('image/')) box.innerHTML = `<img src="${url}" alt="Uploaded lab report">`;
+      else if ((blob.type || '').includes('pdf')) box.innerHTML = `<iframe src="${url}" title="Lab report preview"></iframe>`;
+      else box.innerHTML = '<div class="t-xs">Preview not available for this file type.</div>';
+    }).catch((err) => {
+      const box = layout.querySelector('#doc-source-preview');
+      if (box) box.innerHTML = `<div class="t-xs" style="color:var(--red)">${escHtml(err.message || 'Could not load the file.')}</div>`;
+    });
     downloadBtn.addEventListener('click', async () => {
       downloadBtn.disabled = true;
       try {
-        const res = await apiFetch(`/structured/documents/${doc.document_id}/file?patient_id=${structuredDocState.patientId}`);
-        if (!res.ok) { toast('Download failed.', 'error'); return; }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `${(doc.category || 'document').replace(/\s+/g, '_')}.pdf`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-      } catch { toast('Download failed.', 'error'); }
+        const { res, blob } = await filePromise.catch(() => fetchFileBlob(filePath));
+        saveBlob(blob, downloadNameFor(res, blob, baseName));
+      } catch (err) { toast(err.message || 'Download failed.', 'error'); }
       finally { downloadBtn.disabled = false; }
     });
   }
@@ -1867,36 +1921,18 @@ async function loadPdfPreview(report) {
   const area = document.getElementById('pdf-preview-area');
   if (!area) return;
   try {
-    const res = await apiFetch(report.pdf_url);
-    const blob = await res.blob();
+    const { blob } = await fetchFileBlob(report.pdf_url);
     const objUrl = URL.createObjectURL(blob);
     area.innerHTML = `<iframe src="${objUrl}" title="PDF preview"></iframe>`;
-
-    // Wire download btn
-    const dlBtn = document.getElementById('download-btn');
-    if (dlBtn) {
-      dlBtn.addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.href = objUrl;
-        a.download = (report.display_name || 'report') + '.pdf';
-        a.click();
-      }, { once: true });
-    }
-  } catch {
-    area.innerHTML = `<div class="pdf-loading" style="color:var(--red)">Could not load PDF preview.</div>`;
+    // The Download button is wired once in renderReportDetail (downloadPdf);
+    // a second listener here used to download the file twice.
+  } catch (err) {
+    area.innerHTML = `<div class="pdf-loading" style="color:var(--red)">${escHtml(err.message || 'Could not load PDF preview.')}</div>`;
   }
 }
 
 async function downloadPdf(report, fromEvent) {
-  try {
-    const res = await apiFetch(report.pdf_url);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = (report.display_name || 'report') + '.pdf';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-  } catch { toast('Download failed.', 'error'); }
+  await downloadFile(report.pdf_url, report.display_name || 'report');
 }
 
 /* Comments */
@@ -2051,12 +2087,15 @@ async function uploadLabReport(file) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { toast(errMsg(data), 'error'); return; }
 
-    if (data.status === 'queued') {
-      toast('Upload received — extraction is still running in the background. Check back shortly.', '');
+    if (data.status === 'queued' && data.job_id) {
+      toast('Upload received — still extracting. This page will update when it finishes.', '');
+      btn.textContent = 'Processing…';
+      const final = await pollLabReportJob(data.job_id);
+      announceLabReportOutcome(final);
     } else {
-      toast('Report processed — markers extracted.', 'success');
+      announceLabReportOutcome(data);
     }
-    loadReportsPage();
+    if (currentPage === 'reports') loadReportsPage();
   } catch (err) {
     toast('Upload failed: ' + (err.message || 'could not reach the server'), 'error');
   } finally {
@@ -2065,15 +2104,40 @@ async function uploadLabReport(file) {
   }
 }
 
+function announceLabReportOutcome(data) {
+  if (!data) {
+    toast('Still processing after 5 minutes — check the Reports page again shortly.', '');
+  } else if (data.status === 'failed') {
+    toast(data.detail || 'Extraction failed. Please try again.', 'error');
+  } else if (data.status === 'duplicate') {
+    toast('This report was already uploaded — showing the existing results.', '');
+  } else {
+    toast('Report processed — markers and AI summary are ready.', 'success');
+  }
+}
+
+/* Uploads that outlive the request come back "queued"; poll the job until
+   it finishes (or ~5 min) so a slow extraction or a background failure is
+   reported instead of the report silently never appearing. */
+async function pollLabReportJob(jobId) {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const res = await apiFetch(`/me/lab-reports/jobs/${jobId}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { status: 'failed', detail: errMsg(data) };
+      if (data.status !== 'queued') return data;
+    } catch { /* transient network error -- keep polling */ }
+  }
+  return null;
+}
+
 async function renderDoctorReportsPicker(layout) {
   try {
-    const [patRes, grantRes] = await Promise.all([
-      apiFetch('/users?role=patient'),
-      apiFetch('/reports-access?status=granted')
-    ]);
-    const patients = patRes.ok ? await patRes.json() : [];
-    const grants = grantRes.ok ? await grantRes.json() : [];
-    const grantedPatientIds = new Set(grants.map(g => g.patient_id));
+    const patRes = await apiFetch('/users?role=patient');
+    if (!patRes.ok) { layout.innerHTML = emptyState('alert', 'Failed to load your patients.', errMsg(await patRes.json().catch(() => ({})))); return; }
+    const patients = await patRes.json();
 
     if (patients.length === 0) {
       layout.innerHTML = emptyState('people', 'No connected patients yet.', 'Connect with a patient first from the Connections tab.');
@@ -2088,29 +2152,24 @@ async function renderDoctorReportsPicker(layout) {
     patients.forEach(p => {
       const conn = connectionsCache.find(c => c.status === 'accepted' && c.patient_id === p.id);
       const label = conn?.doctor_nickname ? `${conn.doctor_nickname} (${p.name})` : p.name;
-      const hasGrant = grantedPatientIds.has(p.id);
       const btn = document.createElement('button');
       btn.className = 'patient-picker-item';
       btn.innerHTML = `
         <div class="avatar">${initials(p.name)}</div>
-        <span>${escHtml(label)}</span>
-        <span class="status-pill ${hasGrant ? 'accepted' : 'rejected'}">${hasGrant ? 'Shared' : 'Not shared'}</span>`;
+        <span>${escHtml(label)}</span>`;
       btn.addEventListener('click', () => {
         picker.querySelectorAll('.patient-picker-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        loadDoctorPatientReports(p, hasGrant, resultsEl);
+        loadDoctorPatientReports(p, resultsEl);
       });
       picker.appendChild(btn);
     });
   } catch { layout.innerHTML = emptyState('alert', 'Failed to load.', ''); }
 }
 
-async function loadDoctorPatientReports(patient, hasGrant, resultsEl) {
-  if (!hasGrant) {
-    resultsEl.innerHTML = emptyState('lock', `${patient.name} hasn't shared their reports history with you yet.`,
-      'They can turn this on from their Connections page.');
-    return;
-  }
+/* A connected doctor sees ALL of the patient's reports: lab reports the
+   patient uploaded on their own side, plus everything shared in any chat. */
+async function loadDoctorPatientReports(patient, resultsEl) {
   resultsEl.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
   try {
     const [repRes, prescRes, docRes] = await Promise.all([
@@ -2118,9 +2177,13 @@ async function loadDoctorPatientReports(patient, hasGrant, resultsEl) {
       apiFetch(`/prescriptions?patient_id=${patient.id}`),
       apiFetch(`/structured/documents?patient_id=${patient.id}`)
     ]);
-    const reports = repRes.ok ? await repRes.json() : [];
-    const prescriptions = prescRes.ok ? await prescRes.json() : [];
-    const documents = docRes.ok ? await docRes.json() : [];
+    const failed = [repRes, prescRes, docRes].find(r => !r.ok);
+    if (failed) {
+      const data = await failed.json().catch(() => ({}));
+      resultsEl.innerHTML = emptyState('alert', `Couldn't load ${patient.name}'s reports.`, errMsg(data));
+      return;
+    }
+    const [reports, prescriptions, documents] = await Promise.all([repRes.json(), prescRes.json(), docRes.json()]);
     renderReportsAndPrescriptionsList(resultsEl, reports, prescriptions, documents, patient.id);
   } catch { resultsEl.innerHTML = emptyState('alert', 'Failed to load reports.', ''); }
 }
@@ -2227,6 +2290,392 @@ function sparkBars(values) {
   if (!values || !values.length) return '';
   return values.map((v) => `<div class="spark-bar" style="height:${4 + v * 16}px"></div>`).join('');
 }
+
+/* ============================================================
+   MEDICINES
+   Doctor: pick a connected patient, write medicines (optional file),
+   edit/stop the ones they prescribed. Patient: read-only list.
+   Server: routers/medicines.py -- writes into the shared `medicines`
+   table, so the AI symptom checker also sees what was prescribed.
+   ============================================================ */
+let medicinesState = null; // { patientId, patientName } -- doctor view only
+
+/* "2026-10-10" -> local date (no UTC shift, unlike new Date("2026-10-10")). */
+function parseLocalDate(isoDate) {
+  if (!isoDate) return null;
+  const [y, m, d] = String(isoDate).slice(0, 10).split('-').map(Number);
+  return (y && m && d) ? new Date(y, m - 1, d) : null;
+}
+
+function localTodayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fmtMedDate(isoDate) {
+  const d = parseLocalDate(isoDate);
+  return d ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+}
+
+function medicineDurationLabel(med) {
+  const start = parseLocalDate(med.start_date);
+  const end = parseLocalDate(med.end_date);
+  if (start && end) {
+    const days = Math.round((end - start) / 86400000) + 1;
+    return `${fmtMedDate(med.start_date)} – ${fmtMedDate(med.end_date)} (${days} day${days === 1 ? '' : 's'})`;
+  }
+  if (start) return `From ${fmtMedDate(med.start_date)} · ongoing`;
+  if (end) return `Until ${fmtMedDate(med.end_date)}`;
+  return 'No dates given';
+}
+
+/* Past its end date counts as finished even if never explicitly stopped. */
+function medicineIsCurrent(med) {
+  if (!med.active) return false;
+  const end = parseLocalDate(med.end_date);
+  if (!end) return true;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return end >= today;
+}
+
+async function loadMedicinesPage() {
+  const me = auth.user();
+  const layout = document.getElementById('medicines-layout');
+  const subtitle = document.getElementById('medicines-subtitle');
+  layout.innerHTML = '<div class="skeleton skeleton-line w60"></div><div class="skeleton skeleton-line w80"></div>';
+  if (me.role === 'doctor') {
+    subtitle.textContent = 'Write and manage medicines for your connected patients.';
+    await renderDoctorMedicines(layout);
+  } else {
+    subtitle.textContent = 'Medicines prescribed by your doctors. Only your doctor can change these.';
+    await renderPatientMedicines(layout);
+  }
+}
+
+function medicineCard(med, { canEdit = false } = {}) {
+  const current = medicineIsCurrent(med);
+  const div = document.createElement('div');
+  div.className = `blueprint medicine-card${current ? '' : ' stopped'}`;
+  div.dataset.id = med.id;
+  const by = med.source === 'lab_report'
+    ? 'Found in an uploaded lab report'
+    : `Prescribed by ${med.doctor_name ? 'Dr. ' + escHtml(med.doctor_name.replace(/^dr\.?\s+/i, '')) : 'your doctor'}`;
+  div.innerHTML = `
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div class="medicine-main">
+      <div class="medicine-name">${escHtml(med.name)}</div>
+      ${med.dosage ? `<div class="medicine-dosage">${escHtml(med.dosage)}</div>` : ''}
+      <div class="medicine-meta">
+        <span>${escHtml(medicineDurationLabel(med))}</span>
+        <span>${by}</span>
+      </div>
+      ${med.notes ? `<div class="medicine-notes">${escHtml(med.notes)}</div>` : ''}
+    </div>
+    <div class="medicine-actions">
+      <span class="status-pill ${current ? 'accepted' : 'rejected'}">${current ? 'Active' : 'Stopped'}</span>
+      ${med.has_attachment ? '<button class="btn btn-secondary btn-sm med-attachment-btn">View file</button>' : ''}
+      ${canEdit ? '<button class="btn btn-ghost btn-sm med-edit-btn">Edit</button>' : ''}
+      ${canEdit && current ? '<button class="btn btn-danger btn-sm med-stop-btn">Stop</button>' : ''}
+    </div>`;
+  const attBtn = div.querySelector('.med-attachment-btn');
+  if (attBtn) attBtn.addEventListener('click', () => openMedicineAttachment(med, attBtn));
+  return div;
+}
+
+async function openMedicineAttachment(med, btn) {
+  btn.disabled = true;
+  try {
+    const { res, blob } = await fetchFileBlob(`/medicines/${med.id}/attachment`);
+    const url = URL.createObjectURL(blob);
+    const isViewable = (blob.type || '').startsWith('image/') || (blob.type || '').includes('pdf');
+    if (!isViewable) { saveBlob(blob, downloadNameFor(res, blob, med.attachment_name || med.name)); return; }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2>${escHtml(med.name)}</h2>
+          <button class="btn btn-ghost btn-sm" id="modal-close-btn">✕</button>
+        </div>
+        <div class="pdf-preview">${(blob.type || '').startsWith('image/')
+          ? `<img src="${url}" alt="Prescription file" style="max-width:100%;display:block;margin:0 auto">`
+          : `<iframe src="${url}" title="Prescription file"></iframe>`}</div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary btn-sm" id="med-file-download-btn">Download</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => { overlay.remove(); URL.revokeObjectURL(url); };
+    overlay.querySelector('#modal-close-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#med-file-download-btn').addEventListener('click', () =>
+      saveBlob(blob, downloadNameFor(res, blob, med.attachment_name || med.name)));
+  } catch (err) { toast(err.message || 'Could not open the file.', 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function renderMedicineList(container, meds, { canEditFor = null, emptyMsg, emptyHint = '' } = {}) {
+  container.innerHTML = '';
+  if (!meds.length) { container.innerHTML = emptyState('file', emptyMsg, emptyHint); return; }
+  const current = meds.filter(medicineIsCurrent);
+  const past = meds.filter(m => !medicineIsCurrent(m));
+  const section = (title, list) => {
+    if (!list.length) return;
+    const h = document.createElement('div');
+    h.className = 'medicine-section-title';
+    h.textContent = `${title} (${list.length})`;
+    container.appendChild(h);
+    const wrap = document.createElement('div');
+    wrap.className = 'medicine-list';
+    list.forEach(m => {
+      const canEdit = canEditFor != null && m.source === 'doctor' && m.doctor_id === canEditFor;
+      const card = medicineCard(m, { canEdit });
+      if (canEdit) wireDoctorMedicineCard(card, m);
+      wrap.appendChild(card);
+    });
+    container.appendChild(wrap);
+  };
+  section('Current', current);
+  section('Past / stopped', past);
+}
+
+/* ── Patient: read-only ── */
+async function renderPatientMedicines(layout) {
+  try {
+    const res = await apiFetch('/medicines/me');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { layout.innerHTML = emptyState('alert', 'Failed to load medicines.', errMsg(data)); return; }
+    layout.innerHTML = '<div class="medicine-readonly-note">These are set by your doctor and can\'t be edited here. Ask your doctor if something looks wrong.</div><div id="medicine-list-wrap"></div>';
+    renderMedicineList(layout.querySelector('#medicine-list-wrap'), data, {
+      emptyMsg: 'No medicines yet.',
+      emptyHint: 'Medicines your doctor prescribes will appear here.',
+    });
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load medicines.', ''); }
+}
+
+/* ── Doctor: patient picker + write form + list ── */
+async function renderDoctorMedicines(layout) {
+  let patients = [];
+  try {
+    const res = await apiFetch('/users?role=patient');
+    if (!res.ok) { layout.innerHTML = emptyState('alert', 'Failed to load your patients.', errMsg(await res.json().catch(() => ({})))); return; }
+    patients = await res.json();
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load your patients.', ''); return; }
+
+  if (!patients.length) {
+    layout.innerHTML = emptyState('people', 'No connected patients yet.', 'Connect with a patient first from the Connections tab.');
+    return;
+  }
+
+  const today = localTodayIso();
+  layout.innerHTML = `
+    <div class="medicines-toolbar">
+      <div class="field">
+        <label for="med-patient-select">Patient</label>
+        <select id="med-patient-select">
+          <option value="">Select a patient…</option>
+          ${patients.map(p => {
+            const conn = connectionsCache.find(c => c.status === 'accepted' && c.patient_id === p.id);
+            const label = conn?.doctor_nickname ? `${conn.doctor_nickname} (${p.name})` : p.name;
+            return `<option value="${p.id}">${escHtml(label)}</option>`;
+          }).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary btn-sm" id="med-add-toggle-btn" disabled>+ Add medicine</button>
+    </div>
+    <form class="blueprint medicine-form" id="med-add-form" style="display:none" novalidate>
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="error-banner" id="med-form-error" style="display:none"></div>
+      <div class="upload-form-row">
+        <div class="field">
+          <label for="med-name">Medicine name *</label>
+          <input type="text" id="med-name" maxlength="200" placeholder="e.g. Amoxicillin 500 mg" required>
+        </div>
+        <div class="field">
+          <label for="med-dosage">Dosage / how to take</label>
+          <input type="text" id="med-dosage" maxlength="200" placeholder="e.g. 1 tablet, 3 times a day after meals">
+        </div>
+      </div>
+      <div class="upload-form-row">
+        <div class="field">
+          <label for="med-start">Start date</label>
+          <input type="date" id="med-start" value="${today}">
+        </div>
+        <div class="field">
+          <label for="med-end">End date (leave empty if ongoing)</label>
+          <input type="date" id="med-end">
+        </div>
+      </div>
+      <div class="field">
+        <label for="med-notes">Notes for the patient (optional)</label>
+        <textarea id="med-notes" rows="2" maxlength="1000" placeholder="e.g. Avoid dairy within 2 hours"></textarea>
+      </div>
+      <div class="field">
+        <label for="med-file">Prescription file (optional — PDF, JPG or PNG, max 20 MB)</label>
+        <input type="file" id="med-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+      </div>
+      <div class="upload-form-row">
+        <button type="submit" class="btn btn-primary btn-sm" id="med-submit-btn">Save medicine</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="med-cancel-btn">Cancel</button>
+      </div>
+    </form>
+    <div id="medicine-list-wrap">${emptyState('pointLeft', 'Select a patient to see and write their medicines.', '')}</div>`;
+
+  const select = layout.querySelector('#med-patient-select');
+  const toggleBtn = layout.querySelector('#med-add-toggle-btn');
+  const form = layout.querySelector('#med-add-form');
+  const errEl = layout.querySelector('#med-form-error');
+
+  const resetForm = () => {
+    form.reset();
+    layout.querySelector('#med-start').value = localTodayIso();
+    errEl.style.display = 'none';
+  };
+
+  select.addEventListener('change', () => {
+    const id = Number(select.value);
+    const p = patients.find(x => x.id === id);
+    medicinesState = p ? { patientId: p.id, patientName: p.name } : null;
+    toggleBtn.disabled = !p;
+    form.style.display = 'none';
+    resetForm();
+    if (p) loadDoctorPatientMedicines();
+    else layout.querySelector('#medicine-list-wrap').innerHTML = emptyState('pointLeft', 'Select a patient to see and write their medicines.', '');
+  });
+  toggleBtn.addEventListener('click', () => {
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+    if (form.style.display === '') layout.querySelector('#med-name').focus();
+  });
+  layout.querySelector('#med-cancel-btn').addEventListener('click', () => { form.style.display = 'none'; resetForm(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!medicinesState) return;
+    const name = layout.querySelector('#med-name').value.trim();
+    const start = layout.querySelector('#med-start').value;
+    const end = layout.querySelector('#med-end').value;
+    const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+    if (!name) { showErr('Please enter the medicine name.'); return; }
+    if (start && end && end < start) { showErr("End date can't be before the start date."); return; }
+
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('dosage', layout.querySelector('#med-dosage').value.trim());
+    if (start) fd.append('start_date', start);
+    if (end) fd.append('end_date', end);
+    fd.append('notes', layout.querySelector('#med-notes').value.trim());
+    const file = layout.querySelector('#med-file').files[0];
+    if (file) fd.append('file', file);
+
+    const submitBtn = layout.querySelector('#med-submit-btn');
+    submitBtn.disabled = true; submitBtn.textContent = 'Saving…';
+    try {
+      const res = await apiFetch(`/medicines/patients/${medicinesState.patientId}`, { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showErr(errMsg(data)); return; }
+      toast(`${data.name} added for ${medicinesState.patientName}.`, 'success');
+      form.style.display = 'none';
+      resetForm();
+      loadDoctorPatientMedicines();
+    } catch (err) { showErr(err.message || 'Could not reach the server.'); }
+    finally { submitBtn.disabled = false; submitBtn.textContent = 'Save medicine'; }
+  });
+
+  // Keep the previously selected patient when coming back to the page.
+  if (medicinesState && patients.some(p => p.id === medicinesState.patientId)) {
+    select.value = String(medicinesState.patientId);
+    select.dispatchEvent(new Event('change'));
+  } else {
+    medicinesState = null;
+  }
+}
+
+async function loadDoctorPatientMedicines() {
+  const wrap = document.getElementById('medicine-list-wrap');
+  if (!wrap || !medicinesState) return;
+  const { patientId, patientName } = medicinesState;
+  wrap.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch(`/medicines/patients/${patientId}`);
+    const data = await res.json().catch(() => ({}));
+    if (medicinesState?.patientId !== patientId) return; // switched patient meanwhile
+    if (!res.ok) { wrap.innerHTML = emptyState('alert', `Couldn't load ${patientName}'s medicines.`, errMsg(data)); return; }
+    renderMedicineList(wrap, data, {
+      canEditFor: auth.user().id,
+      emptyMsg: `No medicines for ${patientName} yet.`,
+      emptyHint: 'Use "+ Add medicine" to write one.',
+    });
+  } catch { wrap.innerHTML = emptyState('alert', 'Failed to load medicines.', ''); }
+}
+
+function wireDoctorMedicineCard(card, med) {
+  const stopBtn = card.querySelector('.med-stop-btn');
+  if (stopBtn) {
+    stopBtn.addEventListener('click', async () => {
+      if (!confirm(`Stop ${med.name}? It will stay in the patient's history as stopped.`)) return;
+      const fd = new FormData();
+      fd.append('stop', 'true');
+      await patchMedicine(med, fd, stopBtn, `${med.name} stopped.`);
+    });
+  }
+  const editBtn = card.querySelector('.med-edit-btn');
+  if (editBtn) editBtn.addEventListener('click', () => openMedicineEditor(card, med));
+}
+
+function openMedicineEditor(card, med) {
+  const main = card.querySelector('.medicine-main');
+  const actions = card.querySelector('.medicine-actions');
+  actions.style.display = 'none';
+  main.innerHTML = `
+    <div class="error-banner med-edit-error" style="display:none"></div>
+    <div class="upload-form-row" style="flex-wrap:wrap;margin-bottom:10px">
+      <div class="field"><label>Medicine name *</label><input type="text" class="med-edit-name" maxlength="200" value="${escHtml(med.name)}"></div>
+      <div class="field"><label>Dosage / how to take</label><input type="text" class="med-edit-dosage" maxlength="200" value="${escHtml(med.dosage || '')}"></div>
+    </div>
+    <div class="upload-form-row" style="flex-wrap:wrap;margin-bottom:10px">
+      <div class="field"><label>Start date</label><input type="date" class="med-edit-start" value="${escHtml(med.start_date || '')}"></div>
+      <div class="field"><label>End date</label><input type="date" class="med-edit-end" value="${escHtml(med.end_date || '')}"></div>
+    </div>
+    <div class="field"><label>Notes for the patient</label><textarea class="med-edit-notes" rows="2" maxlength="1000">${escHtml(med.notes || '')}</textarea></div>
+    <div class="field"><label>Replace prescription file (optional)</label><input type="file" class="med-edit-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"></div>
+    <div class="upload-form-row">
+      <button type="button" class="btn btn-primary btn-sm med-edit-save">Save changes</button>
+      <button type="button" class="btn btn-ghost btn-sm med-edit-cancel">Cancel</button>
+    </div>`;
+  main.querySelector('.med-edit-cancel').addEventListener('click', () => loadDoctorPatientMedicines());
+  const saveBtn = main.querySelector('.med-edit-save');
+  saveBtn.addEventListener('click', async () => {
+    const errEl = main.querySelector('.med-edit-error');
+    const name = main.querySelector('.med-edit-name').value.trim();
+    const start = main.querySelector('.med-edit-start').value;
+    const end = main.querySelector('.med-edit-end').value;
+    const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+    if (!name) { showErr('Please enter the medicine name.'); return; }
+    if (start && end && end < start) { showErr("End date can't be before the start date."); return; }
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('dosage', main.querySelector('.med-edit-dosage').value.trim());
+    if (start) fd.append('start_date', start);
+    if (end) fd.append('end_date', end);
+    fd.append('notes', main.querySelector('.med-edit-notes').value.trim());
+    const file = main.querySelector('.med-edit-file').files[0];
+    if (file) fd.append('file', file);
+    await patchMedicine(med, fd, saveBtn, `${name} updated.`, showErr);
+  });
+}
+
+async function patchMedicine(med, formData, btn, successMsg, showErr = null) {
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(`/medicines/${med.id}`, { method: 'PATCH', body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { (showErr || ((m) => toast(m, 'error')))(errMsg(data)); return; }
+    toast(successMsg, 'success');
+    loadDoctorPatientMedicines();
+  } catch (err) { toast(err.message || 'Could not reach the server.', 'error'); }
+  finally { btn.disabled = false; }
+}
+
 
 /* ============================================================
    MED CALENDAR
@@ -2559,6 +3008,9 @@ function initNav() {
       } else if (page === 'calendar') {
         showPage('calendar');
         loadCalendarPage();
+      } else if (page === 'medicines') {
+        showPage('medicines');
+        loadMedicinesPage();
       } else if (page === 'profile') {
         showPage('profile');
         loadProfilePage();

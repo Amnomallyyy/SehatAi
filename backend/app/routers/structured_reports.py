@@ -31,6 +31,7 @@ the shared `patients` table, which other services (SehatAI's Node
 service, DietBot) also read.
 """
 import html
+import mimetypes
 import os
 import re
 import uuid
@@ -228,6 +229,8 @@ def _document_summary(
         has_source_file=bool(doc.file_path),
         doctor_reviewed=bool(doc.doctor_reviewed),
         retracted=retracted,
+        mime_type=doc.mime_type or (mimetypes.guess_type(doc.file_url.split("?")[0])[0] if doc.file_url else None),
+        ai_summary=doc.ai_summary,
     )
 
 
@@ -237,7 +240,9 @@ def list_structured_documents(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    patient_uuid = resolve_structured_patient(patient_id, current_user, db)
+    patient_uuid = resolve_structured_patient(patient_id, current_user, db, allow_missing=True)
+    if patient_uuid is None:
+        return []
     docs = (
         db.query(models.Document)
         .filter(models.Document.patient_id == patient_uuid)
@@ -434,7 +439,9 @@ def download_structured_document_file(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not fetch file from storage: {exc}")
 
     filename = os.path.basename(doc.file_url.split("?")[0])
-    media_type = doc.mime_type or ("application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream")
+    # documents.mime_type is often null (the pipeline doesn't send it), so
+    # fall back to the storage path's extension -- never label a JPG as PDF.
+    media_type = doc.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     return Response(
         content=file_bytes,
         media_type=media_type,

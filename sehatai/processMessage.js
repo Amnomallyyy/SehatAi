@@ -113,7 +113,7 @@ import {
   describeChannel,
   MAX_CLARIFICATION_ROUNDS,
 } from './infermedicaClient.js';
-import { assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested } from './clarificationCheck.js';
+import { assessIntake, resolveFinalConfirmation, resolveDisambiguationAnswer, classifyPendingAnswerRelevance, generateEventFollowUp, isOverrideRequested, extractQuestionOptions } from './clarificationCheck.js';
 import { classifySymptoms, formatClassifiedSymptoms, normalizeComplaint, describeSymptomsForParse, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, PRONOUN_DENIAL_RE } from './symptomClassifier.js';
 import { sanityFilterSymptoms } from './symptomSanityGate.js';
 import { composeReply, composeModeFor, looksNonEnglish, listMarker, stripListMarkers } from './replyComposer.js';
@@ -145,6 +145,12 @@ import { extractUnaccountedComplaints } from './complaintDiff.js';
 // cooperative patient's real Q&A rounds, but still can't stall the
 // conversation forever.
 const MAX_OFF_TOPIC_STREAK = 2;
+
+// "Which one?" follow-up to a bare "yes" on an either/or question (see the
+// EITHER/OR backstop in STAGE 6). The prefix marks the follow-up so a
+// second "yes" to it is read as "all of them".
+const WHICH_OPTION_PREFIX = 'Just to be sure,';
+const BOTH_ANSWER_RE = /^\s*(?:both|both of them|all|all of them|all of those|dono|dono\s+hi|donon|dono\s+hain|دونوں)\s*[.!]*\s*$/i;
 
 // ------------------------------------------------------------------
 // HELPERS
@@ -2177,6 +2183,29 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       actions: [{ id: 'complete_profile', label: 'Complete your profile' }],
     });
   }
+  // Infermedica only accepts ages 1–130 (found live: a date of birth
+  // entered as this year gave age 0, and the patient only saw "trouble
+  // connecting to the clinical engine" at the very end). Catch it here,
+  // before any symptom gathering, with a message that says what to fix.
+  if (!(patientProfile.age >= 1 && patientProfile.age <= 130)) {
+    const reply =
+      "The date of birth on your profile doesn't look right (it gives an age of " +
+      `${patientProfile.age}). Please check it on your Profile page, then come back and we'll pick this up.`;
+    await logChatMessage({
+      sessionId,
+      patientId,
+      message,
+      response: { kind: 'profile_incomplete', reply },
+    });
+    return envelope({
+      kind: 'profile_incomplete',
+      sessionId,
+      subject: subjectInfo,
+      reply: cleanReply(reply),
+      actionable: true,
+      actions: [{ id: 'complete_profile', label: 'Check your profile' }],
+    });
+  }
   const age = patientProfile.age;
   const sex = patientProfile.sex.toLowerCase();
 
@@ -2352,10 +2381,39 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // getLastQuestionCandidates), so a bare affirmation records exactly
     // those, with no AI guess involved. Never overrides anything the
     // classifier DID extract.
-    if (wasAnsweringClarification && classifiedSymptoms.length === 0 && BARE_AFFIRMATION_RE.test(message)) {
-      const candidates = getLastQuestionCandidates(sessionId);
-      if (candidates.length) {
+    //
+    // EITHER/OR (found live): "yes" answering "have you noticed any changes
+    // in your vision or any redness in the eye?" came back with NO
+    // candidates declared, so it fell through to "I didn't catch any
+    // symptoms". Now: recover the options from the question text when
+    // they weren't declared, and when the question offered two or more,
+    // ask which one(s) instead of guessing — a "yes" to "A or B?" doesn't
+    // mean both. "both" (or "yes" again to that follow-up) records all.
+    const isBareYes = BARE_AFFIRMATION_RE.test(message);
+    const isBoth = BOTH_ANSWER_RE.test(message);
+    if (wasAnsweringClarification && classifiedSymptoms.length === 0 && (isBareYes || isBoth)) {
+      const lastQuestion = getLastQuestionAsked(sessionId) || '';
+      let candidates = getLastQuestionCandidates(sessionId);
+      if (!candidates.length && lastQuestion) {
+        candidates = await extractQuestionOptions(lastQuestion, priorPresentTerms);
+      }
+      const answeringWhichOne = lastQuestion.startsWith(WHICH_OPTION_PREFIX);
+      if (candidates.length === 1 || (candidates.length > 1 && (isBoth || answeringWhichOne))) {
         classifiedSymptoms = candidates.map((term) => ({ term, present: true, duration: null, severity: null }));
+      } else if (candidates.length > 1) {
+        const options = `${candidates.slice(0, -1).join(', ')} or ${candidates[candidates.length - 1]}`;
+        const whichQuestion = `${WHICH_OPTION_PREFIX} which do you have — ${options}, or both?`;
+        setAwaitingClarificationAnswer(sessionId, true);
+        setLastQuestionAsked(sessionId, whichQuestion); // clears candidates, so set them after
+        setLastQuestionCandidates(sessionId, candidates);
+        return envelope({
+          kind: 'clarification',
+          sessionId,
+          needsClarification: true,
+          resolvedAge: age,
+          resolvedSex: sex,
+          reply: cleanReply(whichQuestion),
+        });
       }
     }
     // "I don't have this symptom" with several on file: the classifier

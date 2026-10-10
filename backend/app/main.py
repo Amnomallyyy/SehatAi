@@ -22,6 +22,7 @@ from .routers import (
     connections,
     conversations,
     lab_reports,
+    medicines,
     messages,
     prescriptions,
     report_access,
@@ -133,6 +134,7 @@ app.include_router(appointments.router)
 app.include_router(sehatai_bridge.router)
 app.include_router(lab_reports.router)
 app.include_router(structured_reports.router)
+app.include_router(medicines.router)
 
 
 @app.get("/health/live", tags=["health"])
