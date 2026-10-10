@@ -138,6 +138,7 @@ class User(Base):
         return self.unconfirmed is None
 
     unconfirmed = relationship("UnconfirmedUser", uselist=False, cascade="all, delete-orphan")
+    consent = relationship("ConsentRecord", uselist=False, cascade="all, delete-orphan")
 
     conversations_as_patient = relationship(
         "Conversation", foreign_keys="Conversation.patient_id", back_populates="patient"
@@ -634,6 +635,33 @@ class UnconfirmedUser(Base):
     __tablename__ = "unconfirmed_users"
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class ConsentRecord(Base):
+    """That this person agreed to the privacy notice at sign-up: which version
+    of the text they saw and when. One row per account."""
+    __tablename__ = "consent_records"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    notice_version = Column(String(30), nullable=False)
+    accepted_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class DemographicStat(Base):
+    """ANONYMISED sign-up statistics: a coarse age group, sex, role and
+    country plus the sign-up month. Deliberately has NO user id, name, email,
+    city or date of birth, so a row can't be traced back to an account (and
+    it is not updated or removed when an account changes). Written once at
+    sign-up, after the person agreed to the privacy notice."""
+    __tablename__ = "demographic_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    role = Column(String(10), nullable=False)  # doctor | patient
+    age_band = Column(String(10), nullable=True)  # 0-17 | 18-29 | 30-44 | 45-59 | 60+ (patients only)
+    sex = Column(String(10), nullable=True)  # patients only
+    country = Column(String(100), nullable=False)
+    signup_month = Column(String(7), nullable=False, index=True)  # YYYY-MM
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
 

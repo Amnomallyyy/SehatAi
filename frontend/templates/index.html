@@ -59,6 +59,10 @@
         <label for="login-password">Password</label>
         <input type="password" id="login-password" name="password" autocomplete="current-password" required placeholder="••••••••">
       </div>
+      <label class="check-row" style="margin:2px 0 4px">
+        <input type="checkbox" name="remember" id="login-remember"> Keep me signed in on this device
+      </label>
+      <div class="field-hint" style="margin:0 0 6px">Leave this off on a shared computer.</div>
       <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Log in</button>
       <div class="auth-links">
         <button type="button" class="link-btn" id="forgot-link">Forgot password?</button>
@@ -127,7 +131,12 @@
         </div>
       </div>
       <div class="field-hint" style="margin:-6px 0 4px">Your location is shared with your connected doctors and, if you use the Emergency button, with the person you choose to alert.</div>
-      <button type="submit" class="btn btn-primary btn-full" style="margin-top:8px">Create account</button>
+      <div class="data-notice" id="signup-data-notice" role="note"></div>
+      <label class="check-row consent-row">
+        <input type="checkbox" id="signup-consent" name="consent" required>
+        <span>I have read and agree to how my data will be used. I understand I can't create an account without agreeing.</span>
+      </label>
+      <button type="submit" class="btn btn-primary btn-full" id="signup-submit" style="margin-top:8px" disabled>Create account</button>
     </form>
 
     <!-- Forgot password -->

@@ -1539,3 +1539,15 @@ button.slot-book:hover { border-color: var(--color-accent); background: color-mi
 .intake-table select.intake-cell { cursor: pointer; }
 #intake-save-btn { margin-top: 18px; min-width: 220px; }
 @media (max-width: 680px) { .intake-form { padding: 18px 16px; } #intake-save-btn { width: 100%; } }
+
+/* ── Data-use notice (sign-up + health intake) ── */
+.data-notice {
+  margin: 14px 0; padding: 10px 12px; font-size: .8125rem; line-height: 1.5; color: var(--text-mid);
+  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  border-left: 3px solid var(--color-accent);
+}
+.data-notice strong { color: var(--text); }
+
+.consent-row { align-items: flex-start; margin: 4px 0 10px; font-size: .875rem; line-height: 1.4; }
+.consent-row input { margin-top: 3px; }
+#signup-submit:disabled { opacity: .5; cursor: not-allowed; }

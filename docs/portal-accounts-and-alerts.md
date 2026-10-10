@@ -16,11 +16,13 @@ Created automatically by the backend on start (`create_all`, with row-level secu
 | `appointment_slots` | doctor availability; booking creates a normal `appointments` row |
 | `intake_entries` | one row per line of the intake form's tables (allergies, existing conditions, family history); the bots' lists in `patient_intake_form` are refreshed from the names |
 | `intake_profile` | top health concerns (ranked, up to 5) and when the main problem began |
+| `consent_records` | that the person agreed to the privacy notice at sign-up: notice version and time (one row per account) |
+| `demographic_stats` | anonymised sign-up statistics: age group, sex, role, country, sign-up month. No user id, name, email or city, so rows can't be traced to an account |
 
 Reused as-is: `patient_intake_form` (the triage and diet bots already read it), `medicines`, `medicine_prescriptions`, `appointments`, `connections`.
 
 ## Behaviour
-- **Sign-up** needs city + country, sends a confirmation email and does **not** log the user in. Login is blocked (403) until the link is used.
+- **Sign-up** requires ticking the privacy agreement (enforced by the server too; the notice version is recorded), needs city + country, sends a confirmation email and does **not** log the user in. It also writes one anonymised row to `demographic_stats`. When you change the notice wording, bump `PRIVACY_NOTICE_VERSION` in both `backend/app/privacy.py` and `frontend/static/js/app.js`. Login is blocked (403) until the link is used.
   Forgot-password and resend-confirmation always answer with the same generic message, so they can't be used to find out which emails exist.
 - **Health intake** (patients) is required right after login. It is laid out like a paper intake form, with a table each for allergies, existing conditions and family history, a ranked list of top health concerns, an emergency contact and a location. Medicines are not on this form; they live on the Medicines page.
 - **Availability**: doctors publish slots; connected patients book one; a booked slot disappears for everyone else; cancelling re-opens it.

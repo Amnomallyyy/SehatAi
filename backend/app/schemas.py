@@ -109,6 +109,9 @@ class SignupRequest(BaseModel):
     # Typed location, required for both roles.
     city: str = Field(min_length=1, max_length=100)
     country: str = Field(min_length=1, max_length=100)
+    # The privacy-notice version the person ticked "I agree" on. Required:
+    # sign-up is refused without it (routers/auth.py).
+    accepted_notice_version: Optional[str] = Field(default=None, max_length=30)
 
     @field_validator("city", "country")
     @classmethod

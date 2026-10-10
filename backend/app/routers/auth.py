@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import account_tokens, models, schemas
+from .. import account_tokens, models, privacy, schemas
 from ..database import get_db
 from ..ratelimit import check_key, check_login_attempt, client_ip, limit_per_ip
 from ..security import create_access_token, get_current_user, hash_password, verify_password
@@ -28,6 +28,19 @@ BAD_LINK_MESSAGE = "This link is invalid or has expired. Please request a new on
     dependencies=[Depends(limit_per_ip("signup", limit=SIGNUPS_PER_IP_PER_HOUR, window_seconds=3600))],
 )
 def signup(payload: schemas.SignupRequest, db: Session = Depends(get_db)):
+    # No agreement, no account. The browser also blocks this, but the server
+    # is what actually enforces it.
+    if not payload.accepted_notice_version:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must agree to how your data will be used to create an account.",
+        )
+    if payload.accepted_notice_version != privacy.PRIVACY_NOTICE_VERSION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The privacy notice was updated. Please refresh the page and read it again before signing up.",
+        )
+
     existing = db.query(models.User).filter(models.User.email == payload.email).first()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered")
@@ -64,11 +77,22 @@ def signup(payload: schemas.SignupRequest, db: Session = Depends(get_db)):
         sex=payload.sex,
     )
     user.location = models.UserLocation(city=payload.city, country=payload.country)
+    user.consent = models.ConsentRecord(notice_version=payload.accepted_notice_version)
     # Not confirmed until the emailed link is used -- login is blocked until then.
     user.unconfirmed = models.UnconfirmedUser()
     db.add(user)
     try:
         db.flush()
+        # Anonymised statistics row: no link back to this account.
+        db.add(
+            models.DemographicStat(
+                role=payload.role.value,
+                age_band=privacy.age_band(payload.date_of_birth),
+                sex=payload.sex,
+                country=privacy.clean_country(payload.country),
+                signup_month=models.utc_now().strftime("%Y-%m"),
+            )
+        )
         raw_token = account_tokens.issue_token(db, user, account_tokens.CONFIRM_EMAIL)
         db.commit()
     except IntegrityError:

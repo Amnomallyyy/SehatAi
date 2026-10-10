@@ -565,6 +565,27 @@ begin
         );
         create index if not exists intake_entries_user_idx on intake_entries (user_id, section, position);
 
+        -- that the person agreed to the privacy notice at sign-up: which version
+        -- of the text they saw, and when. One row per account.
+        create table if not exists consent_records (
+            user_id         integer primary key references users (id) on delete cascade,
+            notice_version  varchar(30) not null,
+            accepted_at     timestamp not null default now()
+        );
+
+        -- ANONYMISED sign-up statistics. No user id, name, email, city or date of
+        -- birth on purpose: a row can't be traced back to an account.
+        create table if not exists demographic_stats (
+            id            serial primary key,
+            role          varchar(10) not null,          -- doctor | patient
+            age_band      varchar(10),                   -- 0-17 | 18-29 | 30-44 | 45-59 | 60+ (patients)
+            sex           varchar(10),                   -- patients
+            country       varchar(100) not null,
+            signup_month  varchar(7) not null,           -- YYYY-MM
+            created_at    timestamp not null default now()
+        );
+        create index if not exists demographic_stats_month_idx on demographic_stats (signup_month);
+
         -- top health concerns (ranked, up to 5) + when the main problem began
         create table if not exists intake_profile (
             user_id        integer primary key references users (id) on delete cascade,

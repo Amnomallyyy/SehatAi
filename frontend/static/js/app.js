@@ -20,16 +20,44 @@ const EVIDENCE_API = SEHAT_CONFIG.evidenceBase || 'http://localhost:8002';
    session on every login/reload -- apiFetch() re-reads the token fresh
    on every call, so the failure isn't just a stale UI, actions in one
    tab start silently authenticating as whichever account logged in last
-   in ANY tab. sessionStorage is per-tab, so this can't happen. */
+   in ANY tab. sessionStorage is per-tab, so this can't happen.
+
+   "Keep me signed in on this device" (opt-in, unticked by default) keeps a
+   COPY of the login in localStorage purely so a fresh tab / window can
+   restore it on load (restore() copies it into that tab's own
+   sessionStorage). Live state still never crosses tabs: a tab that is
+   already open keeps its own session, and signing out (or an expired login)
+   clears the copy everywhere. Don't tick it on a shared computer. */
+const REMEMBER_KEY = 'remembered_login';
+const rememberStore = {
+  get() { try { return JSON.parse(localStorage.getItem(REMEMBER_KEY)); } catch { return null; } },
+  set(v) { try { localStorage.setItem(REMEMBER_KEY, JSON.stringify(v)); } catch { /* storage blocked: stays per-tab */ } },
+  clear() { try { localStorage.removeItem(REMEMBER_KEY); } catch { /* ignore */ } },
+};
 const auth = {
   token: () => sessionStorage.getItem('token'),
   user:  () => { try { return JSON.parse(sessionStorage.getItem('user')); } catch { return null; } },
-  save(token, user) {
+  save(token, user, remember = false) {
     sessionStorage.setItem('token', token);
     sessionStorage.setItem('user', JSON.stringify(user));
+    if (remember) rememberStore.set({ token, user }); else rememberStore.clear();
   },
-  updateUser(user) { sessionStorage.setItem('user', JSON.stringify(user)); },
-  clear() { sessionStorage.removeItem('token'); sessionStorage.removeItem('user'); }
+  updateUser(user) {
+    sessionStorage.setItem('user', JSON.stringify(user));
+    const saved = rememberStore.get();
+    // Only refresh the copy if it is THIS tab's login, never another account's.
+    if (saved && saved.token === sessionStorage.getItem('token')) rememberStore.set({ token: saved.token, user });
+  },
+  /* A brand-new tab with no login of its own picks up the remembered one. */
+  restore() {
+    if (sessionStorage.getItem('token')) return;
+    const saved = rememberStore.get();
+    if (saved && saved.token && saved.user) {
+      sessionStorage.setItem('token', saved.token);
+      sessionStorage.setItem('user', JSON.stringify(saved.user));
+    }
+  },
+  clear() { sessionStorage.removeItem('token'); sessionStorage.removeItem('user'); rememberStore.clear(); }
 };
 
 const DOCTOR_SPECIALIZATIONS = [
@@ -313,7 +341,33 @@ function showAuthNotice(title, text, { resendEmail = null } = {}) {
   showAuthPanel('notice');
 }
 
+/* The one data-use message, shown at sign-up and on the health intake. Keep it
+   in step with what the app really does: stores your details, shares them
+   with connected doctors, sends symptom / report text to outside AI and
+   clinical services, and emails the emergency contact on request. */
+/* Bump PRIVACY_NOTICE_VERSION here AND in backend/app/privacy.py whenever the
+   wording changes: the server refuses a sign-up that agreed to an older text. */
+const PRIVACY_NOTICE_VERSION = '2026-10-v1';
+const DATA_USE_NOTICE = {
+  title: 'How your data will be used',
+  text: 'The details you give us, including your health information, are stored in this portal and shared only with the doctors you connect with. ' +
+        'The AI assistant and the lab-report reader send what you type or upload (along with your age, sex and health history) to outside AI and clinical services to produce their results. ' +
+        'If you press Emergency, your name, location and the time are emailed to your emergency contact. ' +
+        'When you sign up, your age group, sex, role and country (never your name, email or city) are also saved in an anonymised statistics table that cannot be traced back to you, and is used for reports.',
+};
+
+function dataNoticeHtml() {
+  return `<div class="data-notice" role="note"><strong>${escHtml(DATA_USE_NOTICE.title)}.</strong> ${escHtml(DATA_USE_NOTICE.text)}</div>`;
+}
+
 function initAuth() {
+  const signupNotice = document.getElementById('signup-data-notice');
+  const consentBox = document.getElementById('signup-consent');
+  const signupBtn = document.getElementById('signup-submit');
+  // No agreement, no account: the button stays locked until the box is ticked
+  // (the server refuses a sign-up without it too).
+  consentBox.addEventListener('change', () => { signupBtn.disabled = !consentBox.checked; });
+  if (signupNotice) signupNotice.innerHTML = `<strong>${escHtml(DATA_USE_NOTICE.title)}.</strong> ${escHtml(DATA_USE_NOTICE.text)}`;
   const tabs = document.querySelectorAll('.auth-tab');
   const loginForm = document.getElementById('login-form');
   const signupForm = document.getElementById('signup-form');
@@ -355,7 +409,7 @@ function initAuth() {
         if (res.status === 403) resendLink.style.display = '';
         return;
       }
-      auth.save(data.access_token, data.user);
+      auth.save(data.access_token, data.user, loginForm.querySelector('[name="remember"]').checked);
       onLogin();
     } catch (err) {
       showError(loginForm, 'Could not reach the server. Is it running?');
@@ -444,6 +498,7 @@ function initAuth() {
     errEl.style.display = 'none';
     const role = signupForm.querySelector('[name="role"]:checked')?.value;
     if (!role) { errEl.textContent = 'Please choose a role.'; errEl.style.display = 'block'; return; }
+    if (!consentBox.checked) { errEl.textContent = 'You must agree to how your data will be used to create an account.'; errEl.style.display = 'block'; return; }
 
     btn.classList.add('btn-loading');
     try {
@@ -453,6 +508,7 @@ function initAuth() {
         password: signupForm.querySelector('[name="password"]').value,
         city:     signupForm.querySelector('[name="city"]').value.trim(),
         country:  signupForm.querySelector('[name="country"]').value.trim(),
+        accepted_notice_version: PRIVACY_NOTICE_VERSION,
         role
       };
       if (role === 'patient') {
@@ -467,6 +523,7 @@ function initAuth() {
       const { res, data } = await authPost('/auth/signup', body);
       if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
       signupForm.reset();
+      signupBtn.disabled = true; // the box is cleared with the form, so the next sign-up must agree again
       toggleSignupPatientFields();
       showAuthNotice(
         'Check your email',
@@ -4107,6 +4164,7 @@ function renderIntakeForm(layout, data) {
       <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
       <div class="intake-paper-title">Medical Intake Form</div>
       <p class="intake-paper-sub">Please complete all of the following as accurately as possible.</p>
+      ${dataNoticeHtml()}
 
       ${INTAKE_TABLES.map(tableSection).join('')}
 
@@ -4285,6 +4343,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
   });
 
+  auth.restore();
   if (handleAuthLinkFromUrl()) {
     // Opened from an emailed confirm / reset link: the auth page is showing.
   } else if (auth.token() && auth.user()) {
