@@ -43,7 +43,10 @@ import os
 import secrets
 import subprocess
 import sys
+import threading
+import time
 import uuid as uuid_module
+from datetime import datetime, timezone
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
@@ -55,7 +58,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..dependencies import LAB_REPORT_STAGING_DIR, get_or_create_sehatai_patient_id
-from ..security import get_current_user, hash_password, require_patient_role
+from ..security import get_current_user, hash_password, require_patient_role, verify_password
 from ..verification import run_verification
 
 logger = logging.getLogger(__name__)
@@ -173,6 +176,97 @@ def _log_background_failure(fut: Future) -> None:
         logger.error("Lab report extraction crashed: %r", exc)
 
 
+# In-memory job status, so an upload that outlives the request ("queued")
+# can still report how it ended instead of silently never appearing.
+# Lost on restart; entries expire after JOB_TTL_SECONDS.
+JOB_TTL_SECONDS = 6 * 60 * 60
+_JOBS: dict = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _prune_jobs() -> None:
+    cutoff = time.time() - JOB_TTL_SECONDS
+    for job_id in [j for j, v in _JOBS.items() if v["created"] < cutoff]:
+        _JOBS.pop(job_id, None)
+
+
+def _outcome(result: subprocess.CompletedProcess) -> dict:
+    """Same user-facing outcome the synchronous path returns -- shared so a
+    background job and an in-request result can't disagree."""
+    parsed = _parse_pipeline_result(result.stdout) or {}
+    document_id = str(parsed["document_id"]) if parsed.get("document_id") else None
+    if result.returncode != 0:
+        # DataFetch reports user-meaningful failures in the result dict's
+        # `error` field -- surface that, never raw stdout/stderr (internal
+        # paths, stack traces); those are logged server-side.
+        reason = parsed.get("error") or parsed.get("message") or "the extraction pipeline could not process this file"
+        return {"status": "failed", "document_id": document_id, "detail": f"Extraction failed: {reason}"}
+    if parsed.get("status") == "duplicate":
+        return {
+            "status": "duplicate", "document_id": document_id,
+            "detail": "This report was already uploaded -- showing the existing results.",
+        }
+    return {
+        "status": "processed", "document_id": document_id,
+        "detail": "Extraction complete -- markers are ready to review.",
+    }
+
+
+def _record_job_result(job_id: str, fut: Future) -> None:
+    exc = fut.exception()
+    if isinstance(exc, subprocess.TimeoutExpired):
+        outcome = {"status": "failed", "document_id": None,
+                   "detail": "Extraction took too long and was stopped. Please try again with a clearer or smaller file."}
+    elif exc is not None:
+        outcome = {"status": "failed", "document_id": None, "detail": "Extraction crashed unexpectedly. Please try again."}
+    else:
+        outcome = _outcome(fut.result())
+    with _JOBS_LOCK:
+        if job_id in _JOBS:
+            _JOBS[job_id].update(outcome)
+
+
+# DataFetch's consent gate checks a password hash on the patients row. Two
+# uploads from the same patient used to each rotate a NEW password -- the
+# first run then failed authentication because the second had already
+# overwritten the hash. Keep one throwaway password per patient for the
+# life of this process and only rotate when the stored hash doesn't match.
+_PATIENT_PASSWORDS: dict = {}
+_PASSWORD_LOCK = threading.Lock()
+
+
+def _pipeline_password_for(patient_row: "models.Patient", db: Session) -> str:
+    key = str(patient_row.id)
+    with _PASSWORD_LOCK:
+        cached = _PATIENT_PASSWORDS.get(key)
+        if cached and patient_row.password_hash:
+            try:
+                if verify_password(cached, patient_row.password_hash):
+                    return cached
+            except Exception:
+                pass
+        raw_password = secrets.token_urlsafe(24)
+        patient_row.password_hash = hash_password(raw_password)
+        db.commit()
+        _PATIENT_PASSWORDS[key] = raw_password
+        return raw_password
+
+
+@router.get("/lab-reports/jobs/{job_id}", response_model=schemas.LabReportUploadOut)
+def get_lab_report_job(job_id: str, current_user: models.User = Depends(get_current_user)):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        job = dict(job) if job else None
+    if job is None or job["user_id"] != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload status not found (the server may have restarted) -- refresh your reports list.",
+        )
+    return schemas.LabReportUploadOut(
+        status=job["status"], document_id=job.get("document_id"), detail=job.get("detail"), job_id=job_id
+    )
+
+
 @router.post("/lab-reports", response_model=schemas.LabReportUploadOut, status_code=status.HTTP_202_ACCEPTED)
 async def upload_lab_report(
     file: UploadFile = File(...),
@@ -202,14 +296,19 @@ async def upload_lab_report(
 
     sehatai_patient_id = get_or_create_sehatai_patient_id(current_user, db)
 
-    # One-time, throwaway password for DataFetch's consent gate -- see the
-    # module doc comment. Never returned, logged, or reused.
-    raw_password = secrets.token_urlsafe(24)
     patient_row = db.query(models.Patient).filter(models.Patient.id == sehatai_patient_id).first()
     if patient_row is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="SehatAI patient record is missing")
-    patient_row.password_hash = hash_password(raw_password)
-    db.commit()
+    # Older bridged patients predate consented_at being set on creation, and
+    # DataFetch refuses to process for them. Uploading their own report
+    # through their own session is the consent (see
+    # get_or_create_sehatai_patient_id).
+    if patient_row.consented_at is None:
+        patient_row.consented_at = datetime.now(timezone.utc)
+        db.commit()
+    # Throwaway password for DataFetch's consent gate -- see the module doc
+    # comment and _pipeline_password_for. Never returned or logged.
+    raw_password = _pipeline_password_for(patient_row, db)
 
     LAB_REPORT_STAGING_DIR.mkdir(parents=True, exist_ok=True)
     staged_path = LAB_REPORT_STAGING_DIR / f"{uuid_module.uuid4().hex}{suffix}"
@@ -235,8 +334,15 @@ async def upload_lab_report(
     if DATAFETCH_OCR_KEY:
         env["OCRSPACE_API_KEY"] = DATAFETCH_OCR_KEY
 
+    job_id = uuid_module.uuid4().hex
+    with _JOBS_LOCK:
+        _prune_jobs()
+        _JOBS[job_id] = {"user_id": current_user.id, "status": "queued", "document_id": None,
+                         "detail": "Still extracting -- this can take a few minutes.", "created": time.time()}
+
     future = _EXTRACTION_POOL.submit(_run_extraction, cmd, env, staged_path)
     future.add_done_callback(_log_background_failure)
+    future.add_done_callback(lambda fut: _record_job_result(job_id, fut))
 
     try:
         # shield(): the request giving up waiting must not cancel the run.
@@ -244,7 +350,8 @@ async def upload_lab_report(
     except asyncio.TimeoutError:
         return schemas.LabReportUploadOut(
             status="queued",
-            detail="Upload received; extraction is still running and will finish in the background. Check back shortly.",
+            job_id=job_id,
+            detail="Upload received; extraction is still running in the background.",
         )
     except subprocess.TimeoutExpired:
         raise HTTPException(
@@ -252,21 +359,9 @@ async def upload_lab_report(
             detail="Extraction took too long and was stopped. Please try again with a clearer or smaller file.",
         )
 
-    parsed = _parse_pipeline_result(result.stdout) or {}
-    if result.returncode != 0:
-        # DataFetch reports user-meaningful failures in the result dict's
-        # `error` field -- surface that, never raw stdout/stderr (internal
-        # paths, stack traces); those are logged server-side above.
-        reason = parsed.get("error") or parsed.get("message") or "the extraction pipeline could not process this file"
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Extraction failed: {reason}")
-
-    document_id = str(parsed["document_id"]) if parsed.get("document_id") else None
-    if parsed.get("status") == "duplicate":
-        return schemas.LabReportUploadOut(
-            status="processed", document_id=document_id,
-            detail="This report was already uploaded -- showing the existing results.",
-        )
+    outcome = _outcome(result)
+    if outcome["status"] == "failed":
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=outcome["detail"])
     return schemas.LabReportUploadOut(
-        status="processed", document_id=document_id,
-        detail="Extraction complete -- markers are ready to review.",
+        status=outcome["status"], document_id=outcome["document_id"], detail=outcome["detail"]
     )

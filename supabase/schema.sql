@@ -123,6 +123,26 @@ create table if not exists medicines (
 );
 create index if not exists medicines_patient_idx on medicines (patient_id, active);
 
+-- Portal-owned (also auto-created by the backend's create_all): which
+-- CareLink doctor prescribed a medicines row, plus an optional file.
+-- Guarded because `users` is created by the backend, not by this file.
+do $$
+begin
+    if to_regclass('public.users') is not null then
+        create table if not exists medicine_prescriptions (
+            id               serial primary key,
+            medicine_id      uuid not null unique references medicines (id) on delete cascade,
+            doctor_id        integer not null references users (id),
+            notes            text,
+            attachment_path  varchar(500),
+            attachment_name  varchar(255),
+            attachment_mime  varchar(100),
+            created_at       timestamp not null default now(),
+            updated_at       timestamp not null default now()
+        );
+    end if;
+end $$;
+
 create table if not exists clinical_advice (
     id            uuid primary key default gen_random_uuid(),
     patient_id    uuid not null references patients (id) on delete cascade,
@@ -453,3 +473,125 @@ $$;
 revoke execute on function atomic_upsert_document(jsonb) from anon, authenticated;
 revoke execute on function get_patient_timeline(uuid) from anon, authenticated;
 revoke execute on function match_patient_history(vector, uuid, integer) from anon, authenticated;
+
+-- ====================================== portal accounts / scheduling / safety
+-- CareLink-owned tables. The backend's create_all creates these on startup
+-- (and enables RLS), so running this file is OPTIONAL -- it documents them and
+-- lets you create them from the Supabase SQL editor instead. Nothing here
+-- alters an existing table. Guarded because `users` / `appointments` are
+-- created by the backend, not by this file.
+do $$
+begin
+    if to_regclass('public.users') is not null and to_regclass('public.appointments') is not null then
+        -- city / country collected at sign-up (patients and doctors)
+        create table if not exists user_locations (
+            user_id     integer primary key references users (id) on delete cascade,
+            city        varchar(100) not null,
+            country     varchar(100) not null,
+            updated_at  timestamp not null default now()
+        );
+
+        -- a row = this account's email is not confirmed yet. Accounts that
+        -- predate email confirmation have no row, so they count as confirmed.
+        create table if not exists unconfirmed_users (
+            user_id     integer primary key references users (id) on delete cascade,
+            created_at  timestamp not null default now()
+        );
+
+        -- one-time emailed tokens; only the SHA-256 hash is stored
+        create table if not exists auth_tokens (
+            id          serial primary key,
+            user_id     integer not null references users (id) on delete cascade,
+            purpose     varchar(30) not null,           -- confirm_email | reset_password
+            token_hash  varchar(64) not null unique,
+            expires_at  timestamp not null,
+            used_at     timestamp,
+            created_at  timestamp not null default now()
+        );
+        create index if not exists auth_tokens_user_idx on auth_tokens (user_id);
+
+        create table if not exists emergency_contacts (
+            user_id       integer primary key references users (id) on delete cascade,
+            name          varchar(200) not null,
+            relationship  varchar(100) not null,
+            email         varchar(255) not null,
+            phone         varchar(50),
+            updated_at    timestamp not null default now()
+        );
+
+        -- audit + rate limiting; never stores chat text
+        create table if not exists emergency_alerts (
+            id             serial primary key,
+            patient_id     integer not null references users (id) on delete cascade,
+            contact_email  varchar(255) not null,
+            trigger        varchar(20) not null,        -- button | triage
+            category       varchar(100),
+            status         varchar(20) not null,        -- sent | dry_run | failed
+            error          text,
+            created_at     timestamp not null default now()
+        );
+        create index if not exists emergency_alerts_patient_idx on emergency_alerts (patient_id, created_at);
+
+        -- doctor availability; booking creates a normal appointments row
+        create table if not exists appointment_slots (
+            id              serial primary key,
+            doctor_id       integer not null references users (id) on delete cascade,
+            starts_at       timestamp not null,
+            ends_at         timestamp not null,
+            status          varchar(10) not null default 'open',   -- open | booked
+            appointment_id  integer unique references appointments (id) on delete set null,
+            created_at      timestamp not null default now(),
+            constraint uq_slot_doctor_start unique (doctor_id, starts_at)
+        );
+        create index if not exists appointment_slots_open_idx on appointment_slots (doctor_id, status, starts_at);
+
+        -- one row per line of the intake form's tables (allergies, existing
+        -- conditions, family history). detail1..3 meaning depends on `section`:
+        --   allergy   name=allergen,  detail1=reaction, detail2=severity
+        --   condition name=condition, detail1=since,    detail2=status
+        --   family    name=condition, detail1=relative
+        -- The bots keep reading patient_intake_form; saving the form refreshes
+        -- those lists from the names here.
+        create table if not exists intake_entries (
+            id          serial primary key,
+            user_id     integer not null references users (id) on delete cascade,
+            section     varchar(20) not null,           -- allergy | condition | family
+            position    integer not null default 0,
+            name        varchar(200) not null,
+            detail1     varchar(100),
+            detail2     varchar(100),
+            detail3     varchar(100),
+            created_at  timestamp not null default now()
+        );
+        create index if not exists intake_entries_user_idx on intake_entries (user_id, section, position);
+
+        -- that the person agreed to the privacy notice at sign-up: which version
+        -- of the text they saw, and when. One row per account.
+        create table if not exists consent_records (
+            user_id         integer primary key references users (id) on delete cascade,
+            notice_version  varchar(30) not null,
+            accepted_at     timestamp not null default now()
+        );
+
+        -- ANONYMISED sign-up statistics. No user id, name, email, city or date of
+        -- birth on purpose: a row can't be traced back to an account.
+        create table if not exists demographic_stats (
+            id            serial primary key,
+            role          varchar(10) not null,          -- doctor | patient
+            age_band      varchar(10),                   -- 0-17 | 18-29 | 30-44 | 45-59 | 60+ (patients)
+            sex           varchar(10),                   -- patients
+            country       varchar(100) not null,
+            signup_month  varchar(7) not null,           -- YYYY-MM
+            created_at    timestamp not null default now()
+        );
+        create index if not exists demographic_stats_month_idx on demographic_stats (signup_month);
+
+        -- top health concerns (ranked, up to 5) + when the main problem began
+        create table if not exists intake_profile (
+            user_id        integer primary key references users (id) on delete cascade,
+            concerns       json not null default '[]',
+            concern_began  varchar(100),
+            updated_at     timestamp not null default now()
+        );
+    end if;
+end $$;

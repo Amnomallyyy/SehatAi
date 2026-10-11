@@ -99,8 +99,13 @@ DIET_RELATED - asks about food, nutrition, meals, or diet — with NO physical s
 HEALTH_EVENT - describes a health-relevant exposure, event, or action that is NOT itself a symptom, but that a doctor would want to know about. Only use this when NO symptom and NO diet question is ALSO present in the same message (if a symptom is present too, classify as HEALTH_RELATED instead — the symptom takes priority).
   Examples: "I ate something I'm allergic to", "I think I took the wrong medication", "I forgot to take my medication today", "I fell down the stairs", "I was in a car accident", "I got a vaccine yesterday", "I stopped my blood pressure medication last week".
 
-NOT_HEALTH_RELATED - anything that is NOT a health or diet concern, and does not plausibly answer a pending follow-up question per the CONTEXT above.
-  Examples: "1+1=2", "what's the weather", "tell me a joke", "hello", "how are you", "pizza recipe for a party", "what time is it", "random", "nonsense", "I love apples".
+SOCIAL - a greeting, pleasantry or small talk aimed at the assistant itself, with no symptom, health concern or other request in it. In any language.
+  Examples: "hi", "hi, how are you", "how are you doing", "good morning", "thanks", "thank you so much", "ok", "nice", "who are you", "assalam o alaikum", "kya haal hai", "shukriya".
+
+NOT_HEALTH_RELATED - anything that is NOT a health or diet concern and not small talk, and does not plausibly answer a pending follow-up question per the CONTEXT above.
+  Examples: "1+1=2", "what's the weather", "tell me a joke", "pizza recipe for a party", "what time is it", "random", "nonsense", "I love apples".
+
+Messages about how the patient FEELS physically are HEALTH_RELATED even when vague or emotional-sounding: "I suddenly feel bad", "I feel sick", "I'm not well", "tabiyat kharab hai", "it just got worse", "the pain increased", "the severity went up" — use RECENT CONVERSATION to see what "it" refers to.
 
 CONCERNING - threats of violence, hate speech, or abusive content.
   Examples: "I want to hurt someone", "kill them".
@@ -112,7 +117,7 @@ CRITICAL RULES:
 - If the message describes BOTH a physical symptom AND a diet question or event (e.g. "I have a stomach ache, is it something I ate", "I'm having chest pain, what should I eat"), classify as HEALTH_RELATED — the symptom takes priority.
 - If the message does not describe a health OR diet concern OR event, and does not plausibly answer the CONTEXT question (when given), and does not carry a "stop asking, move on" intent either, classify as NOT_HEALTH_RELATED.
 
-Respond with ONLY one word: HEALTH_RELATED, DIET_RELATED, HEALTH_EVENT, NOT_HEALTH_RELATED, CONCERNING, or SKIP_AHEAD.`;
+Respond with ONLY one word: HEALTH_RELATED, DIET_RELATED, HEALTH_EVENT, SOCIAL, NOT_HEALTH_RELATED, CONCERNING, or SKIP_AHEAD.`;
 
   try {
     const result = await callAI({ system: systemPrompt, message, temperature: 0 });
@@ -161,17 +166,23 @@ export async function classifyDomain(message, callAI, context = null, recentHist
 // processMessage.js uses classifyDomain directly so it CAN act on it
 // (see clarificationCheck.js's classifyPendingAnswerRelevance).
 // ------------------------------------------------------------------
-export async function checkOffTopic(message, callAI, context = null) {
+export async function checkOffTopic(message, callAI, context = null, recentHistory = null) {
   // 1. FAST: Profanity check (no AI)
   if (containsProfanity(message)) {
     return { offTopic: true, reason: "profanity" };
   }
 
-  // 2. AI: Classifier (primary detection)
-  const classification = await classifyDomain(message, callAI, context);
+  // 2. AI: Classifier (primary detection). recentHistory lets it read a
+  // follow-up like "it just got worse" in light of the conversation.
+  const classification = await classifyDomain(message, callAI, context, recentHistory);
 
   if (classification === 'CONCERNING') {
     return { offTopic: true, reason: "concerning_content" };
+  }
+  // Small talk ("how are you", "thanks") — answered warmly by the caller,
+  // not refused like genuinely off-topic content.
+  if (classification === 'SOCIAL') {
+    return { offTopic: true, reason: "social" };
   }
   if (classification === 'NOT_HEALTH_RELATED') {
     return { offTopic: true, reason: "ai_classifier" };

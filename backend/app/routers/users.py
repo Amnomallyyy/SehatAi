@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..dependencies import AVATAR_DIR, looks_like_image_bytes, sync_sehatai_profile
+from ..dependencies import AVATAR_DIR, looks_like_image_bytes, sync_sehatai_profile, set_user_location
 from ..security import get_current_user
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -55,6 +55,7 @@ def update_my_profile(
         current_user.date_of_birth = payload.date_of_birth
     if payload.sex is not None:
         current_user.sex = payload.sex
+    set_user_location(db, current_user, payload.city, payload.country)
     db.commit()
     db.refresh(current_user)
 

@@ -20,16 +20,44 @@ const EVIDENCE_API = SEHAT_CONFIG.evidenceBase || 'http://localhost:8002';
    session on every login/reload -- apiFetch() re-reads the token fresh
    on every call, so the failure isn't just a stale UI, actions in one
    tab start silently authenticating as whichever account logged in last
-   in ANY tab. sessionStorage is per-tab, so this can't happen. */
+   in ANY tab. sessionStorage is per-tab, so this can't happen.
+
+   "Keep me signed in on this device" (opt-in, unticked by default) keeps a
+   COPY of the login in localStorage purely so a fresh tab / window can
+   restore it on load (restore() copies it into that tab's own
+   sessionStorage). Live state still never crosses tabs: a tab that is
+   already open keeps its own session, and signing out (or an expired login)
+   clears the copy everywhere. Don't tick it on a shared computer. */
+const REMEMBER_KEY = 'remembered_login';
+const rememberStore = {
+  get() { try { return JSON.parse(localStorage.getItem(REMEMBER_KEY)); } catch { return null; } },
+  set(v) { try { localStorage.setItem(REMEMBER_KEY, JSON.stringify(v)); } catch { /* storage blocked: stays per-tab */ } },
+  clear() { try { localStorage.removeItem(REMEMBER_KEY); } catch { /* ignore */ } },
+};
 const auth = {
   token: () => sessionStorage.getItem('token'),
   user:  () => { try { return JSON.parse(sessionStorage.getItem('user')); } catch { return null; } },
-  save(token, user) {
+  save(token, user, remember = false) {
     sessionStorage.setItem('token', token);
     sessionStorage.setItem('user', JSON.stringify(user));
+    if (remember) rememberStore.set({ token, user }); else rememberStore.clear();
   },
-  updateUser(user) { sessionStorage.setItem('user', JSON.stringify(user)); },
-  clear() { sessionStorage.removeItem('token'); sessionStorage.removeItem('user'); }
+  updateUser(user) {
+    sessionStorage.setItem('user', JSON.stringify(user));
+    const saved = rememberStore.get();
+    // Only refresh the copy if it is THIS tab's login, never another account's.
+    if (saved && saved.token === sessionStorage.getItem('token')) rememberStore.set({ token: saved.token, user });
+  },
+  /* A brand-new tab with no login of its own picks up the remembered one. */
+  restore() {
+    if (sessionStorage.getItem('token')) return;
+    const saved = rememberStore.get();
+    if (saved && saved.token && saved.user) {
+      sessionStorage.setItem('token', saved.token);
+      sessionStorage.setItem('user', JSON.stringify(saved.user));
+    }
+  },
+  clear() { sessionStorage.removeItem('token'); sessionStorage.removeItem('user'); rememberStore.clear(); }
 };
 
 const DOCTOR_SPECIALIZATIONS = [
@@ -61,6 +89,50 @@ function errMsg(data) {
   if (typeof data.detail === 'string') return data.detail;
   if (Array.isArray(data.detail)) return data.detail.map(e => e.msg).join('; ');
   return String(data.detail);
+}
+
+/* ── File downloads ── */
+const MIME_EXT = {
+  'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',
+  'image/gif': 'gif', 'image/tiff': 'tif', 'image/bmp': 'bmp', 'image/webp': 'webp',
+};
+
+/* The server's own filename (Content-Disposition) wins; otherwise the
+   extension comes from the file's real type -- a JPG saved as ".pdf" was
+   the "unreadable PDF" download bug. */
+function downloadNameFor(res, blob, baseName) {
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const safeBase = (baseName || 'document').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'document';
+  const ext = MIME_EXT[(blob.type || '').split(';')[0].trim()] ||
+    (m ? (decodeURIComponent(m[1]).split('.').pop() || '').toLowerCase() : '') || 'pdf';
+  return `${safeBase.replace(/\.(pdf|jpe?g|png|gif|tiff?|bmp|webp)$/i, '')}.${ext}`;
+}
+
+/* fetch -> check -> blob. Throws with the server's message on failure, so
+   an error JSON body is never saved to disk as if it were the file. */
+async function fetchFileBlob(path) {
+  const res = await apiFetch(path);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(errMsg(data) || `Download failed (${res.status})`);
+  }
+  return { res, blob: await res.blob() };
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function downloadFile(path, baseName) {
+  try {
+    const { res, blob } = await fetchFileBlob(path);
+    saveBlob(blob, downloadNameFor(res, blob, baseName));
+  } catch (err) { toast(err.message || 'Download failed.', 'error'); }
 }
 
 /* ── Toast ── */
@@ -125,7 +197,7 @@ function applyProfileNudge() {
   const user = auth.user();
   const nudge = document.getElementById('sidebar-nudge');
   if (!nudge) return;
-  nudge.style.display = (user?.role === 'doctor' && !user.specialization) ? 'block' : 'none';
+  nudge.style.display = (user?.role === 'doctor' && (!user.specialization || !user.city || !user.country)) ? 'block' : 'none';
 }
 
 /* Doctor-only UI affordances that aren't per-render-function conditional
@@ -146,12 +218,32 @@ function applyRoleVisibility() {
   // routers/lab_reports.py's require_patient_role.
   const uploadWrap = document.getElementById('upload-lab-report-wrap');
   if (uploadWrap) uploadWrap.style.display = isDoctor ? 'none' : '';
+  // Health intake and the Emergency button belong to patients only.
+  const intakeLink = document.getElementById('intake-nav-link');
+  if (intakeLink) intakeLink.style.display = isDoctor ? 'none' : '';
+  const emergencyBtn = document.getElementById('emergency-btn');
+  if (emergencyBtn) emergencyBtn.style.display = (auth.user() && !isDoctor) ? '' : 'none';
 }
 
 /* ── Page routing ── */
 let currentPage = null;
 
 function showPage(id) {
+  // Patients must finish the health intake before anything else.
+  if (intakeGate.locked && id !== 'intake' && id !== 'auth') {
+    if (currentPage !== 'intake') toast('Please finish your health intake first.');
+    id = 'intake';
+  }
+  // Leaving the chat (by any route, not just its Back button) ends its
+  // polling and drops its state, so nothing keeps running in the
+  // background. A report opened FROM the chat is part of it: polling just
+  // pauses, and the report's Back button resumes it (startConvPolling
+  // always clears the old timer first -- each report round-trip used to
+  // add another 3s poll on top of the existing one).
+  if (convState && id !== 'conv') {
+    if (id === 'report' && currentPage === 'conv') stopConvPolling();
+    else closeConversation();
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
 
@@ -186,20 +278,116 @@ function showPage(id) {
 /* ============================================================
    AUTH
    ============================================================ */
+/* Which auth panel is showing: login | signup | forgot | reset | notice. The
+   Log in / Create account tabs only belong to the first two. */
+function showAuthPanel(name) {
+  const panels = {
+    login: document.getElementById('login-form'),
+    signup: document.getElementById('signup-form'),
+    forgot: document.getElementById('forgot-form'),
+    reset: document.getElementById('reset-form'),
+    notice: document.getElementById('auth-notice'),
+  };
+  Object.entries(panels).forEach(([key, el]) => { el.style.display = key === name ? 'block' : 'none'; });
+  const tabsOn = name === 'login' || name === 'signup';
+  document.querySelector('.auth-tabs').style.display = tabsOn ? '' : 'none';
+  document.querySelector('.auth-welcome').textContent = tabsOn ? 'Welcome back' : 'Your account';
+  if (tabsOn) document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+}
+
+async function authPost(path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* non-JSON error body */ }
+  return { res, data };
+}
+
+/* Opens the auth page for ?confirm=<token> / ?reset=<token> links from the
+   emails. Returns true when it took over the screen. */
+function handleAuthLinkFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const confirmToken = params.get('confirm');
+  const resetToken = params.get('reset');
+  if (!confirmToken && !resetToken) return false;
+  // Don't leave a one-time token sitting in the address bar / history.
+  history.replaceState(null, '', location.pathname);
+  showPage('auth');
+
+  if (confirmToken) {
+    showAuthNotice('Confirming your email…', 'One moment.');
+    authPost('/auth/confirm-email', { token: confirmToken }).then(({ res, data }) => {
+      if (res.ok) showAuthNotice('Email confirmed', 'Your account is ready. You can log in now.');
+      else showAuthNotice('That link didn\'t work', errMsg(data) + ' You can request a new confirmation email from the log-in page.');
+    }).catch(() => showAuthNotice('Could not reach the server', 'Please try the link again in a moment.'));
+  } else {
+    authResetToken = resetToken;
+    showAuthPanel('reset');
+  }
+  return true;
+}
+
+let authResetToken = null;
+let authResendEmail = null; // who the "Resend" button on the notice panel is for
+
+function showAuthNotice(title, text, { resendEmail = null } = {}) {
+  document.getElementById('auth-notice-title').textContent = title;
+  document.getElementById('auth-notice-text').textContent = text;
+  authResendEmail = resendEmail;
+  document.getElementById('auth-notice-resend').style.display = resendEmail ? '' : 'none';
+  showAuthPanel('notice');
+}
+
+/* The one data-use message, shown at sign-up and on the health intake. Keep it
+   in step with what the app really does: stores your details, shares them
+   with connected doctors, sends symptom / report text to outside AI and
+   clinical services, and emails the emergency contact on request. */
+/* Bump PRIVACY_NOTICE_VERSION here AND in backend/app/privacy.py whenever the
+   wording changes: the server refuses a sign-up that agreed to an older text. */
+const PRIVACY_NOTICE_VERSION = '2026-10-v1';
+const DATA_USE_NOTICE = {
+  title: 'How your data will be used',
+  text: 'The details you give us, including your health information, are stored in this portal and shared only with the doctors you connect with. ' +
+        'The AI assistant and the lab-report reader send what you type or upload (along with your age, sex and health history) to outside AI and clinical services to produce their results. ' +
+        'If you press Emergency, your name, location and the time are emailed to your emergency contact. ' +
+        'When you sign up, your age group, sex, role and country (never your name, email or city) are also saved in an anonymised statistics table that cannot be traced back to you, and is used for reports.',
+};
+
+function dataNoticeHtml() {
+  return `<div class="data-notice" role="note"><strong>${escHtml(DATA_USE_NOTICE.title)}.</strong> ${escHtml(DATA_USE_NOTICE.text)}</div>`;
+}
+
 function initAuth() {
+  const signupNotice = document.getElementById('signup-data-notice');
+  const consentBox = document.getElementById('signup-consent');
+  const signupBtn = document.getElementById('signup-submit');
+  // No agreement, no account: the button stays locked until the box is ticked
+  // (the server refuses a sign-up without it too).
+  consentBox.addEventListener('change', () => { signupBtn.disabled = !consentBox.checked; });
+  if (signupNotice) signupNotice.innerHTML = `<strong>${escHtml(DATA_USE_NOTICE.title)}.</strong> ${escHtml(DATA_USE_NOTICE.text)}`;
   const tabs = document.querySelectorAll('.auth-tab');
   const loginForm = document.getElementById('login-form');
   const signupForm = document.getElementById('signup-form');
+  const forgotForm = document.getElementById('forgot-form');
+  const resetForm = document.getElementById('reset-form');
+  const resendLink = document.getElementById('resend-link');
 
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const mode = tab.dataset.tab;
-      loginForm.style.display  = mode === 'login'  ? 'block' : 'none';
-      signupForm.style.display = mode === 'signup' ? 'block' : 'none';
-    });
+    tab.addEventListener('click', () => showAuthPanel(tab.dataset.tab));
   });
+  document.querySelectorAll('[data-auth-back]').forEach(b => b.addEventListener('click', () => {
+    resendLink.style.display = 'none';
+    showAuthPanel('login');
+  }));
+
+  const showError = (form, msg) => {
+    const el = form.querySelector('.error-banner');
+    el.textContent = msg;
+    el.style.display = 'block';
+  };
 
   /* Login */
   loginForm.addEventListener('submit', async (e) => {
@@ -207,25 +395,79 @@ function initAuth() {
     const btn = loginForm.querySelector('button[type="submit"]');
     const errEl = loginForm.querySelector('.error-banner');
     errEl.style.display = 'none';
+    resendLink.style.display = 'none';
     btn.classList.add('btn-loading');
 
     try {
-      const res = await fetch(`${API}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email:    loginForm.querySelector('[name="email"]').value.trim(),
-          password: loginForm.querySelector('[name="password"]').value
-        })
+      const { res, data } = await authPost('/auth/login', {
+        email:    loginForm.querySelector('[name="email"]').value.trim(),
+        password: loginForm.querySelector('[name="password"]').value
       });
-      const data = await res.json();
-      if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
-      auth.save(data.access_token, data.user);
+      if (!res.ok) {
+        showError(loginForm, errMsg(data));
+        // 403 on login only ever means "email not confirmed yet".
+        if (res.status === 403) resendLink.style.display = '';
+        return;
+      }
+      auth.save(data.access_token, data.user, loginForm.querySelector('[name="remember"]').checked);
       onLogin();
     } catch (err) {
-      errEl.textContent = 'Could not reach the server. Is it running?';
-      errEl.style.display = 'block';
+      showError(loginForm, 'Could not reach the server. Is it running?');
     } finally { btn.classList.remove('btn-loading'); }
+  });
+
+  resendLink.addEventListener('click', async () => {
+    const email = loginForm.querySelector('[name="email"]').value.trim();
+    if (!email) { showError(loginForm, 'Enter your email above first.'); return; }
+    await resendConfirmation(email);
+  });
+  document.getElementById('auth-notice-resend').addEventListener('click', () => {
+    if (authResendEmail) resendConfirmation(authResendEmail);
+  });
+
+  async function resendConfirmation(email) {
+    try {
+      const { res, data } = await authPost('/auth/resend-confirmation', { email });
+      if (!res.ok) { toast(errMsg(data), 'error'); return; }
+      showAuthNotice('Check your email', data.message || 'If that account still needs confirming, we\'ve sent a new link.', { resendEmail: email });
+    } catch { toast('Could not reach the server.', 'error'); }
+  }
+
+  /* Forgot password */
+  document.getElementById('forgot-link').addEventListener('click', () => {
+    forgotForm.querySelector('[name="email"]').value = loginForm.querySelector('[name="email"]').value;
+    forgotForm.querySelector('.error-banner').style.display = 'none';
+    showAuthPanel('forgot');
+  });
+  forgotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = forgotForm.querySelector('button[type="submit"]');
+    forgotForm.querySelector('.error-banner').style.display = 'none';
+    btn.classList.add('btn-loading');
+    try {
+      const { res, data } = await authPost('/auth/forgot-password', { email: forgotForm.querySelector('[name="email"]').value.trim() });
+      if (!res.ok) { showError(forgotForm, errMsg(data)); return; }
+      showAuthNotice('Check your email', data.message + ' The link works for one hour.');
+    } catch { showError(forgotForm, 'Could not reach the server. Is it running?'); }
+    finally { btn.classList.remove('btn-loading'); }
+  });
+
+  /* Choose a new password */
+  resetForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = resetForm.querySelector('button[type="submit"]');
+    resetForm.querySelector('.error-banner').style.display = 'none';
+    const pw = resetForm.querySelector('[name="password"]').value;
+    if (pw !== resetForm.querySelector('[name="password2"]').value) { showError(resetForm, 'The two passwords don\'t match.'); return; }
+    btn.classList.add('btn-loading');
+    try {
+      const { res, data } = await authPost('/auth/reset-password', { token: authResetToken, new_password: pw });
+      if (!res.ok) { showError(resetForm, errMsg(data)); return; }
+      authResetToken = null;
+      resetForm.reset();
+      showAuthNotice('Password updated', data.message);
+    } catch { showError(resetForm, 'Could not reach the server. Is it running?'); }
+    finally { btn.classList.remove('btn-loading'); }
   });
 
   /* Signup: show/require date of birth + sex only for the patient role --
@@ -248,7 +490,7 @@ function initAuth() {
   // required state out of sync with the actually-selected role.
   toggleSignupPatientFields();
 
-  /* Signup */
+  /* Signup -- no auto-login: the emailed link must be used first. */
   signupForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = signupForm.querySelector('button[type="submit"]');
@@ -256,6 +498,7 @@ function initAuth() {
     errEl.style.display = 'none';
     const role = signupForm.querySelector('[name="role"]:checked')?.value;
     if (!role) { errEl.textContent = 'Please choose a role.'; errEl.style.display = 'block'; return; }
+    if (!consentBox.checked) { errEl.textContent = 'You must agree to how your data will be used to create an account.'; errEl.style.display = 'block'; return; }
 
     btn.classList.add('btn-loading');
     try {
@@ -263,6 +506,9 @@ function initAuth() {
         name:     signupForm.querySelector('[name="name"]').value.trim(),
         email:    signupForm.querySelector('[name="email"]').value.trim(),
         password: signupForm.querySelector('[name="password"]').value,
+        city:     signupForm.querySelector('[name="city"]').value.trim(),
+        country:  signupForm.querySelector('[name="country"]').value.trim(),
+        accepted_notice_version: PRIVACY_NOTICE_VERSION,
         role
       };
       if (role === 'patient') {
@@ -274,15 +520,16 @@ function initAuth() {
         if (dob) body.date_of_birth = dob;
         if (sex) body.sex = sex;
       }
-      const res = await fetch(`${API}/auth/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
+      const { res, data } = await authPost('/auth/signup', body);
       if (!res.ok) { errEl.textContent = errMsg(data); errEl.style.display = 'block'; return; }
-      auth.save(data.access_token, data.user);
-      onLogin();
+      signupForm.reset();
+      signupBtn.disabled = true; // the box is cleared with the form, so the next sign-up must agree again
+      toggleSignupPatientFields();
+      showAuthNotice(
+        'Check your email',
+        `We sent a confirmation link to ${data.email}. Click it to activate your account, then log in. The link works for 24 hours.`,
+        { resendEmail: data.email }
+      );
     } catch (err) {
       errEl.textContent = 'Could not reach the server. Is it running?';
       errEl.style.display = 'block';
@@ -298,16 +545,24 @@ function onLogin() {
   applyProfileNudge();
   applyRoleVisibility();
   updatePendingBadge();
-  if (user.role === 'doctor') loadDoctorNotifications();
-  showPage('connections');
-  loadConnections();
+  if (user.role === 'doctor') {
+    setIntakeLocked(false);
+    loadDoctorNotifications();
+    showPage('connections');
+    loadConnections();
+  } else {
+    // Patients land on the health intake until it's complete; once it is,
+    // loadIntakePage({initial:true}) moves them on to Connections.
+    setIntakeLocked(true);
+    showPage('intake');
+    loadIntakePage({ initial: true });
+  }
 }
 
 /* ============================================================
    CONNECTIONS
    ============================================================ */
 let connectionsCache = [];
-let reportsAccessCache = []; // patient-only: which doctors they've granted reports access to
 let doctorNotificationsCache = []; // doctor-only: unreviewed lab documents across all granted patients
 
 async function loadConnections() {
@@ -316,17 +571,9 @@ async function loadConnections() {
     const data = await res.json();
     if (!res.ok) { toast(errMsg(data), 'error'); return; }
     connectionsCache = data;
-    if (auth.user()?.role === 'patient') await loadReportsAccessCache();
     renderConnections(data);
     updatePendingBadge();
   } catch (err) { toast('Failed to load connections.', 'error'); }
-}
-
-async function loadReportsAccessCache() {
-  try {
-    const res = await apiFetch('/reports-access');
-    reportsAccessCache = res.ok ? await res.json() : [];
-  } catch { reportsAccessCache = []; }
 }
 
 function updatePendingBadge() {
@@ -445,9 +692,6 @@ function emptyState(iconKey, msg, hint) {
 function connectionCard(user, type, conn) {
   const me = auth.user();
   const isDoctorViewing = me.role === 'doctor';
-  const grantedDoctorIds = new Set(reportsAccessCache.filter(g => g.status === 'granted').map(g => g.doctor_id));
-  const isGranted = grantedDoctorIds.has(user.id);
-
   const div = document.createElement('div');
   div.className = `blueprint connection-card ${type}`;
   div.innerHTML = `
@@ -467,11 +711,6 @@ function connectionCard(user, type, conn) {
         <button class="btn btn-success btn-sm accept-btn" data-id="${conn.id}">Accept</button>
         <button class="btn btn-danger btn-sm reject-btn" data-id="${conn.id}">Decline</button>
       ` : ''}
-      ${type === 'accepted' && !isDoctorViewing ? `
-        <label class="grant-toggle">
-          <input type="checkbox" class="grant-toggle-input" data-doctor-id="${user.id}" ${isGranted ? 'checked' : ''}>
-          Share reports
-        </label>` : ''}
       ${type === 'accepted' && isDoctorViewing ? `
         <button class="btn btn-ghost btn-sm nickname-btn" data-conn-id="${conn.id}" data-current="${escHtml(conn.doctor_nickname || '')}">
           ✎ ${conn.doctor_nickname ? escHtml(conn.doctor_nickname) : 'Add nickname'}
@@ -489,7 +728,6 @@ function connectionCard(user, type, conn) {
     const doctorId  = me.role === 'doctor'  ? me.id : user.id;
     await openConversation(patientId, doctorId, user);
   }));
-  div.querySelectorAll('.grant-toggle-input').forEach(cb => cb.addEventListener('change', () => toggleReportsAccess(cb)));
   div.querySelectorAll('.nickname-btn').forEach(b => b.addEventListener('click', () => editNickname(b)));
   div.querySelectorAll('.disconnect-btn').forEach(b => b.addEventListener('click', () => deleteConnection(
     b.dataset.id, b,
@@ -542,29 +780,6 @@ async function deleteConnection(id, btn, title, message, confirmLabel, successMs
     await loadConnections();
   } catch { toast('Failed to update connection.', 'error'); }
   finally { btn.disabled = false; }
-}
-
-async function toggleReportsAccess(cb) {
-  cb.disabled = true;
-  const doctorId = Number(cb.dataset.doctorId);
-  try {
-    if (cb.checked) {
-      const res = await apiFetch('/reports-access/grant', { method: 'POST', body: JSON.stringify({ doctor_id: doctorId }) });
-      const data = await res.json();
-      if (!res.ok) { toast(errMsg(data), 'error'); cb.checked = false; return; }
-      toast('Reports history shared with this doctor.', 'success');
-    } else {
-      const grant = reportsAccessCache.find(g => g.doctor_id === doctorId && g.status === 'granted');
-      if (grant) {
-        const res = await apiFetch(`/reports-access/${grant.id}/revoke`, { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok) { toast(errMsg(data), 'error'); cb.checked = true; return; }
-      }
-      toast('Reports history access revoked.', 'success');
-    }
-    await loadReportsAccessCache();
-  } catch { toast('Failed to update sharing setting.', 'error'); cb.checked = !cb.checked; }
-  finally { cb.disabled = false; }
 }
 
 async function editNickname(btn) {
@@ -697,7 +912,122 @@ function renderDashboard(convs) {
 /* ============================================================
    CONVERSATION VIEW
    ============================================================ */
-let convState = null; // { conv, other, msgLastId, reportLastId, pollTimer }
+/* ------------------------------------------------------------
+   One chat implementation serves BOTH portals (doctor and patient
+   open the same #conv-page through openConvById), so every fix here
+   applies to both.
+
+   DUPLICATE-MESSAGE FIX (root cause): sendMsg appended the server's copy
+   of a sent message to the DOM, and pollMessages appended every message
+   newer than msgLastId -- with no check that a message was already on
+   screen. A poll in flight when Send was pressed returned the same
+   message, so it showed twice (one request, two entries). Sending also
+   jumped msgLastId to the new id, which could skip the other side's
+   messages that arrived in between.
+
+   Now: one keyed collection (convState.items) is the only source of
+   truth and the thread is always rendered from it with replaceChildren.
+   A sent message is a pending entry with a local-only clientId; the
+   server copy (POST response or poll) replaces it instead of adding a
+   second entry. Polls from a previous conversation are discarded.
+   ------------------------------------------------------------ */
+let convState = null; // { conv, other, items: Map, msgLastId, pollTimer, polling }
+
+// Keys in convState.items. Server messages are keyed by id so a message
+// can never be added twice; pending sends are keyed by their clientId.
+const msgKey = (id) => `m:${id}`;
+const pendingKey = (clientId) => `c:${clientId}`;
+const reportKey = (id) => `r:${id}`;
+const prescriptionKey = (id) => `p:${id}`;
+
+function newClientId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  // Fallback for browsers without randomUUID (local-only id, never sent).
+  return 'cid-' + Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('');
+}
+
+/* advanceCursor: only messages that came from a fetch of the message list
+   move msgLastId. A POST response must not — the other side may have
+   sent something with a lower id that the next poll still has to fetch. */
+function addServerMessage(msg, advanceCursor = true) {
+  if (!convState || convState.items.has(msgKey(msg.id))) return false;
+  convState.items.set(msgKey(msg.id), { kind: 'msg', state: 'sent', msg });
+  if (advanceCursor && msg.id > convState.msgLastId) convState.msgLastId = msg.id;
+  return true;
+}
+
+/* Puts the server copy of a message on screen exactly once. Match order
+   (from the spec): already known by server id -> nothing to add; this
+   request's own pending entry (clientId known for a POST response); else
+   the OLDEST unmatched pending entry from the same sender with exactly
+   the same text. A pending entry consumes at most one echo, so the same
+   text sent twice on purpose still shows twice. */
+function reconcileServerMessage(msg, ownClientId = null) {
+  if (!convState) return;
+  if (convState.items.has(msgKey(msg.id))) {
+    // Already shown (e.g. the poll beat the POST response): drop the
+    // pending entry this response belonged to, if it's still there.
+    if (ownClientId) convState.items.delete(pendingKey(ownClientId));
+    return;
+  }
+  let matchKey = ownClientId && convState.items.has(pendingKey(ownClientId)) ? pendingKey(ownClientId) : null;
+  if (!matchKey && msg.sender_id === auth.user()?.id) {
+    for (const [key, item] of convState.items) {
+      if (item.kind === 'pending' && !item.matched && item.text === msg.text) { matchKey = key; break; }
+    }
+  }
+  if (matchKey) {
+    const pending = convState.items.get(matchKey);
+    pending.matched = true;
+    convState.items.delete(matchKey);
+    // Remember which server message replaced it, so this entry's own POST
+    // response (arriving later) doesn't add the message a second time.
+    convState.replacedBy.set(pending.clientId, msg.id);
+  }
+  addServerMessage(msg, !ownClientId);
+}
+
+function sortedThreadItems() {
+  const ts = (item) => {
+    const t = item.kind === 'msg' ? item.msg.timestamp : item.kind === 'pending' ? null : item.data.timestamp;
+    return t ? new Date(t).getTime() : Infinity; // pending sends sort last
+  };
+  // Map iteration order is insertion order; it's the stable tie-break.
+  return [...convState.items.values()]
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => (ts(a.item) - ts(b.item)) || (a.i - b.i))
+    .map(({ item }) => item);
+}
+
+function isNearBottom(el) {
+  return el.scrollHeight - el.scrollTop <= el.clientHeight + 80;
+}
+
+/* The only function that writes the message list. `scroll`: 'always' |
+   'if-near-bottom' | 'never'. Newest message stays in view after a send
+   or receive unless the reader has scrolled up. */
+function renderConvThread(scroll = 'if-near-bottom') {
+  if (!convState) return;
+  const thread = document.getElementById('conv-thread');
+  const wasNearBottom = isNearBottom(thread);
+  const nodes = sortedThreadItems().map((item) => {
+    if (item.kind === 'msg') return renderMessage(item.msg, convState.conv);
+    if (item.kind === 'pending') return renderPendingMessage(item);
+    if (item.kind === 'report') return renderReportInline(item.data);
+    return renderPrescriptionInline(item.data);
+  });
+  thread.replaceChildren(...nodes);
+  if (scroll === 'always' || (scroll === 'if-near-bottom' && wasNearBottom)) scrollToBottom(thread);
+}
+
+/* Leaving the chat: stop polling and ignore anything still in flight.
+   Called from showPage whenever the conversation page is left, not only
+   from its Back button (sidebar navigation used to leave the 3s poll
+   running in the background). */
+function closeConversation() {
+  stopConvPolling();
+  convState = null;
+}
 
 async function openConversation(patientId, doctorId, other) {
   const btn = event?.target;
@@ -716,7 +1046,7 @@ async function openConversation(patientId, doctorId, other) {
 
 async function openConvById(conv, other) {
   stopConvPolling();
-  convState = { conv, other, msgLastId: 0, pollTimer: null };
+  convState = { conv, other, items: new Map(), msgLastId: 0, pollTimer: null, polling: false, replacedBy: new Map() };
 
   document.getElementById('conv-other-name').textContent = other.name;
   document.getElementById('conv-other-role').textContent = other.role;
@@ -736,7 +1066,8 @@ async function openConvById(conv, other) {
 
 async function loadConvThread() {
   if (!convState) return;
-  const { conv } = convState;
+  const state = convState;
+  const { conv } = state;
 
   // Load messages, reports, and prescriptions in parallel
   const [msgRes, repRes, prescRes] = await Promise.all([
@@ -747,40 +1078,71 @@ async function loadConvThread() {
   const messages = msgRes.ok ? await msgRes.json() : [];
   const reports  = repRes.ok ? await repRes.json() : [];
   const prescriptions = prescRes.ok ? await prescRes.json() : [];
+  if (convState !== state) return; // the user opened another chat meanwhile
 
-  if (messages.length) convState.msgLastId = messages[messages.length - 1].id;
+  messages.forEach((m) => reconcileServerMessage(m));
+  reports.forEach((r) => state.items.set(reportKey(r.id), { kind: 'report', data: r }));
+  prescriptions.forEach((p) => state.items.set(prescriptionKey(p.id), { kind: 'prescription', data: p }));
+  renderConvThread('always');
+}
 
-  // Merge and sort by timestamp
-  const items = [
-    ...messages.map(m => ({ ...m, _type: 'msg' })),
-    ...reports.map(r  => ({ ...r, _type: 'rep', timestamp: r.timestamp })),
-    ...prescriptions.map(p => ({ ...p, _type: 'presc', timestamp: p.timestamp }))
-  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-  const thread = document.getElementById('conv-thread');
-  thread.innerHTML = '';
-  items.forEach(item => {
-    if (item._type === 'msg') thread.appendChild(renderMessage(item, conv));
-    else if (item._type === 'rep') thread.appendChild(renderReportInline(item));
-    else thread.appendChild(renderPrescriptionInline(item));
-  });
-  scrollToBottom(thread);
+/* Message text is inserted with textContent only (never innerHTML);
+   .msg-text keeps line breaks. */
+function buildMessageRow({ isMine, senderName, text, metaText }) {
+  const row = document.createElement('div');
+  row.className = `msg-row${isMine ? ' mine' : ''}`;
+  if (!isMine) {
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.title = senderName;
+    avatar.textContent = initials(senderName);
+    row.appendChild(avatar);
+  }
+  const col = document.createElement('div');
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble msg-text';
+  bubble.textContent = text;
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = metaText;
+  col.append(bubble, meta);
+  row.appendChild(col);
+  return { row, col, bubble, meta };
 }
 
 function renderMessage(msg, conv) {
   const me = auth.user();
   const isMine = msg.sender_id === me.id;
   const senderName = isMine ? 'You' : (me.id === conv.patient_id ? conv.doctor.name : conv.patient.name);
-
-  const row = document.createElement('div');
-  row.className = `msg-row${isMine ? ' mine' : ''}`;
+  const { row } = buildMessageRow({
+    isMine,
+    senderName,
+    text: msg.text,
+    metaText: `${isMine ? '' : senderName + ' · '}${fmtTime(msg.timestamp)}`,
+  });
   row.dataset.msgId = msg.id;
-  row.innerHTML = `
-    ${!isMine ? `<div class="avatar" title="${escHtml(senderName)}">${initials(senderName)}</div>` : ''}
-    <div>
-      <div class="msg-bubble">${escHtml(msg.text)}</div>
-      <div class="msg-meta">${isMine ? '' : escHtml(senderName) + ' · '}${fmtTime(msg.timestamp)}</div>
-    </div>`;
+  return row;
+}
+
+/* A message the user sent that the server hasn't confirmed yet: shown as
+   "Sending…", or "Not sent" with a Retry button. */
+function renderPendingMessage(item) {
+  const failed = item.state === 'failed';
+  const { row, col, meta } = buildMessageRow({
+    isMine: true,
+    senderName: 'You',
+    text: item.text,
+    metaText: failed ? 'Not sent' : 'Sending…',
+  });
+  row.classList.add(failed ? 'msg-failed' : 'msg-pending');
+  if (failed) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-secondary btn-sm msg-retry-btn';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', () => retrySend(item.clientId), { once: true });
+    col.appendChild(retry);
+  }
   return row;
 }
 
@@ -874,83 +1236,128 @@ function showPrescriptionModal(presc) {
 
   (async () => {
     try {
-      const res = await apiFetch(presc.pdf_url);
-      const blob = await res.blob();
+      const { res, blob } = await fetchFileBlob(presc.pdf_url);
       const objUrl = URL.createObjectURL(blob);
       overlay.querySelector('#presc-pdf-preview').innerHTML = `<iframe src="${objUrl}" title="PDF preview"></iframe>`;
       overlay.querySelector('#presc-download-btn').addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.href = objUrl;
-        a.download = (presc.display_name || 'prescription') + '.pdf';
-        a.click();
+        saveBlob(blob, downloadNameFor(res, blob, presc.display_name || 'prescription'));
       });
-    } catch {
-      overlay.querySelector('#presc-pdf-preview').innerHTML = `<div class="pdf-loading" style="color:var(--red)">Could not load PDF preview.</div>`;
+    } catch (err) {
+      overlay.querySelector('#presc-pdf-preview').innerHTML = `<div class="pdf-loading" style="color:var(--red)">${escHtml(err.message || 'Could not load PDF preview.')}</div>`;
+      overlay.querySelector('#presc-download-btn').disabled = true;
     }
   })();
 }
 
-/* Polling */
+/* Polling: one timer per open chat, cleared by stopConvPolling (Back
+   button, opening another chat, or leaving the page via showPage). */
 function startConvPolling() {
   if (!convState) return;
+  stopConvPolling();
   convState.pollTimer = setInterval(pollMessages, 3000);
 }
 function stopConvPolling() {
   if (convState?.pollTimer) clearInterval(convState.pollTimer);
+  if (convState) convState.pollTimer = null;
 }
 
 async function pollMessages() {
-  if (!convState) return;
+  const state = convState;
+  if (!state || state.polling) return; // never two polls at once
+  state.polling = true;
   try {
-    const res = await apiFetch(`/conversations/${convState.conv.id}/messages?after_id=${convState.msgLastId}`);
+    const res = await apiFetch(`/conversations/${state.conv.id}/messages?after_id=${state.msgLastId}`);
     const newMsgs = await res.json();
-    if (!res.ok || !newMsgs.length) return;
-    convState.msgLastId = newMsgs[newMsgs.length - 1].id;
-    const thread = document.getElementById('conv-thread');
-    const wasBottom = thread.scrollHeight - thread.scrollTop <= thread.clientHeight + 80;
-    newMsgs.forEach(msg => thread.appendChild(renderMessage(msg, convState.conv)));
-    if (wasBottom) scrollToBottom(thread);
-  } catch {}
+    // A poll for a chat that has since been closed or switched is ignored.
+    if (convState !== state || !res.ok || !newMsgs.length) return;
+    newMsgs.forEach((msg) => reconcileServerMessage(msg));
+    renderConvThread('if-near-bottom');
+  } catch {
+  } finally {
+    state.polling = false;
+  }
 }
 
 function scrollToBottom(el) {
   setTimeout(() => { el.scrollTop = el.scrollHeight; }, 30);
 }
 
-/* Composer */
-function initComposer() {
-  const textarea = document.getElementById('msg-textarea');
-  const btn = document.getElementById('msg-send-btn');
-
-  async function sendMsg() {
-    const text = textarea.value.trim();
-    if (!text || !convState) return;
-    btn.disabled = true;
-    textarea.disabled = true;
-    try {
-      const res = await apiFetch(`/conversations/${convState.conv.id}/messages`, {
-        method: 'POST', body: JSON.stringify({ text })
-      });
-      const data = await res.json();
-      if (!res.ok) { toast(errMsg(data), 'error'); return; }
-      textarea.value = '';
-      textarea.style.height = '';
-      const thread = document.getElementById('conv-thread');
-      thread.appendChild(renderMessage(data, convState.conv));
-      scrollToBottom(thread);
-      convState.msgLastId = data.id;
-    } catch { toast('Failed to send message.', 'error'); }
-    finally { btn.disabled = false; textarea.disabled = false; textarea.focus(); }
+/* Sends one pending entry. The request body is unchanged ({ text }); the
+   clientId stays in the browser. */
+async function deliverPending(clientId) {
+  const state = convState;
+  const item = state?.items.get(pendingKey(clientId));
+  if (!item || item.inFlight) return;
+  item.inFlight = true;
+  item.state = 'pending';
+  renderConvThread('never');
+  try {
+    const res = await apiFetch(`/conversations/${state.conv.id}/messages`, {
+      method: 'POST', body: JSON.stringify({ text: item.text })
+    });
+    const data = await res.json();
+    if (convState !== state) return;
+    if (!res.ok) {
+      item.state = 'failed';
+      toast(errMsg(data), 'error');
+    } else if (state.replacedBy.get(clientId) !== data.id) {
+      reconcileServerMessage(data, clientId);
+    }
+  } catch {
+    if (convState === state) item.state = 'failed';
+  } finally {
+    item.inFlight = false;
+    if (convState === state) renderConvThread('if-near-bottom');
   }
+}
 
-  btn.addEventListener('click', sendMsg);
+function retrySend(clientId) {
+  deliverPending(clientId);
+  document.getElementById('msg-textarea')?.focus();
+}
+
+/* Composer: ONE send path -- the form's submit handler. Enter (without
+   Shift) requests that same submit; the Send button is type="submit".
+   Bound once at boot; the AbortController lets a teardown remove every
+   composer listener in one call. */
+let composerController = null;
+
+function initComposer() {
+  if (composerController) return; // idempotent: never bind twice
+  composerController = new AbortController();
+  const { signal } = composerController;
+  const form = document.getElementById('msg-form');
+  const textarea = document.getElementById('msg-textarea');
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = textarea.value.trim();
+    if (!text || !convState) return; // empty messages are ignored
+    // Clear synchronously so a second Enter/click can't send it again.
+    textarea.value = '';
+    textarea.style.height = '';
+    const clientId = newClientId();
+    convState.items.set(pendingKey(clientId), { kind: 'pending', clientId, text, state: 'pending', inFlight: false, matched: false });
+    renderConvThread('if-near-bottom');
+    deliverPending(clientId);
+    textarea.focus();
+  }, { signal });
+
   textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
-  });
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  }, { signal });
   textarea.addEventListener('input', () => {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
-  });
+  }, { signal });
+}
+
+function teardownComposer() {
+  composerController?.abort();
+  composerController = null;
 }
 
 /* Upload */
@@ -992,9 +1399,10 @@ function initUpload() {
       uploadForm.classList.remove('open');
       fileInput.value = '';
       document.getElementById('report-display-name').value = '';
-      const thread = document.getElementById('conv-thread');
-      thread.appendChild(renderReportInline(data));
-      scrollToBottom(thread);
+      if (convState) {
+        convState.items.set(reportKey(data.id), { kind: 'report', data });
+        renderConvThread('always');
+      }
       toast('Report uploaded.', 'success');
     } catch { errEl.textContent = 'Upload failed. Please try again.'; errEl.style.display = 'block'; }
     finally { submitBtn.classList.remove('btn-loading'); submitBtn.disabled = false; }
@@ -1043,9 +1451,10 @@ function initPrescriptionUpload() {
       uploadForm.classList.remove('open');
       fileInput.value = '';
       document.getElementById('prescription-display-name').value = '';
-      const thread = document.getElementById('conv-thread');
-      thread.appendChild(renderPrescriptionInline(data));
-      scrollToBottom(thread);
+      if (convState) {
+        convState.items.set(prescriptionKey(data.id), { kind: 'prescription', data });
+        renderConvThread('always');
+      }
       toast('Prescription uploaded.', 'success');
     } catch { errEl.textContent = 'Upload failed. Please try again.'; errEl.style.display = 'block'; }
     finally { submitBtn.classList.remove('btn-loading'); submitBtn.disabled = false; }
@@ -1243,6 +1652,14 @@ function renderStructuredDocument(doc) {
     </div>
     <div class="structured-detail-grid">
       <div class="structured-detail-main">
+        <div class="blueprint ai-doc-summary">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div class="doc-kicker">AI summary</div>
+          ${doc.ai_summary
+            ? `<div class="ai-doc-summary-text">${escHtml(doc.ai_summary)}</div>
+               <div class="ai-doc-summary-caveat">AI-generated from the uploaded report — not a diagnosis. Discuss results with your doctor.</div>`
+            : `<div class="t-xs" style="margin-top:6px">Summary not available for this report.</div>`}
+        </div>
         <div class="blueprint marker-table">
           <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
           <div class="marker-head">
@@ -1260,8 +1677,8 @@ function renderStructuredDocument(doc) {
         <div class="blueprint" style="padding:18px">
           <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
           <div class="doc-kicker">Source document</div>
-          <div class="source-preview-box">
-            <div class="t-xs">${doc.has_source_file ? 'Preview unavailable yet' : 'Original file not stored'}</div>
+          <div class="source-preview-box" id="doc-source-preview">
+            <div class="t-xs">${doc.has_source_file ? 'Loading preview…' : 'Original file not stored'}</div>
           </div>
           <div class="source-actions">
             <button class="btn btn-secondary btn-sm" id="doc-download-btn" ${doc.has_source_file ? '' : 'disabled'}>Download</button>
@@ -1306,20 +1723,30 @@ function renderStructuredDocument(doc) {
   if (downloadBtn && doc.has_source_file) {
     // fetch+blob, not window.open/<a href> -- this is an authenticated
     // route (real medical documents, no public URL), and a plain
-    // navigation can't carry the Authorization header. Same pattern
-    // downloadPdf() already uses for CareLink reports.
+    // navigation can't carry the Authorization header. The file is
+    // fetched once and reused for both the preview and the download, and
+    // the extension follows the real file type (JPG/PNG uploads used to
+    // be saved as ".pdf", which then wouldn't open).
+    const filePath = `/structured/documents/${doc.document_id}/file?patient_id=${structuredDocState.patientId}`;
+    const baseName = (doc.original_filename || doc.category || 'lab_report').replace(/\s+/g, '_');
+    const filePromise = fetchFileBlob(filePath);
+    filePromise.then(({ blob }) => {
+      const box = layout.querySelector('#doc-source-preview');
+      if (!box || structuredDocState?.doc?.document_id !== doc.document_id) return;
+      const url = URL.createObjectURL(blob);
+      if ((blob.type || '').startsWith('image/')) box.innerHTML = `<img src="${url}" alt="Uploaded lab report">`;
+      else if ((blob.type || '').includes('pdf')) box.innerHTML = `<iframe src="${url}" title="Lab report preview"></iframe>`;
+      else box.innerHTML = '<div class="t-xs">Preview not available for this file type.</div>';
+    }).catch((err) => {
+      const box = layout.querySelector('#doc-source-preview');
+      if (box) box.innerHTML = `<div class="t-xs" style="color:var(--red)">${escHtml(err.message || 'Could not load the file.')}</div>`;
+    });
     downloadBtn.addEventListener('click', async () => {
       downloadBtn.disabled = true;
       try {
-        const res = await apiFetch(`/structured/documents/${doc.document_id}/file?patient_id=${structuredDocState.patientId}`);
-        if (!res.ok) { toast('Download failed.', 'error'); return; }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `${(doc.category || 'document').replace(/\s+/g, '_')}.pdf`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-      } catch { toast('Download failed.', 'error'); }
+        const { res, blob } = await filePromise.catch(() => fetchFileBlob(filePath));
+        saveBlob(blob, downloadNameFor(res, blob, baseName));
+      } catch (err) { toast(err.message || 'Download failed.', 'error'); }
       finally { downloadBtn.disabled = false; }
     });
   }
@@ -1660,36 +2087,18 @@ async function loadPdfPreview(report) {
   const area = document.getElementById('pdf-preview-area');
   if (!area) return;
   try {
-    const res = await apiFetch(report.pdf_url);
-    const blob = await res.blob();
+    const { blob } = await fetchFileBlob(report.pdf_url);
     const objUrl = URL.createObjectURL(blob);
     area.innerHTML = `<iframe src="${objUrl}" title="PDF preview"></iframe>`;
-
-    // Wire download btn
-    const dlBtn = document.getElementById('download-btn');
-    if (dlBtn) {
-      dlBtn.addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.href = objUrl;
-        a.download = (report.display_name || 'report') + '.pdf';
-        a.click();
-      }, { once: true });
-    }
-  } catch {
-    area.innerHTML = `<div class="pdf-loading" style="color:var(--red)">Could not load PDF preview.</div>`;
+    // The Download button is wired once in renderReportDetail (downloadPdf);
+    // a second listener here used to download the file twice.
+  } catch (err) {
+    area.innerHTML = `<div class="pdf-loading" style="color:var(--red)">${escHtml(err.message || 'Could not load PDF preview.')}</div>`;
   }
 }
 
 async function downloadPdf(report, fromEvent) {
-  try {
-    const res = await apiFetch(report.pdf_url);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = (report.display_name || 'report') + '.pdf';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-  } catch { toast('Download failed.', 'error'); }
+  await downloadFile(report.pdf_url, report.display_name || 'report');
 }
 
 /* Comments */
@@ -1844,12 +2253,15 @@ async function uploadLabReport(file) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { toast(errMsg(data), 'error'); return; }
 
-    if (data.status === 'queued') {
-      toast('Upload received — extraction is still running in the background. Check back shortly.', '');
+    if (data.status === 'queued' && data.job_id) {
+      toast('Upload received — still extracting. This page will update when it finishes.', '');
+      btn.textContent = 'Processing…';
+      const final = await pollLabReportJob(data.job_id);
+      announceLabReportOutcome(final);
     } else {
-      toast('Report processed — markers extracted.', 'success');
+      announceLabReportOutcome(data);
     }
-    loadReportsPage();
+    if (currentPage === 'reports') loadReportsPage();
   } catch (err) {
     toast('Upload failed: ' + (err.message || 'could not reach the server'), 'error');
   } finally {
@@ -1858,15 +2270,40 @@ async function uploadLabReport(file) {
   }
 }
 
+function announceLabReportOutcome(data) {
+  if (!data) {
+    toast('Still processing after 5 minutes — check the Reports page again shortly.', '');
+  } else if (data.status === 'failed') {
+    toast(data.detail || 'Extraction failed. Please try again.', 'error');
+  } else if (data.status === 'duplicate') {
+    toast('This report was already uploaded — showing the existing results.', '');
+  } else {
+    toast('Report processed — markers and AI summary are ready.', 'success');
+  }
+}
+
+/* Uploads that outlive the request come back "queued"; poll the job until
+   it finishes (or ~5 min) so a slow extraction or a background failure is
+   reported instead of the report silently never appearing. */
+async function pollLabReportJob(jobId) {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const res = await apiFetch(`/me/lab-reports/jobs/${jobId}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { status: 'failed', detail: errMsg(data) };
+      if (data.status !== 'queued') return data;
+    } catch { /* transient network error -- keep polling */ }
+  }
+  return null;
+}
+
 async function renderDoctorReportsPicker(layout) {
   try {
-    const [patRes, grantRes] = await Promise.all([
-      apiFetch('/users?role=patient'),
-      apiFetch('/reports-access?status=granted')
-    ]);
-    const patients = patRes.ok ? await patRes.json() : [];
-    const grants = grantRes.ok ? await grantRes.json() : [];
-    const grantedPatientIds = new Set(grants.map(g => g.patient_id));
+    const patRes = await apiFetch('/users?role=patient');
+    if (!patRes.ok) { layout.innerHTML = emptyState('alert', 'Failed to load your patients.', errMsg(await patRes.json().catch(() => ({})))); return; }
+    const patients = await patRes.json();
 
     if (patients.length === 0) {
       layout.innerHTML = emptyState('people', 'No connected patients yet.', 'Connect with a patient first from the Connections tab.');
@@ -1881,29 +2318,24 @@ async function renderDoctorReportsPicker(layout) {
     patients.forEach(p => {
       const conn = connectionsCache.find(c => c.status === 'accepted' && c.patient_id === p.id);
       const label = conn?.doctor_nickname ? `${conn.doctor_nickname} (${p.name})` : p.name;
-      const hasGrant = grantedPatientIds.has(p.id);
       const btn = document.createElement('button');
       btn.className = 'patient-picker-item';
       btn.innerHTML = `
         <div class="avatar">${initials(p.name)}</div>
-        <span>${escHtml(label)}</span>
-        <span class="status-pill ${hasGrant ? 'accepted' : 'rejected'}">${hasGrant ? 'Shared' : 'Not shared'}</span>`;
+        <span>${escHtml(label)}</span>`;
       btn.addEventListener('click', () => {
         picker.querySelectorAll('.patient-picker-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        loadDoctorPatientReports(p, hasGrant, resultsEl);
+        loadDoctorPatientReports(p, resultsEl);
       });
       picker.appendChild(btn);
     });
   } catch { layout.innerHTML = emptyState('alert', 'Failed to load.', ''); }
 }
 
-async function loadDoctorPatientReports(patient, hasGrant, resultsEl) {
-  if (!hasGrant) {
-    resultsEl.innerHTML = emptyState('lock', `${patient.name} hasn't shared their reports history with you yet.`,
-      'They can turn this on from their Connections page.');
-    return;
-  }
+/* A connected doctor sees ALL of the patient's reports: lab reports the
+   patient uploaded on their own side, plus everything shared in any chat. */
+async function loadDoctorPatientReports(patient, resultsEl) {
   resultsEl.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
   try {
     const [repRes, prescRes, docRes] = await Promise.all([
@@ -1911,9 +2343,13 @@ async function loadDoctorPatientReports(patient, hasGrant, resultsEl) {
       apiFetch(`/prescriptions?patient_id=${patient.id}`),
       apiFetch(`/structured/documents?patient_id=${patient.id}`)
     ]);
-    const reports = repRes.ok ? await repRes.json() : [];
-    const prescriptions = prescRes.ok ? await prescRes.json() : [];
-    const documents = docRes.ok ? await docRes.json() : [];
+    const failed = [repRes, prescRes, docRes].find(r => !r.ok);
+    if (failed) {
+      const data = await failed.json().catch(() => ({}));
+      resultsEl.innerHTML = emptyState('alert', `Couldn't load ${patient.name}'s reports.`, errMsg(data));
+      return;
+    }
+    const [reports, prescriptions, documents] = await Promise.all([repRes.json(), prescRes.json(), docRes.json()]);
     renderReportsAndPrescriptionsList(resultsEl, reports, prescriptions, documents, patient.id);
   } catch { resultsEl.innerHTML = emptyState('alert', 'Failed to load reports.', ''); }
 }
@@ -2022,20 +2458,428 @@ function sparkBars(values) {
 }
 
 /* ============================================================
+   MEDICINES
+   Doctor: pick a connected patient, write medicines (optional file),
+   edit/stop the ones they prescribed. Patient: read-only list.
+   Server: routers/medicines.py -- writes into the shared `medicines`
+   table, so the AI symptom checker also sees what was prescribed.
+   ============================================================ */
+let medicinesState = null; // { patientId, patientName } -- doctor view only
+
+/* "2026-10-10" -> local date (no UTC shift, unlike new Date("2026-10-10")). */
+function parseLocalDate(isoDate) {
+  if (!isoDate) return null;
+  const [y, m, d] = String(isoDate).slice(0, 10).split('-').map(Number);
+  return (y && m && d) ? new Date(y, m - 1, d) : null;
+}
+
+function localTodayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fmtMedDate(isoDate) {
+  const d = parseLocalDate(isoDate);
+  return d ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+}
+
+function medicineDurationLabel(med) {
+  const start = parseLocalDate(med.start_date);
+  const end = parseLocalDate(med.end_date);
+  if (start && end) {
+    const days = Math.round((end - start) / 86400000) + 1;
+    return `${fmtMedDate(med.start_date)} – ${fmtMedDate(med.end_date)} (${days} day${days === 1 ? '' : 's'})`;
+  }
+  if (start) return `From ${fmtMedDate(med.start_date)} · ongoing`;
+  if (end) return `Until ${fmtMedDate(med.end_date)}`;
+  return 'No dates given';
+}
+
+/* Past its end date counts as finished even if never explicitly stopped. */
+function medicineIsCurrent(med) {
+  // The server computes status (active | paused | ended); older payloads
+  // fall back to the active flag and end date.
+  if (med.status) return med.status === 'active';
+  if (!med.active) return false;
+  const end = parseLocalDate(med.end_date);
+  if (!end) return true;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return end >= today;
+}
+
+async function loadMedicinesPage() {
+  const me = auth.user();
+  const layout = document.getElementById('medicines-layout');
+  const subtitle = document.getElementById('medicines-subtitle');
+  layout.innerHTML = '<div class="skeleton skeleton-line w60"></div><div class="skeleton skeleton-line w80"></div>';
+  if (me.role === 'doctor') {
+    subtitle.textContent = 'Write and manage medicines for your connected patients.';
+    await renderDoctorMedicines(layout);
+  } else {
+    subtitle.textContent = 'Medicines prescribed by your doctors. Tell us which ones you are taking; only your doctor can change the rest.';
+    await renderPatientMedicines(layout);
+  }
+}
+
+const MEDICINE_STATUS_PILL = {
+  active: { cls: 'accepted', label: 'Active' },
+  paused: { cls: 'pending', label: 'Paused by patient' },
+  ended: { cls: 'rejected', label: 'Ended' },
+};
+
+function medicineCard(med, { canEdit = false, patientView = false } = {}) {
+  const current = medicineIsCurrent(med);
+  const pill = MEDICINE_STATUS_PILL[med.status] || MEDICINE_STATUS_PILL[current ? 'active' : 'ended'];
+  const div = document.createElement('div');
+  div.className = `blueprint medicine-card${current ? '' : ' stopped'}`;
+  div.dataset.id = med.id;
+  const by = med.source === 'lab_report'
+    ? 'Found in an uploaded lab report'
+    : `Prescribed by ${med.doctor_name ? 'Dr. ' + escHtml(med.doctor_name.replace(/^dr\.?\s+/i, '')) : 'your doctor'}`;
+  div.innerHTML = `
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div class="medicine-main">
+      <div class="medicine-name">${escHtml(med.name)}</div>
+      ${med.dosage ? `<div class="medicine-dosage">${escHtml(med.dosage)}</div>` : ''}
+      <div class="medicine-meta">
+        <span>${escHtml(medicineDurationLabel(med))}</span>
+        <span>${by}</span>
+      </div>
+      ${med.notes ? `<div class="medicine-notes">${escHtml(med.notes)}</div>` : ''}
+    </div>
+    <div class="medicine-actions">
+      <span class="status-pill ${pill.cls}">${pill.label}</span>
+      ${patientView ? `<label class="med-taking"><input type="checkbox" class="med-taking-input" ${med.status === 'active' ? 'checked' : ''} ${med.status === 'ended' ? 'disabled' : ''}> I'm taking this</label>` : ''}
+      ${med.has_attachment ? '<button class="btn btn-secondary btn-sm med-attachment-btn">View file</button>' : ''}
+      ${canEdit ? '<button class="btn btn-ghost btn-sm med-edit-btn">Edit</button>' : ''}
+    </div>`;
+  const attBtn = div.querySelector('.med-attachment-btn');
+  if (attBtn) attBtn.addEventListener('click', () => openMedicineAttachment(med, attBtn));
+  const takingInput = div.querySelector('.med-taking-input');
+  if (takingInput) takingInput.addEventListener('change', () => setMedicineTaking(med, takingInput.checked, takingInput));
+  return div;
+}
+
+async function openMedicineAttachment(med, btn) {
+  btn.disabled = true;
+  try {
+    const { res, blob } = await fetchFileBlob(`/medicines/${med.id}/attachment`);
+    const url = URL.createObjectURL(blob);
+    const isViewable = (blob.type || '').startsWith('image/') || (blob.type || '').includes('pdf');
+    if (!isViewable) { saveBlob(blob, downloadNameFor(res, blob, med.attachment_name || med.name)); return; }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2>${escHtml(med.name)}</h2>
+          <button class="btn btn-ghost btn-sm" id="modal-close-btn">✕</button>
+        </div>
+        <div class="pdf-preview">${(blob.type || '').startsWith('image/')
+          ? `<img src="${url}" alt="Prescription file" style="max-width:100%;display:block;margin:0 auto">`
+          : `<iframe src="${url}" title="Prescription file"></iframe>`}</div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary btn-sm" id="med-file-download-btn">Download</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => { overlay.remove(); URL.revokeObjectURL(url); };
+    overlay.querySelector('#modal-close-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#med-file-download-btn').addEventListener('click', () =>
+      saveBlob(blob, downloadNameFor(res, blob, med.attachment_name || med.name)));
+  } catch (err) { toast(err.message || 'Could not open the file.', 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function renderMedicineList(container, meds, { canEditFor = null, patientView = false, emptyMsg, emptyHint = '' } = {}) {
+  container.innerHTML = '';
+  if (!meds.length) { container.innerHTML = emptyState('file', emptyMsg, emptyHint); return; }
+  const current = meds.filter(medicineIsCurrent);
+  const past = meds.filter(m => !medicineIsCurrent(m));
+  const section = (title, list) => {
+    if (!list.length) return;
+    const h = document.createElement('div');
+    h.className = 'medicine-section-title';
+    h.textContent = `${title} (${list.length})`;
+    container.appendChild(h);
+    const wrap = document.createElement('div');
+    wrap.className = 'medicine-list';
+    list.forEach(m => {
+      const canEdit = canEditFor != null && m.source === 'doctor' && m.doctor_id === canEditFor;
+      const card = medicineCard(m, { canEdit, patientView });
+      if (canEdit) wireDoctorMedicineCard(card, m);
+      wrap.appendChild(card);
+    });
+    container.appendChild(wrap);
+  };
+  section('Current', current);
+  section('Inactive', past);
+}
+
+/* ── Patient: sees what the doctor wrote; can mark each medicine taking / not taking ── */
+async function setMedicineTaking(med, taking, input) {
+  input.disabled = true;
+  try {
+    const res = await apiFetch(`/medicines/${med.id}/taking`, { method: 'PATCH', body: JSON.stringify({ taking }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { toast(errMsg(data), 'error'); input.checked = !taking; input.disabled = false; return; }
+    toast(taking ? `Marked ${med.name} as taking.` : `Marked ${med.name} as not taking.`, 'success');
+    renderPatientMedicines(document.getElementById('medicines-layout'));
+  } catch (err) {
+    toast(err.message || 'Could not reach the server.', 'error');
+    input.checked = !taking; input.disabled = false;
+  }
+}
+
+async function renderPatientMedicines(layout) {
+  try {
+    const res = await apiFetch('/medicines/me');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { layout.innerHTML = emptyState('alert', 'Failed to load medicines.', errMsg(data)); return; }
+    layout.innerHTML = '<div class="medicine-readonly-note">Your doctor sets the medicine, dose and dates. Use the checkbox to tell us whether you are taking it. Your doctor and the assistant can see this.</div><div id="medicine-list-wrap"></div>';
+    renderMedicineList(layout.querySelector('#medicine-list-wrap'), data, {
+      patientView: true,
+      emptyMsg: 'No medicines yet.',
+      emptyHint: 'Medicines your doctor prescribes will appear here.',
+    });
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load medicines.', ''); }
+}
+
+/* ── Doctor: patient picker + write form + list ── */
+async function renderDoctorMedicines(layout) {
+  let patients = [];
+  try {
+    const res = await apiFetch('/users?role=patient');
+    if (!res.ok) { layout.innerHTML = emptyState('alert', 'Failed to load your patients.', errMsg(await res.json().catch(() => ({})))); return; }
+    patients = await res.json();
+  } catch { layout.innerHTML = emptyState('alert', 'Failed to load your patients.', ''); return; }
+
+  if (!patients.length) {
+    layout.innerHTML = emptyState('people', 'No connected patients yet.', 'Connect with a patient first from the Connections tab.');
+    return;
+  }
+
+  const today = localTodayIso();
+  layout.innerHTML = `
+    <div class="medicines-toolbar">
+      <div class="field">
+        <label for="med-patient-select">Patient</label>
+        <select id="med-patient-select">
+          <option value="">Select a patient…</option>
+          ${patients.map(p => {
+            const conn = connectionsCache.find(c => c.status === 'accepted' && c.patient_id === p.id);
+            const label = conn?.doctor_nickname ? `${conn.doctor_nickname} (${p.name})` : p.name;
+            return `<option value="${p.id}">${escHtml(label)}</option>`;
+          }).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary btn-sm" id="med-add-toggle-btn" disabled>+ Add medicine</button>
+    </div>
+    <form class="blueprint medicine-form" id="med-add-form" style="display:none" novalidate>
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="error-banner" id="med-form-error" style="display:none"></div>
+      <div class="upload-form-row">
+        <div class="field">
+          <label for="med-name">Medicine name *</label>
+          <input type="text" id="med-name" maxlength="200" placeholder="e.g. Amoxicillin 500 mg" required>
+        </div>
+        <div class="field">
+          <label for="med-dosage">Dosage / how to take</label>
+          <input type="text" id="med-dosage" maxlength="200" placeholder="e.g. 1 tablet, 3 times a day after meals">
+        </div>
+      </div>
+      <div class="upload-form-row">
+        <div class="field">
+          <label for="med-start">Start date</label>
+          <input type="date" id="med-start" value="${today}">
+        </div>
+        <div class="field">
+          <label for="med-end">End date (leave empty if ongoing)</label>
+          <input type="date" id="med-end">
+        </div>
+      </div>
+      <div class="field">
+        <label for="med-notes">Notes for the patient (optional)</label>
+        <textarea id="med-notes" rows="2" maxlength="1000" placeholder="e.g. Avoid dairy within 2 hours"></textarea>
+      </div>
+      <div class="field">
+        <label for="med-file">Prescription file (optional — PDF, JPG or PNG, max 20 MB)</label>
+        <input type="file" id="med-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+      </div>
+      <div class="upload-form-row">
+        <button type="submit" class="btn btn-primary btn-sm" id="med-submit-btn">Save medicine</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="med-cancel-btn">Cancel</button>
+      </div>
+    </form>
+    <div id="medicine-list-wrap">${emptyState('pointLeft', 'Select a patient to see and write their medicines.', '')}</div>`;
+
+  const select = layout.querySelector('#med-patient-select');
+  const toggleBtn = layout.querySelector('#med-add-toggle-btn');
+  const form = layout.querySelector('#med-add-form');
+  const errEl = layout.querySelector('#med-form-error');
+
+  const resetForm = () => {
+    form.reset();
+    layout.querySelector('#med-start').value = localTodayIso();
+    errEl.style.display = 'none';
+  };
+
+  select.addEventListener('change', () => {
+    const id = Number(select.value);
+    const p = patients.find(x => x.id === id);
+    medicinesState = p ? { patientId: p.id, patientName: p.name } : null;
+    toggleBtn.disabled = !p;
+    form.style.display = 'none';
+    resetForm();
+    if (p) loadDoctorPatientMedicines();
+    else layout.querySelector('#medicine-list-wrap').innerHTML = emptyState('pointLeft', 'Select a patient to see and write their medicines.', '');
+  });
+  toggleBtn.addEventListener('click', () => {
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+    if (form.style.display === '') layout.querySelector('#med-name').focus();
+  });
+  layout.querySelector('#med-cancel-btn').addEventListener('click', () => { form.style.display = 'none'; resetForm(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!medicinesState) return;
+    const name = layout.querySelector('#med-name').value.trim();
+    const start = layout.querySelector('#med-start').value;
+    const end = layout.querySelector('#med-end').value;
+    const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+    if (!name) { showErr('Please enter the medicine name.'); return; }
+    if (start && end && end < start) { showErr("End date can't be before the start date."); return; }
+
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('dosage', layout.querySelector('#med-dosage').value.trim());
+    if (start) fd.append('start_date', start);
+    if (end) fd.append('end_date', end);
+    fd.append('notes', layout.querySelector('#med-notes').value.trim());
+    const file = layout.querySelector('#med-file').files[0];
+    if (file) fd.append('file', file);
+
+    const submitBtn = layout.querySelector('#med-submit-btn');
+    submitBtn.disabled = true; submitBtn.textContent = 'Saving…';
+    try {
+      const res = await apiFetch(`/medicines/patients/${medicinesState.patientId}`, { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showErr(errMsg(data)); return; }
+      toast(`${data.name} added for ${medicinesState.patientName}.`, 'success');
+      form.style.display = 'none';
+      resetForm();
+      loadDoctorPatientMedicines();
+    } catch (err) { showErr(err.message || 'Could not reach the server.'); }
+    finally { submitBtn.disabled = false; submitBtn.textContent = 'Save medicine'; }
+  });
+
+  // Keep the previously selected patient when coming back to the page.
+  if (medicinesState && patients.some(p => p.id === medicinesState.patientId)) {
+    select.value = String(medicinesState.patientId);
+    select.dispatchEvent(new Event('change'));
+  } else {
+    medicinesState = null;
+  }
+}
+
+async function loadDoctorPatientMedicines() {
+  const wrap = document.getElementById('medicine-list-wrap');
+  if (!wrap || !medicinesState) return;
+  const { patientId, patientName } = medicinesState;
+  wrap.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch(`/medicines/patients/${patientId}`);
+    const data = await res.json().catch(() => ({}));
+    if (medicinesState?.patientId !== patientId) return; // switched patient meanwhile
+    if (!res.ok) { wrap.innerHTML = emptyState('alert', `Couldn't load ${patientName}'s medicines.`, errMsg(data)); return; }
+    renderMedicineList(wrap, data, {
+      canEditFor: auth.user().id,
+      emptyMsg: `No medicines for ${patientName} yet.`,
+      emptyHint: 'Use "+ Add medicine" to write one.',
+    });
+  } catch { wrap.innerHTML = emptyState('alert', 'Failed to load medicines.', ''); }
+}
+
+function wireDoctorMedicineCard(card, med) {
+  const editBtn = card.querySelector('.med-edit-btn');
+  if (editBtn) editBtn.addEventListener('click', () => openMedicineEditor(card, med));
+}
+
+function openMedicineEditor(card, med) {
+  const main = card.querySelector('.medicine-main');
+  const actions = card.querySelector('.medicine-actions');
+  actions.style.display = 'none';
+  main.innerHTML = `
+    <div class="error-banner med-edit-error" style="display:none"></div>
+    <div class="upload-form-row" style="flex-wrap:wrap;margin-bottom:10px">
+      <div class="field"><label>Medicine name *</label><input type="text" class="med-edit-name" maxlength="200" value="${escHtml(med.name)}"></div>
+      <div class="field"><label>Dosage / how to take</label><input type="text" class="med-edit-dosage" maxlength="200" value="${escHtml(med.dosage || '')}"></div>
+    </div>
+    <div class="upload-form-row" style="flex-wrap:wrap;margin-bottom:10px">
+      <div class="field"><label>Start date</label><input type="date" class="med-edit-start" value="${escHtml(med.start_date || '')}"></div>
+      <div class="field"><label>End date</label><input type="date" class="med-edit-end" value="${escHtml(med.end_date || '')}"></div>
+    </div>
+    <div class="field"><label>Notes for the patient</label><textarea class="med-edit-notes" rows="2" maxlength="1000">${escHtml(med.notes || '')}</textarea></div>
+    <div class="field"><label>Replace prescription file (optional)</label><input type="file" class="med-edit-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"></div>
+    <div class="upload-form-row">
+      <button type="button" class="btn btn-primary btn-sm med-edit-save">Save changes</button>
+      <button type="button" class="btn btn-ghost btn-sm med-edit-cancel">Cancel</button>
+    </div>`;
+  main.querySelector('.med-edit-cancel').addEventListener('click', () => loadDoctorPatientMedicines());
+  const saveBtn = main.querySelector('.med-edit-save');
+  saveBtn.addEventListener('click', async () => {
+    const errEl = main.querySelector('.med-edit-error');
+    const name = main.querySelector('.med-edit-name').value.trim();
+    const start = main.querySelector('.med-edit-start').value;
+    const end = main.querySelector('.med-edit-end').value;
+    const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+    if (!name) { showErr('Please enter the medicine name.'); return; }
+    if (start && end && end < start) { showErr("End date can't be before the start date."); return; }
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('dosage', main.querySelector('.med-edit-dosage').value.trim());
+    if (start) fd.append('start_date', start);
+    if (end) fd.append('end_date', end);
+    fd.append('notes', main.querySelector('.med-edit-notes').value.trim());
+    const file = main.querySelector('.med-edit-file').files[0];
+    if (file) fd.append('file', file);
+    await patchMedicine(med, fd, saveBtn, `${name} updated.`, showErr);
+  });
+}
+
+async function patchMedicine(med, formData, btn, successMsg, showErr = null) {
+  btn.disabled = true;
+  try {
+    const res = await apiFetch(`/medicines/${med.id}`, { method: 'PATCH', body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { (showErr || ((m) => toast(m, 'error')))(errMsg(data)); return; }
+    toast(successMsg, 'success');
+    loadDoctorPatientMedicines();
+  } catch (err) { toast(err.message || 'Could not reach the server.', 'error'); }
+  finally { btn.disabled = false; }
+}
+
+
+/* ============================================================
    MED CALENDAR
    ============================================================ */
 async function loadCalendarPage() {
   const layout = document.getElementById('calendar-layout');
   const me = auth.user();
+  const isDoctor = me.role === 'doctor';
+  // Doctors can still add an appointment directly; patients can only book
+  // one of their doctor's open slots (the server enforces this too).
   layout.innerHTML = `
+    <div id="slots-section"></div>
     <div class="calendar-toolbar">
       <div class="calendar-scope-tabs">
         <button class="tag tag-accent calendar-scope-chip active" data-scope="upcoming">Upcoming</button>
         <button class="tag tag-outline calendar-scope-chip" data-scope="past">Past</button>
       </div>
-      <button class="btn btn-primary btn-sm" id="add-appointment-btn">+ Add appointment</button>
+      ${isDoctor ? '<button class="btn btn-primary btn-sm" id="add-appointment-btn">+ Add appointment</button>' : ''}
     </div>
-    <div class="blueprint add-appointment-form" id="add-appointment-form">
+    ${isDoctor ? `<div class="blueprint add-appointment-form" id="add-appointment-form">
       <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
       <div class="error-banner" id="appt-form-error" style="display:none"></div>
       <div class="upload-form-row">
@@ -2056,11 +2900,12 @@ async function loadCalendarPage() {
         <button type="button" class="btn btn-primary btn-sm" id="appt-submit-btn">Create appointment</button>
         <button type="button" class="btn btn-ghost btn-sm" id="appt-cancel-btn">Cancel</button>
       </div>
-    </div>
+    </div>` : ''}
     <div class="appointments-list" id="appointments-list"></div>`;
 
-  await populateAppointmentOtherSelect();
+  if (isDoctor) await populateAppointmentOtherSelect();
   wireCalendarToolbar(layout);
+  renderSlotsSection(layout.querySelector('#slots-section'));
   await loadAppointmentsList('upcoming');
 }
 
@@ -2068,6 +2913,7 @@ async function populateAppointmentOtherSelect() {
   const me = auth.user();
   const role = me.role === 'doctor' ? 'patient' : 'doctor';
   const sel = document.getElementById('appt-other-select');
+  if (!sel) return;
   try {
     const res = await apiFetch(`/users?role=${role}`);
     const users = res.ok ? await res.json() : [];
@@ -2082,15 +2928,6 @@ async function populateAppointmentOtherSelect() {
 }
 
 function wireCalendarToolbar(layout) {
-  const form = document.getElementById('add-appointment-form');
-  const toggleBtn = document.getElementById('add-appointment-btn');
-  const cancelBtn = document.getElementById('appt-cancel-btn');
-  const submitBtn = document.getElementById('appt-submit-btn');
-  const errEl = document.getElementById('appt-form-error');
-
-  toggleBtn.addEventListener('click', () => { form.classList.toggle('open'); errEl.style.display = 'none'; });
-  cancelBtn.addEventListener('click', () => { form.classList.remove('open'); errEl.style.display = 'none'; });
-
   layout.querySelectorAll('.calendar-scope-chip').forEach(tab => {
     tab.addEventListener('click', () => {
       layout.querySelectorAll('.calendar-scope-chip').forEach((t) => {
@@ -2102,6 +2939,16 @@ function wireCalendarToolbar(layout) {
       loadAppointmentsList(tab.dataset.scope);
     });
   });
+
+  const form = document.getElementById('add-appointment-form');
+  if (!form) return; // patients have no free-form "add appointment"
+  const toggleBtn = document.getElementById('add-appointment-btn');
+  const cancelBtn = document.getElementById('appt-cancel-btn');
+  const submitBtn = document.getElementById('appt-submit-btn');
+  const errEl = document.getElementById('appt-form-error');
+
+  toggleBtn.addEventListener('click', () => { form.classList.toggle('open'); errEl.style.display = 'none'; });
+  cancelBtn.addEventListener('click', () => { form.classList.remove('open'); errEl.style.display = 'none'; });
 
   submitBtn.addEventListener('click', async () => {
     errEl.style.display = 'none';
@@ -2156,6 +3003,217 @@ async function loadAppointmentsList(scope) {
     }
     data.forEach(a => listEl.appendChild(appointmentCard(a)));
   } catch { listEl.innerHTML = emptyState('alert', 'Failed to load appointments.', ''); }
+}
+
+/* ── Availability (doctor) + booking (patient) ──
+   Server: routers/appointment_slots.py. Times are naive UTC strings. */
+function slotDate(iso) { return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')); }
+function fmtSlotTime(iso) { return slotDate(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); }
+function fmtSlotDay(iso) {
+  return slotDate(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+function groupSlotsByDay(slots) {
+  const groups = new Map();
+  slots.forEach((sl) => {
+    const key = fmtSlotDay(sl.starts_at);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(sl);
+  });
+  return groups;
+}
+
+function renderSlotsSection(wrap) {
+  if (!wrap) return;
+  if (auth.user().role === 'doctor') renderDoctorAvailability(wrap);
+  else renderPatientBooking(wrap);
+}
+
+function renderDoctorAvailability(wrap) {
+  wrap.innerHTML = `
+    <div class="blueprint slots-card">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="slots-head">
+        <h3>My availability</h3>
+        <button class="btn btn-secondary btn-sm" id="slots-add-toggle">+ Add availability</button>
+      </div>
+      <p class="t-xs">Connected patients can book these times. A booked time disappears for everyone else.</p>
+      <div class="slots-form" id="slots-form" style="display:none">
+        <div class="error-banner" id="slots-error" style="display:none"></div>
+        <div class="upload-form-row">
+          <div class="field"><label for="slots-date">Day</label><input type="date" id="slots-date"></div>
+          <div class="field"><label for="slots-from">From</label><input type="time" id="slots-from" value="09:00"></div>
+          <div class="field"><label for="slots-to">To</label><input type="time" id="slots-to" value="12:00"></div>
+          <div class="field"><label for="slots-length">Each slot</label>
+            <select id="slots-length"><option value="15">15 min</option><option value="20">20 min</option><option value="30" selected>30 min</option><option value="45">45 min</option><option value="60">60 min</option></select>
+          </div>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="slots-create-btn">Publish availability</button>
+      </div>
+      <div id="slots-list"></div>
+    </div>`;
+  const form = wrap.querySelector('#slots-form');
+  wrap.querySelector('#slots-add-toggle').addEventListener('click', () => {
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+  });
+  const errEl = wrap.querySelector('#slots-error');
+  wrap.querySelector('#slots-create-btn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    errEl.style.display = 'none';
+    const day = wrap.querySelector('#slots-date').value;
+    const from = wrap.querySelector('#slots-from').value;
+    const to = wrap.querySelector('#slots-to').value;
+    const fail = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+    if (!day || !from || !to) return fail('Please choose a day and a start and end time.');
+    const start = new Date(`${day}T${from}`);
+    const end = new Date(`${day}T${to}`);
+    if (isNaN(start) || isNaN(end) || end <= start) return fail('The end time must be after the start time.');
+    btn.disabled = true; btn.classList.add('btn-loading');
+    try {
+      const res = await apiFetch('/appointment-slots', {
+        method: 'POST',
+        body: JSON.stringify({ start: start.toISOString(), end: end.toISOString(), slot_minutes: Number(wrap.querySelector('#slots-length').value) })
+      });
+      const data = await res.json();
+      if (!res.ok) return fail(errMsg(data));
+      toast(`${data.length} slot${data.length === 1 ? '' : 's'} added.`, 'success');
+      loadDoctorSlots(wrap);
+    } catch { fail('Failed to add availability.'); }
+    finally { btn.disabled = false; btn.classList.remove('btn-loading'); }
+  });
+  loadDoctorSlots(wrap);
+}
+
+async function loadDoctorSlots(wrap) {
+  const list = wrap.querySelector('#slots-list');
+  list.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch('/appointment-slots/mine');
+    const slots = await res.json();
+    if (!res.ok) { list.innerHTML = `<p class="t-xs">${escHtml(errMsg(slots))}</p>`; return; }
+    if (!slots.length) { list.innerHTML = '<p class="t-xs" style="margin-top:12px">No upcoming availability yet. Add some so patients can book you.</p>'; return; }
+    list.innerHTML = '';
+    for (const [day, daySlots] of groupSlotsByDay(slots)) {
+      const h = document.createElement('div');
+      h.className = 'slots-day'; h.textContent = day;
+      list.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'slots-grid';
+      daySlots.forEach((sl) => {
+        const item = document.createElement('div');
+        item.className = `slot-chip ${sl.status}`;
+        const time = document.createElement('span');
+        time.textContent = `${fmtSlotTime(sl.starts_at)} – ${fmtSlotTime(sl.ends_at)}`;
+        item.appendChild(time);
+        const tag = document.createElement('span');
+        tag.className = 'slot-tag';
+        tag.textContent = sl.status === 'booked' ? (sl.patient_name ? `Booked · ${sl.patient_name}` : 'Booked') : 'Open';
+        item.appendChild(tag);
+        if (sl.status === 'open') {
+          const del = document.createElement('button');
+          del.type = 'button'; del.className = 'tag-x'; del.textContent = '×'; del.title = 'Remove this slot';
+          del.addEventListener('click', async () => {
+            del.disabled = true;
+            try {
+              const r = await apiFetch(`/appointment-slots/${sl.id}`, { method: 'DELETE' });
+              if (!r.ok) { toast(errMsg(await r.json().catch(() => ({}))), 'error'); del.disabled = false; return; }
+              loadDoctorSlots(wrap);
+            } catch { toast('Could not remove the slot.', 'error'); del.disabled = false; }
+          });
+          item.appendChild(del);
+        }
+        row.appendChild(item);
+      });
+      list.appendChild(row);
+    }
+  } catch { list.innerHTML = '<p class="t-xs">Failed to load availability.</p>'; }
+}
+
+async function renderPatientBooking(wrap) {
+  wrap.innerHTML = `
+    <div class="blueprint slots-card">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="slots-head"><h3>Book an appointment</h3></div>
+      <p class="t-xs">Pick a time your doctor has made available. Only doctors you are connected to are listed.</p>
+      <div class="field" style="max-width:320px;margin-top:10px"><label for="book-doctor">Doctor</label><select id="book-doctor"></select></div>
+      <div id="book-slots"></div>
+    </div>`;
+  const sel = wrap.querySelector('#book-doctor');
+  const out = wrap.querySelector('#book-slots');
+  let doctors = [];
+  try {
+    const res = await apiFetch('/users?role=doctor');
+    doctors = res.ok ? await res.json() : [];
+  } catch { /* handled below */ }
+  if (!doctors.length) {
+    sel.innerHTML = '<option value="">No connected doctors</option>';
+    out.innerHTML = '<p class="t-xs">Connect with a doctor first (Connections page) to see their availability.</p>';
+    return;
+  }
+  sel.innerHTML = doctors.map(d => `<option value="${d.id}">${escHtml(d.name)}${d.specialization ? ' · ' + escHtml(d.specialization) : ''}</option>`).join('');
+  const load = () => loadOpenSlots(out, Number(sel.value), doctors.find(d => d.id === Number(sel.value))?.name || 'your doctor');
+  sel.addEventListener('change', load);
+  load();
+}
+
+async function loadOpenSlots(out, doctorId, doctorName) {
+  out.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch(`/appointment-slots?doctor_id=${doctorId}`);
+    const slots = await res.json();
+    if (!res.ok) { out.innerHTML = `<p class="t-xs">${escHtml(errMsg(slots))}</p>`; return; }
+    if (!slots.length) { out.innerHTML = `<p class="t-xs" style="margin-top:10px">${escHtml(doctorName)} has no open times right now. Check back later.</p>`; return; }
+    out.innerHTML = '';
+    for (const [day, daySlots] of groupSlotsByDay(slots)) {
+      const h = document.createElement('div');
+      h.className = 'slots-day'; h.textContent = day;
+      out.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'slots-grid';
+      daySlots.forEach((sl) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'slot-chip open slot-book';
+        b.textContent = `${fmtSlotTime(sl.starts_at)} – ${fmtSlotTime(sl.ends_at)}`;
+        b.addEventListener('click', () => bookSlot(sl, doctorName, () => loadOpenSlots(out, doctorId, doctorName)));
+        row.appendChild(b);
+      });
+      out.appendChild(row);
+    }
+  } catch { out.innerHTML = '<p class="t-xs">Failed to load available times.</p>'; }
+}
+
+function bookSlot(slot, doctorName, refresh) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:420px">
+      <div class="modal-header"><h2>Book this time?</h2></div>
+      <div style="padding:16px 20px">
+        <p style="margin:0 0 12px;line-height:1.5"><strong>${escHtml(doctorName)}</strong><br>${escHtml(fmtSlotDay(slot.starts_at))}, ${escHtml(fmtSlotTime(slot.starts_at))} – ${escHtml(fmtSlotTime(slot.ends_at))}</p>
+        <div class="field" style="margin:0"><label for="book-reason">Reason (optional)</label><input type="text" id="book-reason" maxlength="500" placeholder="e.g. Follow-up checkup"></div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" id="book-cancel">Never mind</button>
+        <button class="btn btn-primary btn-sm" id="book-ok">Book</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#book-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  const ok = overlay.querySelector('#book-ok');
+  ok.addEventListener('click', async () => {
+    ok.disabled = true;
+    try {
+      const res = await apiFetch(`/appointment-slots/${slot.id}/book`, {
+        method: 'POST', body: JSON.stringify({ reason: overlay.querySelector('#book-reason').value.trim() || null })
+      });
+      const data = await res.json();
+      if (!res.ok) { toast(errMsg(data), 'error'); close(); refresh(); return; }
+      toast('Appointment booked.', 'success');
+      close(); refresh();
+      loadAppointmentsList(document.querySelector('.calendar-scope-chip.active')?.dataset.scope || 'upcoming');
+    } catch { toast('Could not book the appointment.', 'error'); ok.disabled = false; }
+  });
 }
 
 const REMINDER_LABELS = { '2h': 'In ~2 hours', '1d': 'Tomorrow', '3d': 'In ~3 days' };
@@ -2227,6 +3285,16 @@ function renderProfilePage(user) {
         <label for="profile-name-input">Full name</label>
         <input type="text" id="profile-name-input" value="${escHtml(user.name)}" maxlength="200">
       </div>
+      <div class="auth-row-2">
+        <div class="field">
+          <label for="profile-city-input">City</label>
+          <input type="text" id="profile-city-input" value="${escHtml(user.city || '')}" maxlength="100" placeholder="e.g. Lahore">
+        </div>
+        <div class="field">
+          <label for="profile-country-input">Country</label>
+          <input type="text" id="profile-country-input" value="${escHtml(user.country || '')}" maxlength="100" placeholder="e.g. Pakistan">
+        </div>
+      </div>
 
       ${isDoctor ? `
       <div class="field">
@@ -2282,6 +3350,10 @@ async function saveProfile(isDoctor) {
   const payload = {};
   const name = document.getElementById('profile-name-input').value.trim();
   if (name) payload.name = name;
+  const city = document.getElementById('profile-city-input').value.trim();
+  const country = document.getElementById('profile-country-input').value.trim();
+  if (city) payload.city = city;
+  if (country) payload.country = country;
   if (isDoctor) {
     const sel = document.getElementById('profile-specialization-select').value;
     const other = document.getElementById('profile-specialization-other')?.value.trim();
@@ -2352,6 +3424,12 @@ function initNav() {
       } else if (page === 'calendar') {
         showPage('calendar');
         loadCalendarPage();
+      } else if (page === 'medicines') {
+        showPage('medicines');
+        loadMedicinesPage();
+      } else if (page === 'intake') {
+        showPage('intake');
+        loadIntakePage();
       } else if (page === 'profile') {
         showPage('profile');
         loadProfilePage();
@@ -2375,11 +3453,13 @@ function initNav() {
     stopCommentPolling();
     auth.clear();
     connectionsCache = [];
-    reportsAccessCache = [];
     convState = null;
     reportState = null;
+    setIntakeLocked(false);
+    document.getElementById('emergency-btn').style.display = 'none';
     showPage('auth');
   });
+  document.getElementById('emergency-btn').addEventListener('click', () => sendEmergencyAlert('button'));
 }
 
 /* ============================================================
@@ -2562,7 +3642,11 @@ function renderAssistantReply(result) {
   const kind = result.kind || 'unknown';
   const kindLabel = kind.replace(/_/g, ' ');
   const isEmergency = kind === 'emergency';
-  let html = `<div class="t-xs" style="margin-bottom:4px;color:${isEmergency ? 'var(--red)' : 'var(--text-light)'};text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>${escHtml(result.reply || '(no reply)')}`;
+  // Small talk reads like a normal chat bubble — no "GREETING" tag on it.
+  const labelHtml = kind === 'greeting'
+    ? ''
+    : `<div class="t-xs" style="margin-bottom:4px;color:${isEmergency ? 'var(--red)' : 'var(--text-light)'};text-transform:uppercase;letter-spacing:.03em;font-weight:600">${escHtml(kindLabel)}</div>`;
+  let html = `${labelHtml}${escHtml(result.reply || '(no reply)')}`;
   if (result.recommendation) {
     html += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:.85rem;color:var(--navy);font-weight:600">→ ${escHtml(result.recommendation.specialist_recommended)}</div>`;
   }
@@ -2593,9 +3677,12 @@ function renderAssistantReply(result) {
           showPage('profile');
           loadProfilePage();
         } else {
-          // "notify" -- no real integration to emergency services/
-          // contacts in this app, just acknowledges the choice.
-          actionsDiv.innerHTML = '<span class="t-xs" style="color:var(--text-light)">Okay — please reach out for help. We\'re here whenever you\'re ready to continue.</span>';
+          // "notify": email the patient's emergency contact (after a confirm
+          // step). The other buttons stay usable, so they can still Continue.
+          sendEmergencyAlert('triage', result.emergencyCategory || null).then((outcome) => {
+            actionsDiv.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+            if (outcome === 'sent') { btn.disabled = true; btn.textContent = 'Contact notified'; }
+          });
         }
       });
       actionsDiv.appendChild(btn);
@@ -2655,6 +3742,12 @@ async function sendAssistantMessage(explicitText) {
       assistantBubble('bot', `<span style="color:var(--red)">${escHtml(result.error || `HTTP ${res.status}`)}</span>`);
     } else {
       sehataiSessionIds[assistantMode] = result.sessionId || sehataiSessionIds[assistantMode];
+      // We expected to continue an existing conversation, but the server had
+      // to start a fresh one (it restarted, or the session expired -- sessions
+      // are RAM-only). Say so, instead of letting the next answer look ignored.
+      if (result.sessionIsNew && !isFirstMessageThisMode) {
+        assistantBubble('bot', '<em>Heads up: the assistant lost track of this conversation (it may have restarted), so your earlier symptoms are no longer on file. Please tell me your symptoms again.</em>');
+      }
       renderAssistantReply(result);
     }
     saveAssistantThread();
@@ -2739,6 +3832,16 @@ function initAssistantPage() {
   // saved copy -- a deliberate restart must not resurrect itself on the
   // next reload.
   document.getElementById('assistant-new-session-btn').addEventListener('click', () => {
+    // Delete both server-side sessions now instead of on the next
+    // message (sessions are RAM-only on the server; this is the deletion).
+    // Best-effort: the next message also sends newSession: true anyway.
+    if (sehataiToken) {
+      fetch(`${SEHATAI_API}/api/session/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sehataiToken}` },
+        body: '{}',
+      }).catch(() => {});
+    }
     sehataiSessionIds = { symptom: null, diet: null };
     clearAssistantThread();
     document.getElementById('assistant-thread').innerHTML = '';
@@ -2775,93 +3878,13 @@ function evidenceBubble(role, html, extraClass = '') {
   return row;
 }
 
-/* Neither of these numbers comes from the API as a single field --
-   EvidenceBoard's own contract never returns one "overall score" (see
-   api/contract.md's Report schema). Both are real aggregates computed
-   here from fields the API does return, scoped to the claims/sources
-   that actually made it into the answer (kept + flagged), not the
-   whole appraised pool -- a source the pipeline looked at but never
-   cited shouldn't move a score describing what's actually being shown. */
-function computeEvidenceScores(report) {
-  const shownClaims = (report.claims || []).filter((c) => c.status === 'kept' || c.status === 'flagged');
-  if (!shownClaims.length) return null;
-
-  const citedSids = new Set();
-  shownClaims.forEach((c) => (c.citations || []).forEach((cit) => citedSids.add(cit.sid)));
-  const evidenceBySid = {};
-  (report.evidence || []).forEach((ev) => { evidenceBySid[ev.sid] = ev; });
-  const relevanceScores = [...citedSids].map((sid) => evidenceBySid[sid]?.relevance_score).filter((n) => typeof n === 'number');
-  const confidences = shownClaims.map((c) => c.confidence).filter((n) => typeof n === 'number');
-
-  const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  return {
-    relevanceScore: relevanceScores.length ? Math.round(avg(relevanceScores)) : null,
-    relevanceCount: relevanceScores.length,
-    confidencePct: confidences.length ? Math.round(avg(confidences) * 100) : null,
-    confidenceCount: confidences.length,
-  };
-}
-
-function renderEvidenceScoreRow(scores) {
-  if (!scores) return '';
-  const tile = (value, label, caption) => value == null ? '' : `
-    <div class="evidence-score-tile">
-      <div class="score-value">${value}${label.includes('confidence') ? '%' : '/100'}</div>
-      <div class="score-label">${escHtml(label)}</div>
-      <div class="score-caption">${escHtml(caption)}</div>
-    </div>`;
-  return `<div class="evidence-score-row">
-    ${tile(scores.relevanceScore, 'Evidence score', `Avg. relevance of ${scores.relevanceCount} cited source${scores.relevanceCount === 1 ? '' : 's'}`)}
-    ${tile(scores.confidencePct, 'Verification confidence', `Avg. entailment confidence, ${scores.confidenceCount} claim${scores.confidenceCount === 1 ? '' : 's'}`)}
-  </div>`;
-}
-
-function renderEvidenceClaimRow(claim) {
-  const verdictClass = ['SUPPORTS', 'REFUTES', 'NEI'].includes(claim.verdict) ? claim.verdict : '';
-  const verdictTag = claim.verdict ? `<span class="evidence-claim-verdict ${verdictClass}">${escHtml(claim.verdict)}</span>` : '';
-  const flaggedTag = claim.status === 'flagged' ? '<span class="evidence-claim-flag">⚠ flagged</span>' : '';
-  const confidencePct = typeof claim.confidence === 'number' ? Math.round(claim.confidence * 100) + '% confidence' : '';
-  const citations = (claim.citations || []).map((cit) => cit.url
-    ? `<a href="${escHtml(cit.url)}" target="_blank" rel="noopener">[${escHtml(cit.sid)}] ${escHtml(cit.citation_key)}</a>`
-    : `<span class="t-xs">[${escHtml(cit.sid)}] ${escHtml(cit.citation_key)}</span>`
-  ).join('');
-  return `<div class="evidence-claim-row">
-    <div>${verdictTag}${escHtml(claim.text)}</div>
-    <div class="evidence-claim-meta">${[confidencePct, flaggedTag].filter(Boolean).join(' · ')}</div>
-    ${citations ? `<div class="evidence-claim-citations">${citations}</div>` : ''}
-  </div>`;
-}
-
-/* Some journals (structured abstracts) embed literal markup in the
-   abstract text itself, e.g. "<h4>Purpose of review</h4>..." -- seen
-   live in real EvidenceBoard data. Strip tags rather than render them:
-   this is third-party text, not trusted HTML to execute as innerHTML. */
-function stripHtmlTags(text) {
-  return text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function renderEvidenceSourceCard(ev) {
-  const warnings = [];
-  if (ev.is_retracted) warnings.push('<span class="tag" style="border:1px solid var(--red);color:var(--red)">Retracted</span>');
-  if (ev.is_preprint) warnings.push('<span class="tag" style="border:1px solid var(--amber);color:var(--amber)">Preprint, not peer reviewed</span>');
-  if (ev.study_design) warnings.push(`<span class="tag tag-outline">${escHtml(ev.study_design.replace(/_/g, ' '))}</span>`);
-  const abstractId = `evidence-abstract-${ev.sid}`;
-  const link = ev.url || (ev.doi ? `https://doi.org/${ev.doi}` : null);
-  return `<div class="blueprint evidence-source-card">
-    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-    <div class="evidence-source-title">${escHtml(ev.sid)} · ${link ? `<a href="${escHtml(link)}" target="_blank" rel="noopener">${escHtml(ev.title || ev.citation_key)}</a>` : escHtml(ev.title || ev.citation_key)}</div>
-    <div class="evidence-source-meta">${[ev.journal, ev.publication_date, ev.source].filter(Boolean).map(escHtml).join(' · ')}</div>
-    ${warnings.length ? `<div class="evidence-source-tags">${warnings.join('')}</div>` : ''}
-    ${typeof ev.relevance_score === 'number' ? `
-      <div class="evidence-relevance-row">
-        <div class="evidence-relevance-bar"><div class="evidence-relevance-fill" style="width:${ev.relevance_score}%"></div></div>
-        <div class="evidence-relevance-num">${ev.relevance_score}/100</div>
-      </div>` : ''}
-    ${ev.abstract ? `
-      <div class="evidence-abstract" id="${abstractId}">${escHtml(stripHtmlTags(ev.abstract))}</div>
-      <span class="evidence-abstract-toggle" data-target="${abstractId}">Show full abstract</span>` : ''}
-  </div>`;
-}
+/* The answer itself is drawn by static/js/evidence-view.js (EvidenceView):
+   topic headings, short claim summaries and numbered citation chips that
+   open each paper's details -- a deterministic function of the response,
+   no extra requests. The old "Evidence score" tiles are gone: relevance
+   reflects retrieval ranking only, never evidence quality. What stays
+   here are the response's own notes around the answer. */
+let evidenceAnswerCount = 0;
 
 function renderEvidenceAnswer(report) {
   if (report.abstained) {
@@ -2869,57 +3892,28 @@ function renderEvidenceAnswer(report) {
     evidenceBubble('bot', `<div class="t-xs" style="color:var(--amber);font-weight:600;margin-bottom:4px">ABSTAINED</div>${escHtml(reasons)}`);
     return;
   }
+  const row = evidenceBubble('bot', '', 'evidence-answer-bubble');
+  const bubble = row.querySelector('.msg-bubble');
+  const viewHost = document.createElement('div');
+  bubble.appendChild(viewHost);
+  evidenceAnswerCount += 1;
+  window.EvidenceView.render(viewHost, report, { idPrefix: `eb${evidenceAnswerCount}` });
+
+  const note = (text, color, italic = false) => {
+    const el = document.createElement('div');
+    el.className = 't-xs';
+    el.style.cssText = `margin-top:8px;color:${color}${italic ? ';font-style:italic' : ''}`;
+    el.textContent = text;
+    bubble.appendChild(el);
+  };
   const f = report.funnel || {};
-  const scores = computeEvidenceScores(report);
-  const shownClaims = (report.claims || []).filter((c) => c.status === 'kept' || c.status === 'flagged');
-  // Best-first already (see api/contract.md: "S1 is the highest-ranked
-  // record") -- re-sorting here is just defensive, not load-bearing.
-  const sources = [...(report.evidence || [])].sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-
-  // A thorough answer can run to 30+ verified claims; as one paragraph it
-  // pushed the scores, funnel and citations off-screen. Preview the
-  // opening lines and let the reader expand the rest.
-  const answerText = report.answer_text || '';
-  const answerId = `evidence-answer-${report.run_id || Date.now()}`;
-  let html = answerText.length > 600
-    ? `<div class="evidence-answer-text" id="${escHtml(answerId)}">${escHtml(answerText)}</div>
-       <span class="evidence-abstract-toggle" data-target="${escHtml(answerId)}" data-more="Read full answer">Read full answer</span>`
-    : `<div>${escHtml(answerText)}</div>`;
-  html += renderEvidenceScoreRow(scores);
-
   if (f.claims_generated != null) {
-    const deletionTags = Object.entries(f.by_reason || {}).map(([reason, count]) =>
-      `<span class="tag tag-outline deletion-tag">${count}× ${escHtml(reason)}</span>`
-    ).join('');
-    html += `<div class="evidence-funnel-strip">${f.claims_generated} claims generated → ${f.claims_deleted} deleted → ${f.claims_kept} shown${deletionTags ? '<br>' + deletionTags : ''}</div>`;
+    note(`${f.claims_generated} claims generated → ${f.claims_deleted} removed by verification → ${f.claims_kept} shown`, 'var(--text-light)');
   }
-
-  if (shownClaims.length) {
-    html += `<details class="evidence-section"><summary>Claims and citations (${shownClaims.length})</summary>
-      ${shownClaims.map(renderEvidenceClaimRow).join('')}
-    </details>`;
-  }
-
-  if (sources.length) {
-    html += `<details class="evidence-section"><summary>Ranked sources (${sources.length})</summary>
-      ${sources.map(renderEvidenceSourceCard).join('')}
-    </details>`;
-  }
-
   if (report.unanswered_aspects && report.unanswered_aspects.length) {
-    html += `<div class="t-xs" style="margin-top:10px;color:var(--amber)">Not addressed by the evidence: ${escHtml(report.unanswered_aspects.join('; '))}</div>`;
+    note(`Not addressed by the evidence: ${report.unanswered_aspects.join('; ')}`, 'var(--amber)');
   }
-  if (report.disclaimer) {
-    html += `<div class="t-xs" style="margin-top:8px;color:var(--text-light);font-style:italic">${escHtml(report.disclaimer)}</div>`;
-  }
-  const row = evidenceBubble('bot', html, 'evidence-answer-bubble');
-  row.querySelectorAll('.evidence-abstract-toggle').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const el = document.getElementById(btn.dataset.target);
-      const expanded = el.classList.toggle('expanded');
-      btn.textContent = expanded ? 'Show less' : (btn.dataset.more || 'Show full abstract');
-    });
-  });
+  if (report.disclaimer) note(report.disclaimer, 'var(--text-light)', true);
 }
 
 // Real per-stage labels for EvidenceBoard's actual pipeline (see its own
@@ -2959,9 +3953,18 @@ async function sendEvidenceQuestion(explicitText) {
   try {
     // The gateway only lets a signed-in doctor through to EvidenceBoard
     // (auth_request against /auth/verify) -- it has no login of its own.
+    // Same-origin (behind the gateway): send the doctor's token for the
+    // gateway's check. Cross-origin (local dev, EvidenceBoard on its own
+    // port): EvidenceBoard has no login and its CORS allows only
+    // Content-Type, so an Authorization header made the browser block the
+    // request ("Failed to fetch").
+    const evidenceSameOrigin = new URL(EVIDENCE_API, location.href).origin === location.origin;
     const res = await fetch(`${EVIDENCE_API}/api/ask/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${auth.token()}` },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(evidenceSameOrigin ? { 'Authorization': `Bearer ${auth.token()}` } : {}),
+      },
       body: JSON.stringify({ question: text }),
     });
     if (!res.ok) {
@@ -3035,6 +4038,294 @@ function initEvidenceComposer() {
 /* ============================================================
    BOOT
    ============================================================ */
+/* ============================================================
+   HEALTH INTAKE (patients) -- required before using the portal
+   Server: routers/intake.py. The four health lists land in SehatAI's own
+   patient_intake_form table, which the triage/diet bots already read.
+   ============================================================ */
+const intakeGate = { locked: false };
+
+/* The four tables on the form. `key` is the API field; the first column is the
+   row's name (required when anything else on the row is filled in). */
+const SEVERITY_OPTIONS = [['', 'Select…'], ['mild', 'Mild'], ['moderate', 'Moderate'], ['severe', 'Severe']];
+const STATUS_OPTIONS = [['', 'Select…'], ['ongoing', 'Ongoing'], ['managed', 'Managed'], ['resolved', 'Resolved']];
+const INTAKE_TABLES = [
+  { key: 'allergies', title: 'Allergies', none: 'I have no known allergies', grid: '2fr 2fr 1.3fr 34px',
+    hint: 'Medicines, foods, or anything else that has caused a reaction.',
+    cols: [{ k: 'name', label: 'Allergic to', ph: 'e.g. Penicillin' }, { k: 'reaction', label: 'Reaction', ph: 'e.g. Rash, swelling' },
+           { k: 'severity', label: 'Severity', options: SEVERITY_OPTIONS }] },
+  { key: 'conditions', title: 'Existing medical conditions', none: 'I have no existing conditions', grid: '2fr 1.2fr 1.4fr 34px',
+    hint: 'Long-term or past conditions, for example diabetes, asthma, high blood pressure.',
+    cols: [{ k: 'name', label: 'Condition', ph: 'e.g. Asthma' }, { k: 'since', label: 'Since (year)', ph: 'e.g. 2015' },
+           { k: 'status', label: 'Status', options: STATUS_OPTIONS }] },
+  { key: 'family_history', title: 'Family medical history', none: 'Nothing relevant in my family', grid: '3fr 2fr 34px',
+    hint: 'Conditions that run in your close family.',
+    cols: [{ k: 'name', label: 'Condition', ph: 'e.g. Heart disease' }, { k: 'relative', label: 'Relative', ph: 'e.g. Mother, father, sibling' }] },
+];
+
+function setIntakeLocked(locked) {
+  intakeGate.locked = !!locked;
+  const nav = document.querySelector('.sidebar-nav');
+  if (nav) nav.classList.toggle('locked', intakeGate.locked);
+  const badge = document.getElementById('intake-badge');
+  if (badge) badge.style.display = intakeGate.locked ? '' : 'none';
+}
+
+async function loadIntakePage({ initial = false } = {}) {
+  const layout = document.getElementById('intake-layout');
+  layout.innerHTML = '<div class="skeleton skeleton-line w60"></div>';
+  try {
+    const res = await apiFetch('/me/intake');
+    const data = await res.json();
+    if (!res.ok) {
+      layout.innerHTML = emptyState('alert', 'Couldn\'t load your health intake.', escHtml(errMsg(data)))
+        + '<button class="btn btn-secondary btn-sm" id="intake-retry" style="margin-top:12px">Try again</button>';
+      document.getElementById('intake-retry').addEventListener('click', () => loadIntakePage({ initial }));
+      return;
+    }
+    setIntakeLocked(!data.completed);
+    if (initial && data.completed) { showPage('connections'); loadConnections(); return; }
+    renderIntakeForm(layout, data);
+  } catch (err) {
+    layout.innerHTML = emptyState('alert', 'Failed to load your health intake.', 'The server may be restarting. Try again in a moment.')
+      + '<button class="btn btn-secondary btn-sm" id="intake-retry" style="margin-top:12px">Try again</button>';
+    document.getElementById('intake-retry').addEventListener('click', () => loadIntakePage({ initial }));
+  }
+}
+
+/* One row of one of the tables. Values are set via the DOM (never innerHTML). */
+function addIntakeRow(section, def, values = {}) {
+  const rows = section.querySelector('.intake-rows');
+  const row = document.createElement('div');
+  row.className = 'intake-tr intake-row';
+  row.style.gridTemplateColumns = def.grid;
+  def.cols.forEach((c) => {
+    const cell = document.createElement('div');
+    cell.className = 'intake-td';
+    cell.dataset.label = c.label;
+    let el;
+    if (c.options) {
+      el = document.createElement('select');
+      c.options.forEach(([val, label]) => { const o = document.createElement('option'); o.value = val; o.textContent = label; el.appendChild(o); });
+    } else {
+      el = document.createElement('input');
+      el.type = 'text'; el.maxLength = c.k === 'name' ? 200 : 100; el.placeholder = c.ph || '';
+    }
+    el.className = 'intake-cell'; el.dataset.k = c.k; el.setAttribute('aria-label', c.label); el.autocomplete = 'off';
+    el.value = values[c.k] || '';
+    cell.appendChild(el);
+    row.appendChild(cell);
+  });
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'tag-x intake-del'; x.textContent = '×'; x.title = 'Remove this row'; x.setAttribute('aria-label', 'Remove this row');
+  x.addEventListener('click', () => row.remove());
+  row.appendChild(x);
+  rows.appendChild(row);
+  return row;
+}
+
+function intakeSectionRows(section) {
+  return [...section.querySelectorAll('.intake-row')]
+    .map((row) => {
+      const obj = {};
+      row.querySelectorAll('.intake-cell').forEach((el) => { obj[el.dataset.k] = el.value.trim(); });
+      return obj;
+    })
+    .filter((o) => Object.values(o).some(Boolean));
+}
+
+function renderIntakeForm(layout, data) {
+  const locked = intakeGate.locked;
+  document.getElementById('intake-subtitle').textContent = locked
+    ? 'Please complete this before using the portal. It takes about five minutes and helps the assistant and your doctors.'
+    : 'Keep this up to date. The assistant and your connected doctors use it.';
+  const hasHistory = !(data.missing || []).includes('health_history');
+  const ec = data.emergency_contact || {};
+  const needLocation = !data.city || !data.country;
+  const concerns = data.concerns || [];
+  let n = 0;
+
+  const tableSection = (def) => `
+    <section class="intake-sec" data-key="${def.key}">
+      <h2 class="intake-section-title"><span class="intake-num">${++n}</span>${escHtml(def.title)}</h2>
+      <p class="t-xs intake-hint">${escHtml(def.hint)}</p>
+      <div class="intake-table">
+        <div class="intake-tr intake-th" style="grid-template-columns:${def.grid}">${def.cols.map(c => `<div>${escHtml(c.label)}</div>`).join('')}<div></div></div>
+        <div class="intake-rows"></div>
+      </div>
+      <div class="intake-table-foot">
+        <button type="button" class="btn btn-ghost btn-sm intake-add">+ Add row</button>
+        <label class="check-row"><input type="checkbox" class="tag-none"> ${escHtml(def.none)}</label>
+      </div>
+    </section>`;
+
+  layout.innerHTML = `
+    <form id="intake-form" class="blueprint intake-form" novalidate>
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="intake-paper-title">Medical Intake Form</div>
+      <p class="intake-paper-sub">Please complete all of the following as accurately as possible.</p>
+      ${dataNoticeHtml()}
+
+      ${INTAKE_TABLES.map(tableSection).join('')}
+
+      <section class="intake-sec">
+        <h2 class="intake-section-title"><span class="intake-num">${++n}</span>Your most concerning health problems right now</h2>
+        <p class="t-xs intake-hint">List them in order of importance. Leave the rest blank.</p>
+        <ol class="intake-concerns">
+          ${[0, 1, 2, 3, 4].map(i => `<li><input type="text" class="intake-concern" maxlength="200" aria-label="Concern ${i + 1}" value="${escHtml(concerns[i] || '')}"></li>`).join('')}
+        </ol>
+        <div class="field" style="max-width:420px"><label for="ic-began">When did your main problem begin?</label>
+          <input type="text" id="ic-began" maxlength="100" placeholder="e.g. About 3 months ago" value="${escHtml(data.concern_began || '')}"></div>
+      </section>
+
+      <section class="intake-sec">
+        <h2 class="intake-section-title"><span class="intake-num">${++n}</span>Emergency contact</h2>
+        <p class="t-xs intake-hint">Someone we can email if you press the Emergency button. The email says who and where you are, never your chat or medical details.</p>
+        <div class="auth-row-2">
+          <div class="field"><label for="ic-name">Their name</label><input type="text" id="ic-name" maxlength="200" value="${escHtml(ec.name || '')}"></div>
+          <div class="field"><label for="ic-rel">Relationship</label><input type="text" id="ic-rel" maxlength="100" placeholder="e.g. Mother, spouse, friend" value="${escHtml(ec.relationship || '')}"></div>
+        </div>
+        <div class="auth-row-2">
+          <div class="field"><label for="ic-email">Their email</label><input type="email" id="ic-email" maxlength="255" value="${escHtml(ec.email || '')}"></div>
+          <div class="field"><label for="ic-phone">Their phone (optional)</label><input type="tel" id="ic-phone" maxlength="50" value="${escHtml(ec.phone || '')}"></div>
+        </div>
+      </section>
+
+      ${needLocation ? `
+      <section class="intake-sec">
+        <h2 class="intake-section-title"><span class="intake-num">${++n}</span>Your location</h2>
+        <div class="auth-row-2">
+          <div class="field"><label for="ic-city">City</label><input type="text" id="ic-city" maxlength="100" value="${escHtml(data.city || '')}"></div>
+          <div class="field"><label for="ic-country">Country</label><input type="text" id="ic-country" maxlength="100" value="${escHtml(data.country || '')}"></div>
+        </div>
+      </section>` : ''}
+
+      <div class="error-banner" id="intake-error" style="display:none"></div>
+      <button type="submit" class="btn btn-primary" id="intake-save-btn">${locked ? 'Save and continue' : 'Save changes'}</button>
+    </form>`;
+
+  INTAKE_TABLES.forEach((def) => {
+    const section = layout.querySelector(`.intake-sec[data-key="${def.key}"]`);
+    const none = section.querySelector('.tag-none');
+    const addBtn = section.querySelector('.intake-add');
+    const saved = data[def.key] || [];
+    saved.forEach((vals) => addIntakeRow(section, def, vals));
+    if (hasHistory && saved.length === 0) {
+      none.checked = true; addBtn.disabled = true;           // saved earlier as "none"
+    } else if (saved.length === 0) {
+      addIntakeRow(section, def);                           // one blank row to start
+    }
+    addBtn.addEventListener('click', () => {
+      none.checked = false;
+      const row = addIntakeRow(section, def);
+      row.querySelector('.intake-cell').focus();
+    });
+    none.addEventListener('change', () => {
+      addBtn.disabled = none.checked;
+      if (none.checked) section.querySelector('.intake-rows').innerHTML = '';
+      else if (!section.querySelector('.intake-row')) addIntakeRow(section, def);
+    });
+  });
+
+  layout.querySelector('#intake-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveIntake(layout, needLocation);
+  });
+}
+
+async function saveIntake(layout, needLocation) {
+  const errEl = layout.querySelector('#intake-error');
+  const btn = layout.querySelector('#intake-save-btn');
+  errEl.style.display = 'none';
+  const fail = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; errEl.scrollIntoView({ block: 'nearest' }); };
+
+  const body = {};
+  for (const def of INTAKE_TABLES) {
+    const section = layout.querySelector(`.intake-sec[data-key="${def.key}"]`);
+    const rows = intakeSectionRows(section);
+    const none = section.querySelector('.tag-none').checked;
+    if (rows.length === 0 && !none) return fail(`Please add at least one row to "${def.title}", or tick "${def.none}".`);
+    if (rows.some((r) => !r.name)) return fail(`In "${def.title}", every row needs a ${def.cols[0].label.toLowerCase()}.`);
+    body[def.key] = rows;
+  }
+  body.concerns = [...layout.querySelectorAll('.intake-concern')].map((i) => i.value.trim()).filter(Boolean);
+  body.concern_began = layout.querySelector('#ic-began').value.trim() || null;
+
+  const val = (id) => layout.querySelector(id).value.trim();
+  const contact = { name: val('#ic-name'), relationship: val('#ic-rel'), email: val('#ic-email'), phone: val('#ic-phone') || null };
+  if (!contact.name || !contact.relationship) return fail('Please give your emergency contact\'s name and relationship.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) return fail('Please enter a valid email address for your emergency contact.');
+  body.emergency_contact = contact;
+  if (needLocation) {
+    body.city = val('#ic-city'); body.country = val('#ic-country');
+    if (!body.city || !body.country) return fail('Please enter your city and country.');
+  }
+
+  const wasLocked = intakeGate.locked;
+  btn.classList.add('btn-loading'); btn.disabled = true;
+  try {
+    const res = await apiFetch('/me/intake', { method: 'PUT', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) return fail(errMsg(data));
+    auth.updateUser({ ...auth.user(), city: data.city, country: data.country });
+    setIntakeLocked(!data.completed);
+    toast('Health intake saved.', 'success');
+    if (wasLocked && data.completed) { showPage('connections'); loadConnections(); }
+    else renderIntakeForm(layout, data);
+  } catch (err) { fail('Failed to save. Please try again.'); }
+  finally { btn.classList.remove('btn-loading'); btn.disabled = false; }
+}
+
+/* ============================================================
+   EMERGENCY ALERT (patients)
+   One path for the always-visible Emergency button and the triage bot's
+   "Notify someone" action. Always asks first; the server emails the saved
+   contact (no chat text, no medical details) and reports honestly whether
+   it was sent. Server: routers/emergency.py.
+   Returns 'sent' | 'dry_run' | 'failed' | 'cancelled' | 'no_contact' | 'error'.
+   ============================================================ */
+let emergencyInFlight = false;
+
+async function sendEmergencyAlert(trigger, category = null) {
+  if (emergencyInFlight) return 'cancelled';
+  emergencyInFlight = true;
+  try {
+    let contact = null;
+    try {
+      const res = await apiFetch('/me/intake');
+      const data = await res.json();
+      if (res.ok) contact = data.emergency_contact;
+    } catch { /* fall through to the no-contact path */ }
+    if (!contact) {
+      toast('Add an emergency contact first.', 'error');
+      setIntakeLocked(false);
+      showPage('intake');
+      loadIntakePage();
+      return 'no_contact';
+    }
+    const ok = await confirmDialog(
+      `Alert ${contact.name}?`,
+      `We'll email ${contact.name} (${contact.relationship}) that you need help, with your name, the time and your city. ` +
+      'This does NOT contact emergency services. If you are in danger, call your local emergency number now.',
+      'Send alert'
+    );
+    if (!ok) return 'cancelled';
+
+    const res = await apiFetch('/emergency/notify', { method: 'POST', body: JSON.stringify({ trigger, category }) });
+    const data = await res.json();
+    if (!res.ok) {
+      if (data.detail === 'no_contact') { toast('Add an emergency contact first.', 'error'); showPage('intake'); loadIntakePage(); return 'no_contact'; }
+      toast(errMsg(data), 'error');
+      return 'error';
+    }
+    toast(data.detail, data.status === 'sent' ? 'success' : 'error');
+    return data.status;
+  } catch (err) {
+    toast('Could not send the alert. If this is an emergency, call your local emergency number.', 'error');
+    return 'error';
+  } finally { emergencyInFlight = false; }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initNav();
@@ -3052,7 +4343,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
   });
 
-  if (auth.token() && auth.user()) {
+  auth.restore();
+  if (handleAuthLinkFromUrl()) {
+    // Opened from an emailed confirm / reset link: the auth page is showing.
+  } else if (auth.token() && auth.user()) {
     onLogin();
   } else {
     showPage('auth');

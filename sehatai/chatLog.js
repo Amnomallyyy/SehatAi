@@ -3,9 +3,9 @@
 //
 // COMPLIANCE POLICY (non-negotiable): no value that originated from an
 // Infermedica API response is ever kept past the single request/
-// response cycle that produced it. Not in Supabase (see
-// hydrateSessionState/persistSessionState/logChatMessage below —
-// already no-ops), and NOT in RAM either, across turns.
+// response cycle that produced it. Not in the database (nothing in this
+// file writes to it at all — sessions are RAM-only, see SESSION_TTL_MS),
+// and NOT in RAM either, across turns.
 //
 // ARCHITECTURE (tightened further — explicit decision): Infermedica
 // isn't just kept out of storage, it's kept out of the conversation
@@ -43,17 +43,26 @@
 // ============================================
 
 import { randomUUID } from 'crypto';
-import { supabase } from './supabaseClient.js';
 import { shareSynonymWord } from './symptomSynonyms.js';
 
-const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 Minutes
+// PRODUCT REQUIREMENT: nothing about a chat is stored in the database.
+// A session lives in this process's RAM only, for 24 hours since its
+// last activity, and is deleted immediately when the patient starts a
+// new one (see getOrResumeSession / endPatientSessions). Trade-off,
+// accepted on purpose: a server restart ends every open conversation.
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const INACTIVITY_TIMEOUT_MS = SESSION_TTL_MS;
 
 // ---- In-memory store (RAM only) ----
 // sessionId -> { accumulatedSymptoms: [...], lastSubject, ... }
 const sessionExtraStore = new Map();
 
+// `${patientId}|${mode}` -> { sessionId, dietSessionId, lastActivity } —
+// which session a patient's next symptom/diet message resumes.
+const activeSessionPointers = new Map();
+
 /**
- * Sweeps RAM every 5 minutes to purge sessions inactive > 30 mins.
+ * Sweeps RAM every 5 minutes to purge sessions inactive > 24h.
  *
  * .unref() so this timer never by itself keeps the Node process alive.
  * A real long-running server (webServer.js) has other listeners doing
@@ -72,16 +81,13 @@ setInterval(() => {
       sessionExtraStore.delete(sessionId);
     }
   }
+  for (const [key, pointer] of activeSessionPointers.entries()) {
+    if (now - pointer.lastActivity > SESSION_TTL_MS) activeSessionPointers.delete(key);
+  }
 }, 5 * 60 * 1000).unref();
 
 /**
- * The default shape of a session's RAM-cached extra state. Factored out
- * so hydrateSessionState (below) can merge a persisted row over these
- * same defaults — a persisted row from an older version of this app
- * that's missing a field newer code expects (e.g. lastQuestionAsked
- * didn't always exist) still comes back with a safe default for it,
- * rather than `undefined` leaking into code that expects a boolean or
- * an array.
+ * The default shape of a session's RAM-only extra state.
  */
 function defaultExtra() {
   return {
@@ -104,6 +110,15 @@ function defaultExtra() {
     // See getLastQuestionAsked/setLastQuestionAsked below — only
     // meaningful while awaitingClarificationAnswer is true.
     lastQuestionAsked: null,
+    // Plain symptom terms the pending question proposed (e.g. "joint
+    // swelling", "joint redness") — see getLastQuestionCandidates.
+    lastQuestionCandidates: [],
+    // The recorded symptom the pending question is about, if it's about
+    // one — see getLastQuestionSymptom.
+    lastQuestionSymptom: null,
+    // Already-finalized symptom terms the patient re-opened in the
+    // current round — see getReopenedTerms.
+    reopenedTerms: [],
     // True for exactly one turn: the turn right after Groq asked the
     // FINAL "is there anything else before I recommend a specialist?"
     // gate. Distinct from awaitingClarificationAnswer so
@@ -220,6 +235,14 @@ function defaultExtra() {
     // comment — the exact reply to re-show on any non-"Continue" reply
     // while an emergency/crisis notice is awaiting acknowledgment.
     pendingEmergencyReply: null,
+    // Categories of every physical emergency flagged this session (e.g.
+    // 'ambulance', 'emergency_room') — never the patient's text. Lets the
+    // bot keep the earlier flag in mind after the patient continues; see
+    // recordEmergencyFlag.
+    emergencyHistory: [],
+    // True right after the patient continues past an emergency, until the
+    // next conversational reply acknowledges it once.
+    emergencyNoticePending: false,
     // EXPLICIT PRODUCT DECISION: a short, IN-RAM-ONLY buffer of the
     // last few turns (patient message + bot reply), never written to
     // Supabase. This is NOT a reversal of the "Audit Log: REMOVED BY
@@ -468,6 +491,59 @@ export function getAwaitingEmergencyAcknowledgment(sessionId) {
   return extra ? Boolean(extra.awaitingEmergencyAcknowledgment) : false;
 }
 
+/**
+ * Remembers that a physical emergency was flagged in this session, so the
+ * conversation can carry on afterwards without forgetting it (product
+ * requirement: the patient may continue past an emergency, and the bot
+ * must still take it into account — see processMessage.js's STAGE -1 and
+ * finalizeAndRecommend).
+ *
+ * @param {string} sessionId
+ * @param {string|null} category - emergencyCategory from the envelope
+ */
+export function recordEmergencyFlag(sessionId, category) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  if (!Array.isArray(extra.emergencyHistory)) extra.emergencyHistory = [];
+  extra.emergencyHistory.push({ category: category || 'unspecified', at: Date.now() });
+  extra.lastAccessed = Date.now();
+}
+
+/**
+ * @param {string} sessionId
+ * @returns {Array<{category: string, at: number}>}
+ */
+export function getEmergencyHistory(sessionId) {
+  if (!sessionId) return [];
+  const extra = sessionExtraStore.get(sessionId);
+  return extra && Array.isArray(extra.emergencyHistory) ? extra.emergencyHistory : [];
+}
+
+/**
+ * @param {string} sessionId
+ * @param {boolean} value
+ */
+export function setEmergencyNoticePending(sessionId, value) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  extra.emergencyNoticePending = Boolean(value);
+  extra.lastAccessed = Date.now();
+}
+
+/**
+ * Returns whether the one-time "continuing after an emergency" note is
+ * due, and clears it.
+ * @param {string} sessionId
+ * @returns {boolean}
+ */
+export function consumeEmergencyNoticePending(sessionId) {
+  if (!sessionId) return false;
+  const extra = sessionExtraStore.get(sessionId);
+  if (!extra || !extra.emergencyNoticePending) return false;
+  extra.emergencyNoticePending = false;
+  return true;
+}
+
 export function setAwaitingEmergencyAcknowledgment(sessionId, value) {
   if (!sessionId) return;
   const extra = getOrInitExtra(sessionId);
@@ -594,6 +670,8 @@ export function clearPendingQuestionFlags(sessionId) {
   const extra = getOrInitExtra(sessionId);
   extra.awaitingClarificationAnswer = false;
   extra.lastQuestionAsked = null;
+  extra.lastQuestionCandidates = [];
+  extra.lastQuestionSymptom = null;
   extra.awaitingFinalConfirmation = false;
   extra.awaitingDisambiguationAnswer = false;
   extra.pendingAmbiguousValue = null;
@@ -601,49 +679,88 @@ export function clearPendingQuestionFlags(sessionId) {
   extra.lastAccessed = Date.now();
 }
 
-// ---- Session Management ----
+// ---- Turn rollback ----
+// BUG (found live): a turn clears "which question is pending" near its
+// start; when an AI call then failed mid-turn (rate limits), the turn
+// ended in an error with that already cleared, so the patient's NEXT
+// message was treated as a brand-new conversation — "it forgot I was
+// talking about joint pain". processMessage.js snapshots the session
+// before each turn and restores it when the turn errors, so a failed
+// turn changes nothing.
+
+/**
+ * @param {string} sessionId
+ * @returns {object|null} a deep copy of the session's state
+ */
+export function snapshotSession(sessionId) {
+  const extra = sessionExtraStore.get(sessionId);
+  return extra ? structuredClone(extra) : null;
+}
+
+/**
+ * @param {string} sessionId
+ * @param {object|null} snapshot - from snapshotSession
+ */
+export function restoreSession(sessionId, snapshot) {
+  if (!sessionId || !snapshot) return;
+  sessionExtraStore.set(sessionId, { ...snapshot, lastAccessed: Date.now() });
+}
+
+// ---- Session Management (RAM only — see SESSION_TTL_MS above) ----
+
+function isSessionLive(sessionId) {
+  const extra = sessionExtraStore.get(sessionId);
+  return Boolean(extra) && Date.now() - extra.lastAccessed <= SESSION_TTL_MS;
+}
+
+/**
+ * Resumes `providedSessionId` if it's still live in RAM, otherwise
+ * starts a fresh in-memory session. Never touches the database.
+ *
+ * @param {string} patientId
+ * @param {string|null} [providedSessionId]
+ * @returns {Promise<{id: string}>}
+ */
 export async function getOrCreateSession(patientId, providedSessionId = null) {
-  if (providedSessionId) {
-    const { data } = await supabase
-      .from('chat_sessions')
-      .select('id')
-      .eq('id', providedSessionId)
-      .maybeSingle();
-
-    if (data) return data;
+  if (providedSessionId && isSessionLive(providedSessionId)) {
+    getOrInitExtra(providedSessionId).lastAccessed = Date.now();
+    return { id: providedSessionId };
   }
+  const id = randomUUID();
+  getOrInitExtra(id);
+  return { id };
+}
 
-  // Retry once before falling back to a bare, DB-less id. This matters
-  // more now than it used to: chat_session_state.session_id REFERENCES
-  // chat_sessions(id) (see persistSessionState below), so falling back
-  // to an id with no chat_sessions row doesn't just skip creating a
-  // session — it silently and PERMANENTLY breaks persistence for this
-  // entire conversation, since every later persistSessionState upsert
-  // will fail its foreign-key constraint (caught and logged, but easy
-  // to miss buried in per-turn logs, and with no way to recover short
-  // of starting a new session). A brief retry turns a merely transient
-  // blip into a non-event instead of a whole conversation silently
-  // losing crash/restart survival.
-  let lastError = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { data, error } = await supabase
-      .from('chat_sessions')
-      .insert([{ patient_id: patientId }])
-      .select('id')
-      .single();
-    if (!error) return data;
-    lastError = error;
-    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+/**
+ * Deletes a session's RAM state outright.
+ * @param {string} sessionId
+ */
+export function deleteSession(sessionId) {
+  if (sessionId) sessionExtraStore.delete(sessionId);
+}
+
+/**
+ * "New session" / sign-out: deletes the patient's active session(s)
+ * immediately, rather than waiting for the next message or the 24h
+ * expiry.
+ *
+ * @param {string} patientId
+ * @param {'symptom'|'diet'|null} [mode] - null ends both modes
+ * @returns {number} how many sessions were deleted
+ */
+export function endPatientSessions(patientId, mode = null) {
+  if (!patientId) return 0;
+  let ended = 0;
+  for (const m of mode ? [mode] : ['symptom', 'diet']) {
+    const key = `${patientId}|${m}`;
+    const pointer = activeSessionPointers.get(key);
+    if (pointer) {
+      deleteSession(pointer.sessionId);
+      activeSessionPointers.delete(key);
+      ended += 1;
+    }
   }
-
-  console.error(
-    'Error creating chat_sessions row after retrying — falling back to a bare id with NO database row. ' +
-    'chat_session_state persistence (hydrateSessionState/persistSessionState) will silently fail for ' +
-    'this ENTIRE session from here on (a foreign-key violation on every persistSessionState upsert, ' +
-    'caught and logged per-turn) since there is no chat_sessions row for it to reference:',
-    lastError
-  );
-  return { id: providedSessionId || randomUUID() };
+  return ended;
 }
 
 // ---- Accumulated Symptoms (Groq's own classification — no Infermedica involved) ----
@@ -852,6 +969,46 @@ export function markAllSymptomsFinalized(sessionId) {
   const extra = sessionExtraStore.get(sessionId);
   if (!extra) return;
   for (const s of extra.accumulatedSymptoms) s.finalized = true;
+  // The round these were re-opened in is now closed too.
+  extra.reopenedTerms = [];
+  // So is any emergency flagged during it: the recommendation that closes
+  // the round has already repeated the warning, and a NEW round gets the
+  // full emergency checks again (see processMessage.js's
+  // continuedPastEmergency).
+  extra.emergencyHistory = [];
+  extra.lastAccessed = Date.now();
+}
+
+/**
+ * Already-finalized symptom terms the patient brought back up in the
+ * CURRENT round (e.g. "my joint pain is 8/10 now" after a recommendation
+ * on joint pain). BUG (found live): processMessage.js only counted a
+ * finalized term as part of the new round on the exact turn it was
+ * restated, so on the very next turn ("yes" to "any swelling or redness
+ * around those joints?") joint pain silently dropped out of the round,
+ * the round looked empty, and the patient got "I couldn't tell what new
+ * symptoms you're experiencing". Remembered here until the round is
+ * finalized (cleared by markAllSymptomsFinalized above).
+ *
+ * @param {string} sessionId
+ * @returns {string[]} lowercased, trimmed terms
+ */
+export function getReopenedTerms(sessionId) {
+  if (!sessionId) return [];
+  const extra = sessionExtraStore.get(sessionId);
+  return extra && Array.isArray(extra.reopenedTerms) ? extra.reopenedTerms : [];
+}
+
+/**
+ * @param {string} sessionId
+ * @param {string[]} terms
+ */
+export function addReopenedTerms(sessionId, terms) {
+  if (!sessionId || !terms?.length) return;
+  const extra = getOrInitExtra(sessionId);
+  const merged = new Set(Array.isArray(extra.reopenedTerms) ? extra.reopenedTerms : []);
+  for (const t of terms) merged.add(String(t).toLowerCase().trim());
+  extra.reopenedTerms = [...merged];
   extra.lastAccessed = Date.now();
 }
 
@@ -936,20 +1093,10 @@ export function saveLastSubject(sessionId, subjectInfo) {
  * independent — no attempt is made to merge them into one session
  * object.
  *
- * PERSISTED (unlike the rest of this file): this pointer is stored in
- * Supabase, not RAM, in its own `diet_session_pointers` table —
- *   create table if not exists diet_session_pointers (
- *     patient_id text primary key,
- *     diet_session_id text not null,
- *     updated_at timestamptz not null default now()
- *   );
- * This is deliberately the ONLY piece of session state persisted at
- * all. It's SehatAI-and-DietBot bookkeeping — a foreign key to the
- * diet bot's own session row — and contains nothing derived from
- * Infermedica, so it carries none of the restriction that applies to
- * anything Infermedica-sourced. No in-memory cache sits in front of
- * this — Supabase is the only source of truth, on purpose, to keep
- * this simple and avoid a second thing that could go stale.
+ * The pointer to DietBot's session lives in RAM only, on the patient's
+ * diet-mode entry in activeSessionPointers (same 24h lifetime as every
+ * other session here). DietBot's OWN storage is a separate service and
+ * out of scope for this file.
  *
  * Passing this back explicitly (rather than relying on the diet bot's
  * own local-disk fallback — recommender.py writes a
@@ -961,178 +1108,82 @@ export function saveLastSubject(sessionId, subjectInfo) {
  */
 export async function getDietSessionId(patientId) {
   if (!patientId) return null;
-  try {
-    const { data, error } = await supabase
-      .from('diet_session_pointers')
-      .select('diet_session_id')
-      .eq('patient_id', patientId)
-      .maybeSingle();
-    if (error) {
-      console.error('[chatLog] getDietSessionId failed (non-fatal, treated as no prior session):', error.message);
-      return null;
-    }
-    return data?.diet_session_id || null;
-  } catch (err) {
-    console.error('[chatLog] getDietSessionId failed (non-fatal, treated as no prior session):', err.message);
-    return null;
-  }
+  return activeSessionPointers.get(`${patientId}|diet`)?.dietSessionId || null;
 }
 
 /**
+ * Remembers (in RAM only) which DietBot-side session this patient's
+ * diet thread is using, so the next diet turn resumes it.
+ *
  * @param {string} patientId
  * @param {string} dietSessionId
- * @param {string|null} [sehataiSessionId] - the chat_sessions.id this
- *   diet turn used (see getOrResumeDietSession below) — stored alongside
- *   diet_session_id so the NEXT diet turn can resume the exact same
- *   SehatAI-side session (needed for diet mode's own emergency-
- *   acknowledgment flags, which live in sessionExtraStore keyed by THIS
- *   id, not DietBot's own session_id).
+ * @param {string|null} [sehataiSessionId] - this app's own session id for
+ *   the diet thread (diet mode's emergency-acknowledgment flags live in
+ *   sessionExtraStore under it)
  * @returns {Promise<void>}
  */
 export async function saveDietSessionId(patientId, dietSessionId, sehataiSessionId = null) {
   if (!patientId || !dietSessionId) return;
-  try {
-    const row = { patient_id: patientId, diet_session_id: dietSessionId, updated_at: new Date().toISOString() };
-    if (sehataiSessionId) row.sehatai_session_id = sehataiSessionId;
-    await supabase.from('diet_session_pointers').upsert(row);
-  } catch (err) {
-    console.error('[chatLog] saveDietSessionId failed (non-fatal):', err.message);
-  }
+  const key = `${patientId}|diet`;
+  const pointer = activeSessionPointers.get(key);
+  activeSessionPointers.set(key, {
+    sessionId: sehataiSessionId || pointer?.sessionId || null,
+    dietSessionId,
+    lastActivity: Date.now(),
+  });
 }
 
-// ---- 24h Session Resume / Expiry ("clean storage") ----
+// ---- 24h Session Resume / Expiry (RAM only) ----
 //
-// Both symptom and diet mode get their own independent, resumable
-// "terminal": switching between modes never loses either conversation,
-// a browser refresh resumes the same session, and a session only ends
-// when the patient explicitly starts a new one OR 24 hours pass with no
-// activity — whichever comes first. On expiry (or an explicit new-
-// session request), the OLD session's rows are actively deleted rather
-// than just left inert — there's no compliance reason to keep them
-// (chat_session_state never holds anything Infermedica-sourced, see
-// logChatMessage's doc comment above), this is purely a "don't let
-// completed conversations pile up forever" preference.
-//
-// Schema (create/alter in Supabase before relying on this — without it,
-// these functions fail closed to always creating a fresh session, logged
-// but non-fatal):
-//
-//   create table if not exists active_session_pointers (
-//     patient_id text not null,
-//     mode text not null,
-//     session_id uuid not null references chat_sessions(id),
-//     primary key (patient_id, mode)
-//   );
-//   alter table diet_session_pointers
-//     add column if not exists sehatai_session_id uuid references chat_sessions(id);
-//   alter table diet_session_pointers alter column diet_session_id drop not null;
-
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+// Symptom and diet mode each get their own resumable thread per patient:
+// switching modes or refreshing the page resumes the same session, and a
+// session ends when the patient explicitly starts a new one OR 24 hours
+// pass with no activity — whichever comes first. Ending a session deletes
+// its state immediately. Nothing here touches the database.
 
 /**
- * @param {string} sessionId
- * @returns {Promise<boolean>} true if this session's last known activity
- *   was more than 24h ago, OR if activity can't be determined at all
- *   (fails toward starting fresh rather than resuming something unknown).
+ * Shared resume-or-create for both modes.
+ * @returns {{sessionId: string, dietSessionId: string|null, isNew: boolean}}
  */
-async function isSessionStale(sessionId) {
-  const { data: state } = await supabase
-    .from(SESSION_STATE_TABLE)
-    .select('updated_at')
-    .eq('session_id', sessionId)
-    .maybeSingle();
-  let lastActivity = state?.updated_at;
-  if (!lastActivity) {
-    // No chat_session_state row yet (a session created but no turn ever
-    // completed — e.g. diet mode, which never calls persistSessionState
-    // at all) — fall back to when the session was created.
-    const { data: session } = await supabase
-      .from('chat_sessions')
-      .select('started_at')
-      .eq('id', sessionId)
-      .maybeSingle();
-    lastActivity = session?.started_at;
-  }
-  if (!lastActivity) return true;
-  return Date.now() - new Date(lastActivity).getTime() > SESSION_TTL_MS;
-}
+function resumeOrStart(patientId, mode, forceNew) {
+  const key = `${patientId}|${mode}`;
+  const pointer = activeSessionPointers.get(key);
+  const fresh = pointer && Date.now() - pointer.lastActivity <= SESSION_TTL_MS && isSessionLive(pointer.sessionId);
 
-/**
- * Deletes an old session's rows entirely ("clean storage") — called
- * whenever getOrResumeSession/getOrResumeDietSession decide a session is
- * being replaced (expired or an explicit new-session request), never on
- * a session still in active use.
- * @param {string} sessionId
- */
-async function deleteSessionRows(sessionId) {
-  if (!sessionId) return;
-  try {
-    await supabase.from(SESSION_STATE_TABLE).delete().eq('session_id', sessionId);
-    await supabase.from('chat_sessions').delete().eq('id', sessionId);
-  } catch (err) {
-    console.error('[chatLog] deleteSessionRows failed (non-fatal — the old row is just left behind):', err.message);
+  if (pointer && fresh && !forceNew) {
+    pointer.lastActivity = Date.now();
+    getOrInitExtra(pointer.sessionId).lastAccessed = Date.now();
+    return { sessionId: pointer.sessionId, dietSessionId: pointer.dietSessionId || null, isNew: false };
   }
-  sessionExtraStore.delete(sessionId);
+
+  // Expired, explicitly replaced, or never existed: delete the old one now.
+  if (pointer) deleteSession(pointer.sessionId);
+  const sessionId = randomUUID();
+  getOrInitExtra(sessionId);
+  activeSessionPointers.set(key, { sessionId, dietSessionId: null, lastActivity: Date.now() });
+  return { sessionId, dietSessionId: null, isNew: true };
 }
 
 /**
  * Symptom mode's resume-or-create. The one function a caller (e.g.
- * webServer.js) should use instead of blindly trusting a client-supplied
- * sessionId — this is what actually implements "switching modes and
- * refreshing never loses the conversation, but 24h of inactivity starts
- * a fresh one."
+ * webServer.js) should use instead of trusting a client-supplied
+ * sessionId.
  *
  * @param {string} patientId
  * @param {{forceNew?: boolean}} [opts] - forceNew: true for an explicit
- *   "start a new session" request from the patient — closes out and
- *   cleans up whatever session was active, same as an expiry would,
- *   just patient-triggered instead of time-triggered.
+ *   "start a new session" request — the old session is deleted now.
  * @returns {Promise<{sessionId: string, isNew: boolean}>}
  */
 export async function getOrResumeSession(patientId, { forceNew = false } = {}) {
   if (!patientId) throw new Error('getOrResumeSession requires a patientId');
-
-  const { data: pointer, error: pointerError } = await supabase
-    .from('active_session_pointers')
-    .select('session_id')
-    .eq('patient_id', patientId)
-    .eq('mode', 'symptom')
-    .maybeSingle();
-  if (pointerError) {
-    console.error('[chatLog] getOrResumeSession pointer lookup failed (starting fresh):', pointerError.message);
-  }
-
-  if (pointer?.session_id && !forceNew && !(await isSessionStale(pointer.session_id))) {
-    return { sessionId: pointer.session_id, isNew: false };
-  }
-
-  if (pointer?.session_id) {
-    // BUG (found live): active_session_pointers.session_id has a foreign
-    // key to chat_sessions(id) — deleting the chat_sessions row FIRST,
-    // while this pointer row still references it, gets silently rejected
-    // by the FK constraint (Supabase returns an error here, caught and
-    // logged by deleteSessionRows, never thrown) — the "old session
-    // deleted" part of clean storage just quietly failed every time. The
-    // pointer row itself has to go first.
-    await supabase.from('active_session_pointers').delete().eq('patient_id', patientId).eq('mode', 'symptom');
-    await deleteSessionRows(pointer.session_id);
-  }
-
-  const session = await getOrCreateSession(patientId, null);
-  const { error: upsertError } = await supabase
-    .from('active_session_pointers')
-    .upsert({ patient_id: patientId, mode: 'symptom', session_id: session.id });
-  if (upsertError) {
-    console.error('[chatLog] getOrResumeSession pointer upsert failed (non-fatal — this turn still works, just not resumable next time):', upsertError.message);
-  }
-  return { sessionId: session.id, isNew: true };
+  const { sessionId, isNew } = resumeOrStart(patientId, 'symptom', forceNew);
+  return { sessionId, isNew };
 }
 
 /**
- * Diet mode's resume-or-create — same contract as getOrResumeSession
- * above, plus it also hands back the DietBot-side session_id (if one is
- * still valid) so the caller can pass it straight through to
- * processDietMessage without a separate getDietSessionId lookup.
+ * Diet mode's resume-or-create — same contract as getOrResumeSession,
+ * plus the DietBot-side session_id (if one is still valid) so the caller
+ * can pass it straight through to processDietMessage.
  *
  * @param {string} patientId
  * @param {{forceNew?: boolean}} [opts]
@@ -1140,166 +1191,7 @@ export async function getOrResumeSession(patientId, { forceNew = false } = {}) {
  */
 export async function getOrResumeDietSession(patientId, { forceNew = false } = {}) {
   if (!patientId) throw new Error('getOrResumeDietSession requires a patientId');
-
-  const { data: row, error } = await supabase
-    .from('diet_session_pointers')
-    .select('sehatai_session_id, diet_session_id, updated_at')
-    .eq('patient_id', patientId)
-    .maybeSingle();
-  if (error) {
-    console.error('[chatLog] getOrResumeDietSession lookup failed (starting fresh):', error.message);
-  }
-
-  const stale = row?.updated_at ? Date.now() - new Date(row.updated_at).getTime() > SESSION_TTL_MS : true;
-
-  if (row?.sehatai_session_id && !forceNew && !stale) {
-    return { sessionId: row.sehatai_session_id, dietSessionId: row.diet_session_id || null, isNew: false };
-  }
-
-  // Stale, forceNew, or no pointer at all.
-  if (row?.sehatai_session_id) {
-    // Same FK-ordering bug as getOrResumeSession above, fixed the same
-    // way: clear this row's reference to the old session before trying
-    // to delete that session, not after.
-    await supabase.from('diet_session_pointers').delete().eq('patient_id', patientId);
-    await deleteSessionRows(row.sehatai_session_id);
-  }
-
-  const session = await getOrCreateSession(patientId, null);
-  // Write a placeholder pointer immediately (diet_session_id left null —
-  // see the schema note above, this column had to be made nullable for
-  // exactly this) so a SECOND resume call before any diet message has
-  // actually been sent still finds this session and resumes it, instead
-  // of creating a different fresh session every time it's asked (found
-  // live: that's exactly what happened before this write existed).
-  // saveDietSessionId overwrites this same row with the real
-  // diet_session_id once DietBot actually returns one. NOTE: none of
-  // this reaches DietBot's own local-disk session fallback
-  // (recommender.py's .session_<patient_id> file) — that's entirely on
-  // DietBot's side, left alone here same as its own message-history cap.
-  const { error: placeholderError } = await supabase
-    .from('diet_session_pointers')
-    .upsert({ patient_id: patientId, sehatai_session_id: session.id, diet_session_id: null, updated_at: new Date().toISOString() });
-  if (placeholderError) {
-    console.error('[chatLog] getOrResumeDietSession placeholder pointer write failed (non-fatal — this turn still works, just not resumable next time):', placeholderError.message);
-  }
-  return { sessionId: session.id, dietSessionId: null, isNew: true };
-}
-
-// ---- Session State Persistence ----
-//
-// UPDATED (this was previously disabled by design — see the git history
-// of this comment block for the old reasoning). The RAM-only design had
-// a real cost: this app can only ever run as a SINGLE process, because
-// a second instance (for load-balancing, or just a rolling deploy) has
-// its own empty `sessionExtraStore` and would silently "forget" any
-// session that happened to land on it instead of the instance that
-// started it. Worse, ANY server restart or crash mid-conversation loses
-// every in-progress session with no warning — the patient just gets
-// treated as a brand-new patient on their next message.
-//
-// The original hesitation was about NOT wanting anything
-// Infermedica-derived, or anything from the raw conversation, sitting
-// in the database — see this file's top-of-file compliance note, which
-// is still fully in force and untouched by this change. But
-// `sessionExtraStore` never held anything like that in the first
-// place: it's Groq's OWN symptom classification (never Infermedica's),
-// plus this app's own bookkeeping (counters, booleans, the composed
-// question text). There was never a compliance reason blocking this —
-// just a simplicity choice, made before the single-instance/
-// restart-loss cost of that choice had been weighed against it.
-//
-// Design: sessionExtraStore stays as the fast, synchronous, per-process
-// cache it always was (every get/set in this file still reads/writes it
-// directly, unchanged) — this is now a cache IN FRONT OF Supabase, not
-// a replacement for persistence. hydrateSessionState is called once per
-// incoming message (see processMessage.js) and only does a DB round
-// trip on an actual cache miss (a fresh process, or a session that
-// aged out of a previous process's RAM) — the common case, the same
-// process handling turn 2+ of a session it already saw, costs nothing
-// extra. persistSessionState upserts the current in-RAM object after
-// each turn (see processMessage.js's try/finally).
-//
-// This does NOT make the system safe for concurrent writes to the same
-// session across MULTIPLE instances (last-write-wins) — that's a
-// harder problem (would need row-level locking or optimistic
-// concurrency) out of scope for this pass. It does fix the two more
-// common failures: a restart/crash losing a conversation, and a single
-// instance being a hard architectural requirement.
-//
-// Schema (create this table in Supabase before relying on persistence —
-// without it, hydrateSessionState/persistSessionState fail closed to
-// their old RAM-only behavior, logged but non-fatal):
-//
-//   create table if not exists chat_session_state (
-//     session_id uuid primary key references chat_sessions(id),
-//     state jsonb not null,
-//     updated_at timestamptz not null default now()
-//   );
-const SESSION_STATE_TABLE = 'chat_session_state';
-
-/**
- * Loads a session's extra state from Supabase into the RAM cache, but
- * ONLY on a genuine cache miss (sessionExtraStore doesn't already have
- * this sessionId) — the normal case, a later turn of a session this
- * same process already saw, does zero DB work. Failures here are
- * logged but non-fatal: the session just starts fresh in RAM, exactly
- * like the old always-disabled behavior, rather than blocking the
- * conversation on a persistence-layer problem.
- *
- * @param {string} sessionId
- */
-export async function hydrateSessionState(sessionId) {
-  if (!sessionId || sessionExtraStore.has(sessionId)) return;
-  try {
-    const { data, error } = await supabase
-      .from(SESSION_STATE_TABLE)
-      .select('state')
-      .eq('session_id', sessionId)
-      .maybeSingle();
-    if (error) {
-      console.error('[chatLog] hydrateSessionState failed (starting this session fresh in RAM):', error.message);
-      return;
-    }
-    if (data?.state) {
-      // Merged over defaultExtra() so a row written by an older version
-      // of this app, missing a field this version expects, still comes
-      // back with a safe default rather than `undefined`.
-      sessionExtraStore.set(sessionId, { ...defaultExtra(), ...data.state, lastAccessed: Date.now() });
-    }
-  } catch (err) {
-    console.error('[chatLog] hydrateSessionState threw (starting this session fresh in RAM):', err.message);
-  }
-}
-
-/**
- * Upserts the session's current RAM state to Supabase. Called once per
- * turn, after the pipeline finishes (see processMessage.js's
- * try/finally) — so even a turn that returned early (an emergency,
- * off-topic, etc.) still gets its state saved. Failures here are
- * logged but non-fatal: the RAM cache in THIS process still has the
- * correct state for as long as this process keeps running, so a
- * transient DB write failure doesn't break the current conversation —
- * it only means a restart before the NEXT successful write would lose
- * this turn's update.
- *
- * @param {string} sessionId
- */
-export async function persistSessionState(sessionId) {
-  if (!sessionId) return;
-  const extra = sessionExtraStore.get(sessionId);
-  if (!extra) return;
-  try {
-    const { lastAccessed, ...persistable } = extra; // lastAccessed is a RAM-cache-only bookkeeping field
-    const { error } = await supabase
-      .from(SESSION_STATE_TABLE)
-      .upsert({ session_id: sessionId, state: persistable, updated_at: new Date().toISOString() });
-    if (error) {
-      console.error('[chatLog] persistSessionState failed (non-fatal — this process still has it in RAM):', error.message);
-    }
-  } catch (err) {
-    console.error('[chatLog] persistSessionState threw (non-fatal — this process still has it in RAM):', err.message);
-  }
+  return resumeOrStart(patientId, 'diet', forceNew);
 }
 
 // ---- Question-Answer Flags ----
@@ -1362,6 +1254,69 @@ export function setLastQuestionAsked(sessionId, questionText) {
   if (!sessionId) return;
   const extra = getOrInitExtra(sessionId);
   extra.lastQuestionAsked = questionText || null;
+  // A new question invalidates the previous one's candidates and symptom;
+  // the assessIntake call site sets fresh ones right after this.
+  extra.lastQuestionCandidates = [];
+  extra.lastQuestionSymptom = null;
+  extra.lastAccessed = Date.now();
+}
+
+/**
+ * The recorded symptom the pending targeted question is about (e.g.
+ * "leg pain" for "How long have you had the leg pain, and how severe is
+ * it?"), or null when the question isn't about one specific symptom. BUG
+ * (found live): the answer "2 days and 5 out of 10" to that question was
+ * applied to joint pain too, overwriting its real values, and the bot
+ * then kept re-asking about both.
+ *
+ * @param {string} sessionId
+ * @returns {string|null}
+ */
+export function getLastQuestionSymptom(sessionId) {
+  if (!sessionId) return null;
+  const extra = sessionExtraStore.get(sessionId);
+  return extra ? extra.lastQuestionSymptom || null : null;
+}
+
+/**
+ * @param {string} sessionId
+ * @param {string|null} term
+ */
+export function setLastQuestionSymptom(sessionId, term) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  extra.lastQuestionSymptom = term ? String(term).trim() : null;
+  extra.lastAccessed = Date.now();
+}
+
+/**
+ * The NEW symptom terms (not yet recorded) that the pending targeted
+ * question asked about, as declared by assessIntake alongside the
+ * question text — e.g. ["joint swelling", "joint redness"] for "have you
+ * noticed any swelling or redness around those joints?". Lets a bare
+ * "yes" be recorded deterministically even when classifySymptoms' own
+ * affirmation rule is missed (found live: "yes" to exactly that question
+ * came back with no symptoms at all).
+ *
+ * @param {string} sessionId
+ * @returns {string[]}
+ */
+export function getLastQuestionCandidates(sessionId) {
+  if (!sessionId) return [];
+  const extra = sessionExtraStore.get(sessionId);
+  return extra && Array.isArray(extra.lastQuestionCandidates) ? extra.lastQuestionCandidates : [];
+}
+
+/**
+ * @param {string} sessionId
+ * @param {string[]} terms
+ */
+export function setLastQuestionCandidates(sessionId, terms) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  extra.lastQuestionCandidates = (terms || [])
+    .filter((t) => typeof t === 'string' && t.trim())
+    .map((t) => t.trim());
   extra.lastAccessed = Date.now();
 }
 
@@ -1471,10 +1426,9 @@ export function setLastEmotionalQuestion(sessionId, questionText) {
 // table — the patient's raw message, the bot's full response object
 // (including, at various points, triage_level, specialist_recommended,
 // and other Infermedica-derived fields), permanently. That table, and
-// this function's write to it, are gone entirely now. The ONLY thing
-// that persists to the database for a chat session is the bare
-// `chat_sessions` row itself (id + patient_id) — see the note above
-// hydrateSessionState/persistSessionState. If a `chat_messages` table
+// this function's write to it, are gone entirely now — nothing about a
+// chat session is written to the database (sessions are RAM-only, see
+// SESSION_TTL_MS at the top of this file). If a `chat_messages` table
 // still exists in Supabase from before this change, it's simply never
 // written to anymore; drop it with `drop table if exists
 // chat_messages;` in the Supabase SQL editor if you want it gone from

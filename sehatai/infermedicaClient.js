@@ -174,6 +174,17 @@ export async function getRecommendedSpecialist({ age = 30, sex = 'female', evide
  * values; the old "urgent"/"routine" keys are kept too in case anything
  * ever calls this with an already-bucketed value.
  *
+ * FIXED (demonstrated live): "consultation" was mapped to 'urgent', so
+ * every case Infermedica said needed an ordinary doctor's visit — its
+ * most common non-self-care outcome — showed an "urgency: urgent" chip
+ * (a mildly sore knee after jogging did). Infermedica's own meaning is
+ * "consult a doctor, not urgently"; only "consultation_24" (see a doctor
+ * within 24 hours) is urgent. "consultation" is now 'routine'.
+ *
+ * An unrecognised level now falls back to 'urgent', not 'routine' — the
+ * same cautious middle ground getTriageForEvidence() uses when /triage
+ * is unreachable, instead of silently reading "unknown" as "can wait".
+ *
  * See getTriageForEvidence() below for the raw triage_level (and
  * emergency_ambulance vs. emergency distinction) preserved alongside
  * this bucket, and describeChannel()/CONSULTATION_NOTES for the
@@ -184,14 +195,14 @@ export function mapTriageToUrgency(triageLevel) {
     emergency_ambulance: 'emergency',
     emergency: 'emergency',
     consultation_24: 'urgent',
-    consultation: 'urgent',
+    consultation: 'routine',
     self_care: 'routine',
     // legacy/defensive — not real Infermedica values, kept in case an
     // already-bucketed urgency ever gets passed back through here
     urgent: 'urgent',
     routine: 'routine',
   };
-  return map[triageLevel] || 'routine';
+  return map[triageLevel] || 'urgent';
 }
 
 /**

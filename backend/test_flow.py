@@ -2,6 +2,12 @@
 Manual end-to-end smoke test against a running server. Not part of the
 deliverable -- just how I verified the API before handing it over.
 Run with the server already up on :8000.
+
+NOTE: written before email confirmation and sign-up location existed. Sign-up
+no longer returns a login token (the email link must be used first) and now
+requires city/country, so this script's signup steps need updating before it
+can be used again. It also creates real accounts, so only point it at a
+throwaway database.
 """
 import io
 import os

@@ -15,10 +15,14 @@ evidence search for doctors.
 | **Conversations** | Secure messaging with inline report/prescription attachments | Same, plus doctor-only clinical comment threads |
 | **Lab reports** | Upload a PDF/photo → OCR → per-marker values, ranges, flags, trends | Per-marker review, history across reports, independent AI re-check of every extraction, notes, "mark reviewed" |
 | **AI report summaries** | Plain-language summary of any shared PDF | Edit or regenerate; every regeneration is kept in the history |
-| **Reports access** | Explicit, revocable grant of full report history to a doctor | Cross-conversation history only with that grant |
+| **Reports access** | A connected doctor sees all of your lab reports, including ones you upload yourself | Full report history of every connected patient, not only what was shared in a chat |
 | **AI Assistant** | Symptom triage → which specialist to see; diet advice grounded in the patient's own labs and medicines | — |
 | **Clinical Evidence** | — | Ask a clinical question; every claim carries a citation and unverifiable claims are deleted before you see them |
-| **Med Calendar** | Appointments with reminders | Same |
+| **Sign-up & account** | City/country, privacy agreement (required), email confirmation, forgot-password | Same |
+| **Health intake** | Printed-form style page, required after login: allergies, existing conditions and family history as tables, ranked top concerns, emergency contact | — |
+| **Medicines** | See what your doctors prescribed; mark each one taking / not taking | Prescribe with notes and an optional file; a medicine turns inactive after its end date |
+| **Med Calendar** | Book one of your connected doctor's open time slots; appointments with reminders | Publish availability and see who booked; appointments with reminders |
+| **Emergency** | An always-visible Emergency button (and the assistant's "Notify someone") emails your emergency contact after you confirm | — |
 
 ## Architecture
 
@@ -74,6 +78,22 @@ Fill in `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`/`SUPABASE_KEY`,
 URL-encode special characters in the password, e.g. `@` → `%40`), a random
 `SECRET_KEY`, `DIETBOT_INTERNAL_TOKEN`, and at least one AI provider key.
 
+**Email (needed for sign-up links, password reset and emergency alerts).**
+Add `SMTP_HOST`, `SMTP_PORT` (587 by default), `SMTP_USER`, `SMTP_PASSWORD`,
+`SMTP_FROM` and `PUBLIC_APP_URL` (the address people open, used in emailed
+links). With Gmail, use an
+[app password](https://myaccount.google.com/apppasswords), not your normal
+one. Without `SMTP_HOST` nothing is sent: the API says so honestly, and
+outside production the confirm / reset link is written to the backend log
+so you can still sign in while developing. In production SMTP is required,
+because new accounts must confirm their email before logging in.
+
+The portal's own tables (locations, email confirmation, tokens, emergency
+contacts, appointment slots, intake rows, consent, anonymised statistics)
+are created automatically when the core API starts; the same DDL is in
+[`supabase/schema.sql`](supabase/schema.sql). See
+[`docs/portal-accounts-and-alerts.md`](docs/portal-accounts-and-alerts.md).
+
 **3. Run.**
 
 ```bash
@@ -127,9 +147,18 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus a full
   missing or weak `SECRET_KEY`. Login and signup are rate-limited per IP,
   both in the API and at the gateway.
 - **Authorization:** nothing is shared until a patient-doctor connection is
-  accepted; full report history additionally needs the patient's explicit,
-  revocable grant. Every file download is authenticated; there is no public
-  file URL.
+  accepted; once it is, that doctor sees the patient's lab reports. Every
+  file download is authenticated; there is no public file URL.
+- **Accounts:** sign-up needs an explicit privacy agreement (enforced by the
+  API; the notice version and time are recorded) and a confirmed email before
+  the first login. Emailed confirm / reset links are single-use, expire (24 h /
+  1 h), and only their hash is stored. Forgot-password never reveals whether an
+  email is registered.
+- **Privacy:** sign-up also writes one anonymised statistics row (age group,
+  sex, role, country, month) with no user id, name, email or city.
+- **Emergency alerts** email only the person's name, the time and their
+  city/country (plus the category the assistant flagged), never chat text or
+  medical details; they are confirmed first, rate-limited and logged.
 - **Clinical Evidence** has no login of its own, so the gateway only
   forwards requests carrying a valid **doctor** token.
 - **DietBot** is never published, and requires a shared internal token.
@@ -176,6 +205,10 @@ docs/            architecture notes
 | Core API exits on start with a `SECRET_KEY` error | Set a random `SECRET_KEY` of at least 32 characters in `.env` |
 | A provider shows `401` in logs | That provider's API key is invalid; the others fail over automatically |
 | Clinical Evidence returns 401/403 | Sign in as a doctor; the gateway only admits doctor tokens |
+| No confirmation / reset email arrives | `SMTP_HOST` isn't set (or the login is wrong). Outside production the link is in the core API's log; with Gmail check you used an app password |
+| Emergency button says "no message was sent" | Same cause: email isn't configured, so nothing was emailed. Call your contact directly and set the `SMTP_*` values |
+| Sign-up says the privacy notice was updated | The page is out of date. Refresh it (Ctrl+F5); if you changed the wording, bump `PRIVACY_NOTICE_VERSION` in both `backend/app/privacy.py` and `frontend/static/js/app.js` |
+| Diet assistant says "trouble reaching the diet assistant" on Windows | DietBot prints emoji and the console isn't UTF-8. Start it with `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` |
 
 ## Design system
 
