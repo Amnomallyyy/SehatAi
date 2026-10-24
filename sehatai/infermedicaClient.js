@@ -222,7 +222,8 @@ export const TRIAGE_LEVEL_NOTES = {
   consultation_24: 'You should aim to see a doctor within the next 24 hours.',
   consultation: null, // the normal case — the specialist recommendation below already covers this
   self_care:
-    "Based on what you've described, this often doesn't need a specialist visit — home care and monitoring may be enough. See a doctor if it doesn't improve or gets worse.",
+    // Worded to sit AFTER "Schedule an appointment with ..." without contradicting it.
+    "This doesn't sound urgent, so there's no need to rush: you can book that appointment at your convenience, and keep an eye on how you feel in the meantime. If it gets worse, see a doctor sooner.",
 };
 
 /**

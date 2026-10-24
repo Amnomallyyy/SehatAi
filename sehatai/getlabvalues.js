@@ -7,7 +7,7 @@
 // so an old resolved value doesn't get presented as current.
 // ============================================
 
-import { normalizeLabNames } from "./labNormalizer.js";
+import { labNameVariants } from "./labNormalizer.js";
 import { supabase } from "./supabaseClient.js";
 
 /**
@@ -43,6 +43,36 @@ function logUnmatchedLabTest(testName, patientId) {
     `(patient ${patientId}) — either the patient has no result for it, or the ` +
     `name doesn't match what's stored in extracted_data even after normalization.`
   );
+}
+
+/**
+ * Pure matching step (no database): given a patient's stored lab rows (newest first) and the test names Infermedica
+ * suggested, returns the most recent stored row per test that counts as a match, plus the suggested names with no
+ * match at all.
+ *
+ * A suggested name matches a stored row if the row's name equals, after loose normalisation, the name's canonical
+ * form OR any known stored variant of it (labNormalizer.js: "Creatinine" also finds "Serum Creatinine",
+ * "Hemoglobin" finds "Hb", ...). labNormalizer.js already existed with a curated Infermedica-name -> DB-name alias
+ * map built for exactly the case loose matching cannot catch (a real synonym); it was never imported anywhere
+ * until it was wired in here, and it only knew one stored spelling per test, hence the variants.
+ *
+ * @param {Array<{test_name:string}>} rows - newest first
+ * @param {string[]} testNames
+ * @returns {{rows: Array, unmatched: string[]}}
+ */
+export function selectRelevantLabRows(rows, testNames) {
+  const variantsPerSuggestion = (testNames || []).map((n) => labNameVariants(n).map(normalizeTestName));
+  const wanted = new Set(variantsPerSuggestion.flat());
+  const mostRecentByTest = new Map();
+  for (const row of rows || []) {
+    // Keep only the most recent row per test_name: a patient may have several historical results for the same test.
+    if (wanted.has(normalizeTestName(row.test_name)) && !mostRecentByTest.has(row.test_name)) {
+      mostRecentByTest.set(row.test_name, row);
+    }
+  }
+  const matchedNormalized = new Set(Array.from(mostRecentByTest.keys()).map(normalizeTestName));
+  const unmatched = (testNames || []).filter((_, i) => !variantsPerSuggestion[i].some((v) => matchedNormalized.has(v)));
+  return { rows: Array.from(mostRecentByTest.values()), unmatched };
 }
 
 /**
@@ -84,49 +114,12 @@ export async function getRelevantLabValues(patientId, testNames) {
     return [];
   }
 
-  // FOUND: labNormalizer.js already existed with a real, curated
-  // Infermedica-name -> DB-name alias map (e.g. "A1C"/"glycated
-  // hemoglobin" -> "HbA1c") — built specifically for the case
-  // normalizeTestName's loose lowercase/strip-punctuation matching can't
-  // catch (a genuine synonym, not just a formatting difference), but it
-  // was never actually imported anywhere. Apply it first so Infermedica
-  // suggesting "A1C" correctly matches a DB row stored as "HbA1c",
-  // THEN still run normalizeTestName on top for casing/punctuation
-  // variance in whatever the alias map (or an unmapped name) returns.
-  const aliasedTestNames = normalizeLabNames(testNames);
-  const requestedNormalized = new Set(aliasedTestNames.map(normalizeTestName));
+  const { rows: matchedRows, unmatched } = selectRelevantLabRows(data, testNames);
+  // Surface anything Infermedica suggested that genuinely has no match on file, so it is visible instead of
+  // silently absent.
+  for (const name of unmatched) logUnmatchedLabTest(name, patientId);
 
-  const matchingRows = data.filter((row) =>
-    requestedNormalized.has(normalizeTestName(row.test_name))
-  );
-
-  // Keep only the most recent row per test_name — a patient may have
-  // multiple historical results for the same test, and only the
-  // latest one should inform a current recommendation.
-  const mostRecentByTest = new Map();
-  for (const row of matchingRows) {
-    if (!mostRecentByTest.has(row.test_name)) {
-      mostRecentByTest.set(row.test_name, row);
-    }
-  }
-
-  // Surface anything Infermedica suggested that genuinely has no match
-  // on file, so it's visible instead of silently absent.
-  const matchedNormalized = new Set(
-    Array.from(mostRecentByTest.keys()).map(normalizeTestName)
-  );
-  for (let i = 0; i < testNames.length; i++) {
-    // Check against the ALIASED name (what was actually looked up), not
-    // the raw one — otherwise a genuine match found via labNormalizer
-    // (e.g. Infermedica said "A1C", matched a DB row stored as "HbA1c")
-    // would still get logged as unmatched here, since "a1c" and "hba1c"
-    // normalize to different strings.
-    if (!matchedNormalized.has(normalizeTestName(aliasedTestNames[i]))) {
-      logUnmatchedLabTest(testNames[i], patientId);
-    }
-  }
-
-  return Array.from(mostRecentByTest.values()).map((row) => ({
+  return matchedRows.map((row) => ({
     testName: row.test_name,
     value: row.value,
     valueNumeric: row.value_numeric,

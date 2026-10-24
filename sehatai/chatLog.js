@@ -156,6 +156,10 @@ function defaultExtra() {
     // lastQuestionAsked above (interpretEmotionalFollowUpAnswer uses it
     // to judge the reply in context rather than in isolation).
     lastEmotionalQuestion: null,
+    // True once this session has had an emotional-support exchange (check-in question or referral). Lets
+    // processMessage.js tell "no, nothing physical" / "any tips?" in an emotional chat apart from a bare
+    // yes/no in a session that was lost. Never cleared by turn rollbacks; a restart builds a fresh session.
+    hadEmotionalExchange: false,
     unaccountedComplaints: [],
     // How many CONSECUTIVE times finalizeAndRecommend's Infermedica
     // /parse call has come back with zero grounded evidence for the
@@ -212,6 +216,13 @@ function defaultExtra() {
     // instant it's used (or superseded by anything else), same one-turn
     // lifetime as lastQuestionAsked above.
     pendingEmergencyMessage: null,
+    // Set when the profile check (age / sex) blocked a turn. Holds what the
+    // patient said while blocked (RAM-only, bounded, cleared the moment it is
+    // used -- same bounded exception to "never store the patient's sentence"
+    // as pendingEmergencyMessage) so that fixing the profile can CONTINUE the
+    // conversation instead of asking them to repeat themselves.
+    profileGateShown: false,
+    pendingProfileMessage: null,
     // FIXED (root cause, demonstrated live): a real, serious bug —
     // the stashed message alone isn't enough. STAGE 0a clears
     // awaitingClarificationAnswer/awaitingDisambiguationAnswer/
@@ -555,6 +566,30 @@ export function setAwaitingEmergencyAcknowledgment(sessionId, value) {
  * @param {string} sessionId
  * @returns {string|null}
  */
+/** True while the last thing the patient was told was "fix your profile". */
+export function getProfileGateShown(sessionId) {
+  if (!sessionId) return false;
+  const extra = sessionExtraStore.get(sessionId);
+  return extra ? Boolean(extra.profileGateShown) : false;
+}
+export function getPendingProfileMessage(sessionId) {
+  if (!sessionId) return null;
+  const extra = sessionExtraStore.get(sessionId);
+  return extra ? extra.pendingProfileMessage || null : null;
+}
+/**
+ * @param {string} sessionId
+ * @param {boolean} gateShown - whether the profile gate is currently open
+ * @param {string|null} message - what the patient said while blocked (null clears it)
+ */
+export function setProfileGate(sessionId, gateShown, message = null) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  extra.profileGateShown = Boolean(gateShown);
+  extra.pendingProfileMessage = message || null;
+  extra.lastAccessed = Date.now();
+}
+
 export function getPendingEmergencyMessage(sessionId) {
   if (!sessionId) return null;
   const extra = sessionExtraStore.get(sessionId);
@@ -1390,6 +1425,19 @@ export function getAwaitingEmotionalFollowUp(sessionId) {
   if (!sessionId) return false;
   const extra = sessionExtraStore.get(sessionId);
   return extra ? Boolean(extra.awaitingEmotionalFollowUp) : false;
+}
+
+export function getHadEmotionalExchange(sessionId) {
+  if (!sessionId) return false;
+  const extra = sessionExtraStore.get(sessionId);
+  return extra ? Boolean(extra.hadEmotionalExchange) : false;
+}
+
+export function setHadEmotionalExchange(sessionId, value = true) {
+  if (!sessionId) return;
+  const extra = getOrInitExtra(sessionId);
+  extra.hadEmotionalExchange = Boolean(value);
+  extra.lastAccessed = Date.now();
 }
 
 export function setAwaitingEmotionalFollowUp(sessionId, value) {

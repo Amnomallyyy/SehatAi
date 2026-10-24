@@ -49,15 +49,15 @@
     </div>
 
     <!-- Login form -->
-    <form id="login-form">
+    <form id="login-form" autocomplete="off">
       <div class="error-banner" style="display:none"></div>
       <div class="field">
         <label for="login-email">Email</label>
-        <input type="email" id="login-email" name="email" autocomplete="email" required placeholder="you@example.com">
+        <input type="email" id="login-email" name="email" autocomplete="off" required placeholder="you@example.com">
       </div>
       <div class="field">
         <label for="login-password">Password</label>
-        <input type="password" id="login-password" name="password" autocomplete="current-password" required placeholder="••••••••">
+        <input type="password" id="login-password" name="password" autocomplete="new-password" required placeholder="••••••••">
       </div>
       <label class="check-row" style="margin:2px 0 4px">
         <input type="checkbox" name="remember" id="login-remember"> Keep me signed in on this device

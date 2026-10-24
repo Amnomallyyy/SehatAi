@@ -178,6 +178,13 @@
   newSessionBtn.addEventListener('click', () => {
     sessionId = null;
     updateSessionLabel();
+    // Delete the server-side session now (otherwise the next message
+    // would resume it — the server picks the session, not this page).
+    fetch('/api/session/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiTokenInput.value.trim()}` },
+      body: JSON.stringify({ mode: 'symptom' }),
+    }).catch(() => {});
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent = '— started a fresh session —';

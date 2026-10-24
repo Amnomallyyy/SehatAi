@@ -16,3 +16,7 @@ __pycache__/
 !.env.example
 *.log
 sehatEvidence/evidenceboard.db
+
+# Local virtualenvs (scripts/run_local.py)
+.venv/
+**/.venv/

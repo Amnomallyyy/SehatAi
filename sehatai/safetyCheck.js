@@ -326,6 +326,10 @@ export const EMOTIONAL_KEYWORDS = [
   /\b(?:anxious|anxiety|nervous|worried|stress|stressed)\b/i,
   /\b(?:need.*support|emotional.*support|need.*help|need.*talk)\b/i,
   /\b(?:feel.*alone|feel.*isolated|feel.*sad)\b/i,
+  // Added after a live test: "hopeless for weeks and I cannot sleep" got no emotional acknowledgement at all.
+  // Deliberately NOT "numb" or "panic": those are also ordinary physical complaints (numb feet, a racing heart).
+  /\b(?:hopeless|hopelessness|worthless|overwhelmed|burn(?:ed|t)?[\s-]?out)\b/i,
+  /\bfeel(?:ing)?\s+(?:really\s+|so\s+|very\s+)?(?:down|empty)\b/i,
 ];
 
 export function checkEmotionalKeywords(message) {

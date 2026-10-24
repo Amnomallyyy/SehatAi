@@ -9,7 +9,7 @@
 -- one Supabase project, so losing that project meant losing the schema.
 -- This is reconstructed from every read/write in the code that uses them:
 --   sehatai/*.js        patients, medicines, extracted_data, intake form,
---                       chat_sessions/state/pointers, patient_api_tokens,
+--                       patient_api_tokens,   (symptom-assistant sessions are kept in memory now, so there are no chat_sessions / state / pointer tables)
 --                       summaries_vectors + match_patient_history()
 --   datafetch/*.py      documents, extracted_data, medicines,
 --                       clinical_advice, atomic_upsert_document(),
@@ -178,27 +178,6 @@ create table if not exists symptom_related_tests (
     test_name  text not null unique
 );
 
--- ------------------------------------------- symptom assistant sessions
-create table if not exists chat_sessions (
-    id          uuid primary key default gen_random_uuid(),
-    patient_id  uuid not null references patients (id) on delete cascade,
-    started_at  timestamptz not null default now()
-);
-create index if not exists chat_sessions_patient_idx on chat_sessions (patient_id);
-
-create table if not exists chat_session_state (
-    session_id  uuid primary key references chat_sessions (id) on delete cascade,
-    state       jsonb not null,
-    updated_at  timestamptz not null default now()
-);
-
-create table if not exists active_session_pointers (
-    patient_id  text not null,
-    mode        text not null,
-    session_id  uuid not null references chat_sessions (id) on delete cascade,
-    primary key (patient_id, mode)
-);
-
 -- -------------------------------------------------------------- DietBot
 create table if not exists diet_chat_sessions (
     id          uuid primary key default gen_random_uuid(),
@@ -240,15 +219,6 @@ create table if not exists diet_patient_preferences (
     disliked_foods        text[] not null default '{}',
     favorite_foods        text[] not null default '{}',
     updated_at            timestamptz not null default now()
-);
-
--- Links a patient's current symptom-assistant session to their DietBot
--- session (sehatai/chatLog.js).
-create table if not exists diet_session_pointers (
-    patient_id          text primary key,
-    diet_session_id     uuid,
-    sehatai_session_id  uuid references chat_sessions (id) on delete set null,
-    updated_at          timestamptz not null default now()
 );
 
 -- ============================================== upgrade pre-existing tables
@@ -459,10 +429,8 @@ begin
     foreach t in array array[
         'patients', 'patient_api_tokens', 'patient_intake_form', 'documents',
         'extracted_data', 'medicines', 'clinical_advice', 'summaries_vectors',
-        'specialists', 'symptom_related_tests', 'chat_sessions',
-        'chat_session_state', 'active_session_pointers', 'diet_chat_sessions',
-        'diet_chat_messages', 'diet_recommendations', 'diet_patient_preferences',
-        'diet_session_pointers'
+        'specialists', 'symptom_related_tests', 'diet_chat_sessions',
+        'diet_chat_messages', 'diet_recommendations', 'diet_patient_preferences'
     ] loop
         execute format('alter table %I enable row level security', t);
     end loop;

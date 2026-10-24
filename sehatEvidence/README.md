@@ -42,7 +42,7 @@ clinical judgment. Every claim links to its primary source so you can check it y
 | Claim deletion | Automated (REFUTES / NEI) | N/A | Manual editorial |
 | Evidence sources | PubMed, Europe PMC, ClinicalTrials.gov | Company-reported | Proprietary database |
 | EU availability | Yes | Reported withdrawal (2026) | Yes |
-| Model | `nvidia/nemotron-3-super-120b-a12b` | Proprietary | N/A (human-written) |
+| Model | `nvidia/nemotron-3.5-lightning-30b-a3b` | Proprietary | N/A (human-written) |
 
 Two rows are deliberately hedged. OpenEvidence's source coverage and usage figures are
 **company-reported** and not independently verifiable, and its EU exit is a **reported
@@ -151,7 +151,7 @@ over `.env`, so exporting them directly also works. **Never commit `.env`.**
 | `LLM_BASE_URL` | Yes | OpenAI-compatible endpoint. Default `https://integrate.api.nvidia.com/v1`; local Ollama fallback `http://localhost:11434/v1` |
 | `LLM_API_KEY` | Yes* | Single key — the simple setup |
 | `LLM_API_KEYS` | No | Comma-separated keys for automatic failover across several free accounts. Takes precedence over `LLM_API_KEY` |
-| `LLM_MODEL` | Yes | Model name exactly as the endpoint expects, e.g. `nvidia/nemotron-3-super-120b-a12b` |
+| `LLM_MODEL` | Yes | Model name exactly as the endpoint expects, e.g. `nvidia/nemotron-3.5-lightning-30b-a3b` |
 | `LLM_SENSITIVE_MODEL` | No | Heavier model used by the Verifier for entailment judgment; other agents keep `LLM_MODEL` |
 | `LLM_TIMEOUT` | No | Request timeout in seconds (default `60`) |
 

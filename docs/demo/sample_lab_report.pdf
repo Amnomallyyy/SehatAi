@@ -1,0 +1,47 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 1184 >>
+stream
+BT /F2 16 Tf 50 780 Td (Citylab Diagnostics - Complete Blood Count & Chemistry) Tj ET
+BT /F1 10 Tf 50 756 Td (Patient: Test Patient     Age/Sex: 19 / F     Collected: 2026-10-12     Reported: 2026-10-13) Tj ET
+BT /F1 10 Tf 50 736 Td (Ordering physician: Dr. Sara Khan) Tj ET
+BT /F2 10 Tf 50 716 Td (TEST                     RESULT      UNIT        REFERENCE RANGE      FLAG) Tj ET
+BT /F1 10 Tf 50 696 Td (Hemoglobin               10.8        g/dL        12.0 - 15.5          LOW) Tj ET
+BT /F1 10 Tf 50 676 Td (WBC Count                11.8        x10^3/uL    4.0 - 11.0           HIGH) Tj ET
+BT /F1 10 Tf 50 656 Td (Platelet Count           250         x10^3/uL    150 - 450            NORMAL) Tj ET
+BT /F1 10 Tf 50 636 Td (Fasting Glucose          112         mg/dL       70 - 99              HIGH) Tj ET
+BT /F1 10 Tf 50 616 Td (Total Cholesterol        185         mg/dL       < 200                NORMAL) Tj ET
+BT /F1 10 Tf 50 596 Td (Serum Creatinine         0.8         mg/dL       0.6 - 1.1            NORMAL) Tj ET
+BT /F1 10 Tf 50 576 Td () Tj ET
+BT /F1 10 Tf 50 556 Td (Comments: Mild anemia and mildly raised fasting glucose. Repeat in 3 months. Advise iron-rich diet.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000001487 00000 n 
+0000001555 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1628
+%%EOF

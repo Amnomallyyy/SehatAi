@@ -22,3 +22,7 @@ sehatEvidence/web/playwright-report/
 
 # Local QA account credentials (generated)
 qa-accounts.local.txt
+
+# Local virtualenvs (scripts/run_local.py)
+.venv/
+**/.venv/

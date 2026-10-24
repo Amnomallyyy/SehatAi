@@ -352,22 +352,26 @@ class NVIDIAClient:
         if not self.api_key:
             raise ValueError("NVIDIA_API_KEY not set in environment")
         self.base_url = "https://integrate.api.nvidia.com/v1"
-        self.model = "nvidia/nemotron-3-super-120b-a12b"  # 120B reasoning model
+        # Same NVIDIA_MODEL setting (and default) as the backend and the chat server. This was hard-coded to
+        # nemotron-3-super-120b-a12b, which NVIDIA now answers with 404 "Function ... Not found for account" -- so
+        # every lab-report upload failed at the classification step.
+        self.model = os.getenv("NVIDIA_MODEL") or "nvidia/nemotron-3.5-lightning-30b-a3b"
         self.temperature = 0.0
         self.max_tokens = 16384
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        print("[OK] NVIDIAClient initialized (using nemotron-3-super-120b)")
+        print(f"[OK] NVIDIAClient initialized (using {self.model})")
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((requests.exceptions.RequestException,))
     )
-    def _chat(self, messages: List[Dict[str, str]]) -> str:
-        """Internal method to send messages and get response."""
+    def _chat(self, messages: List[Dict[str, str]], timeout: int = 60) -> str:
+        """Internal method to send messages and get response. `timeout` is the read timeout of ONE attempt
+        (there are up to 3): the short default suits classification; structuring a long report passes a longer one."""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -375,7 +379,7 @@ class NVIDIAClient:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
-        response = requests.post(url, json=payload, headers=self.headers, timeout=60)
+        response = requests.post(url, json=payload, headers=self.headers, timeout=timeout)
         response.raise_for_status()
         result = response.json()
         return result['choices'][0]['message']['content']
@@ -427,7 +431,9 @@ class NVIDIAClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": "Extract the structured data from the above text."}
         ]
-        response_text = self._chat(messages)
+        # Found live: a real multi-page report timed out at 60 s (ReadTimeout on all 3 attempts). The reply is long
+        # JSON, so structuring gets a much longer read timeout than classification.
+        response_text = self._chat(messages, timeout=240)
         try:
             result = json.loads(response_text)
         except json.JSONDecodeError:

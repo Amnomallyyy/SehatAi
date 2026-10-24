@@ -262,6 +262,7 @@ function showPage(id) {
     // .auth-split shrink-to-fit as a flex item instead of filling the
     // viewport, since it had no flex-grow of its own.
     document.getElementById('auth-page').style.display = 'block';
+    clearLoginFields();
   } else {
     // 'block', not 'flex' -- same bug as above, one level up: #app is a
     // single child with its OWN `display:flex` (sidebar + main), so it
@@ -360,7 +361,31 @@ function dataNoticeHtml() {
   return `<div class="data-notice" role="note"><strong>${escHtml(DATA_USE_NOTICE.title)}.</strong> ${escHtml(DATA_USE_NOTICE.text)}</div>`;
 }
 
+/* The login form must never show a saved or leftover email / password.
+   Two sources: (1) values typed earlier and still sitting in the fields after
+   signing out, and (2) the browser's password manager auto-filling a saved
+   login. (1) is cleared here every time the auth page is shown. For (2), the
+   fields start read-only (browsers skip read-only fields when auto-filling)
+   and unlock the moment the person clicks or tabs into them. */
+function clearLoginFields() {
+  for (const id of ['login-email', 'login-password', 'forgot-email', 'reset-password', 'reset-password2']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.value = '';
+    if (id === 'login-email' || id === 'login-password') el.readOnly = true;
+  }
+}
+
 function initAuth() {
+  for (const id of ['login-email', 'login-password']) {
+    const el = document.getElementById(id);
+    const unlock = () => { el.readOnly = false; };
+    el.addEventListener('focus', unlock);
+    el.addEventListener('pointerdown', unlock);
+  }
+  // Coming back via the Back button restores old field values; clear them again.
+  window.addEventListener('pageshow', (e) => { if (e.persisted) clearLoginFields(); });
+  clearLoginFields();
   const signupNotice = document.getElementById('signup-data-notice');
   const consentBox = document.getElementById('signup-consent');
   const signupBtn = document.getElementById('signup-submit');
@@ -1683,6 +1708,7 @@ function renderStructuredDocument(doc) {
           <div class="source-actions">
             <button class="btn btn-secondary btn-sm" id="doc-download-btn" ${doc.has_source_file ? '' : 'disabled'}>Download</button>
             ${isDoctor ? `<button class="btn btn-primary btn-sm" id="doc-review-btn" ${doc.doctor_reviewed ? 'disabled' : ''}>${doc.doctor_reviewed ? 'Reviewed ✓' : 'Mark reviewed'}</button>` : ''}
+            ${isDoctor ? '' : '<button class="btn btn-danger btn-sm" id="doc-delete-btn" title="Delete this report">Delete</button>'}
           </div>
         </div>
         ${renderExtractionAudit(doc.audit)}
@@ -1718,6 +1744,15 @@ function renderStructuredDocument(doc) {
       loadMarkerTrend(structuredDocState.doc.document_id, marker);
     });
   });
+
+  const deleteBtn = layout.querySelector('#doc-delete-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      deleteBtn.disabled = true;
+      const deleted = await deleteLabReport(doc.document_id, structuredDocState.patientId);
+      if (deleted) { showPage('reports'); loadReportsPage(); } else { deleteBtn.disabled = false; }
+    });
+  }
 
   const downloadBtn = layout.querySelector('#doc-download-btn');
   if (downloadBtn && doc.has_source_file) {
@@ -2409,6 +2444,30 @@ function renderReportsAndPrescriptionsList(container, reports, prescriptions, do
   renderFiltered('all');
 }
 
+/* Patient deletes one of their own lab reports (DELETE /structured/documents/{id}). Always asks first, since it
+   cannot be undone. Resolves true when the report was deleted. */
+async function deleteLabReport(documentId, patientId) {
+  const ok = await confirmDialog(
+    'Delete this report?',
+    'This permanently removes the report, the values read from it and the stored file. Medicines found in it stay in your Medicines list. ' +
+    'Your connected doctors will no longer see it. This cannot be undone.',
+    'Delete'
+  );
+  if (!ok) return false;
+  try {
+    const res = await apiFetch(`/structured/documents/${documentId}?patient_id=${patientId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      toast(errMsg(await res.json().catch(() => ({}))) || 'Could not delete the report.', 'error');
+      return false;
+    }
+    toast('Report deleted.', 'success');
+    return true;
+  } catch {
+    toast('Could not reach the server. The report was not deleted.', 'error');
+    return false;
+  }
+}
+
 /* Same 4-corner blueprint card the mockup uses for every report-list
    entry, branched three ways by _type -- same visual language, different
    content/click target per source. */
@@ -2431,6 +2490,22 @@ function reportListCard(item, patientId = null) {
       <p class="report-card-desc">${item.marker_count} marker${item.marker_count === 1 ? '' : 's'}${item.abnormal_count ? ' · ' + item.abnormal_count + ' outside reference range' : ' · all within range'}</p>
       <div class="report-card-spark">${sparkBars(item.spark)}</div>`;
     div.addEventListener('click', () => openStructuredDocument(item.document_id, patientId));
+    // A small delete button, for the patient who owns the report only (doctors can read a report, never delete it).
+    if (auth.user()?.role === 'patient') {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'report-card-delete';
+      del.textContent = '×';
+      del.title = 'Delete this report';
+      del.setAttribute('aria-label', 'Delete this report');
+      del.addEventListener('click', async (e) => {
+        e.stopPropagation();   // don't open the report
+        del.disabled = true;
+        const deleted = await deleteLabReport(item.document_id, patientId);
+        if (deleted) loadReportsPage(); else del.disabled = false;
+      });
+      div.appendChild(del);
+    }
   } else if (item._type === 'presc') {
     div.innerHTML = `${corners}
       <div class="report-card-kicker">Prescription · ${relTime(item.timestamp)}</div>

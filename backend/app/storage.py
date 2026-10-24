@@ -47,3 +47,9 @@ def storage_path_from_url(file_url: str) -> str:
 
 def download_file(file_url: str) -> bytes:
     return get_storage_client().storage.from_(STORAGE_BUCKET).download(storage_path_from_url(file_url))
+
+
+def delete_file(file_url: str) -> None:
+    """Removes the stored source file of a deleted lab report. Callers treat a failure here as non-fatal (the
+    database rows are already gone); it only leaves an orphaned file behind."""
+    get_storage_client().storage.from_(STORAGE_BUCKET).remove([storage_path_from_url(file_url)])

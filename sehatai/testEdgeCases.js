@@ -74,6 +74,7 @@ import { buildSafeDefault, SAFE_DEFAULT_RESPONSE } from './safedefault.js';
 import { PRONOUN_DENIAL_RE, BLANKET_WELLNESS_RE, RESTART_INTENT_RE, BARE_AFFIRMATION_RE, BARE_NEGATION_RE, describeSymptomsForParse, normalizeSeverityForParse } from './symptomClassifier.js';
 import { verifyRecommendation, DISMISSIVE_PHRASES } from './groundingVerifier.js';
 import { mapTriageToUrgency } from './infermedicaClient.js';
+import { selectRelevantLabRows } from './getlabvalues.js';
 import { applyMixedDiagnosisDecline } from './processMessage.js';
 import { DIAGNOSIS_PATTERNS } from './safetyCheck.js';
 
@@ -425,6 +426,41 @@ async function runDeterministicChecks() {
       wrong.length === 0,
       `wrong: ${JSON.stringify(wrong.map(([level]) => [level, mapTriageToUrgency(level)]))}`
     );
+  }
+
+  section('Deterministic: matching suggested lab tests to stored results (names differ between Infermedica and labs)');
+  {
+    const stored = [
+      { test_name: 'Serum Creatinine', value: '0.8' },
+      { test_name: 'Hb', value: '10.8' },
+      { test_name: 'WBC Count', value: '11.8' },
+      { test_name: 'Fasting Blood Sugar', value: '112' },
+      { test_name: 'SGPT', value: '30' },
+      { test_name: 'Urine Creatinine', value: '90' },
+      { test_name: 'Direct Bilirubin', value: '0.2' },
+      { test_name: 'Total Cholesterol', value: '185' },
+    ];
+    const names = (res) => res.rows.map((r) => r.test_name).sort();
+    let r = selectRelevantLabRows(stored, ['Creatinine']);
+    check('"Creatinine" finds "Serum Creatinine" (the live miss) and NOT "Urine Creatinine"', JSON.stringify(names(r)) === '["Serum Creatinine"]', JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['Hemoglobin']);
+    check('"Hemoglobin" finds a stored "Hb"', JSON.stringify(names(r)) === '["Hb"]', JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['White blood cell count']);
+    check('"White blood cell count" finds "WBC Count"', JSON.stringify(names(r)) === '["WBC Count"]', JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['Fasting glucose']);
+    check('"Fasting glucose" finds "Fasting Blood Sugar"', JSON.stringify(names(r)) === '["Fasting Blood Sugar"]', JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['ALT']);
+    check('"ALT" finds "SGPT"', JSON.stringify(names(r)) === '["SGPT"]', JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['Bilirubin']);
+    check('"Bilirubin" does NOT pick up "Direct Bilirubin" (a different test)', r.rows.length === 0, JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['Lipid profile']);
+    check('"Lipid profile" finds the stored cholesterol result', JSON.stringify(names(r)) === '["Total Cholesterol"]', JSON.stringify(names(r)));
+    r = selectRelevantLabRows(stored, ['Thyroid stimulating hormone', 'Creatinine']);
+    check('a suggested test with no result is reported as unmatched, not guessed', JSON.stringify(r.unmatched) === '["Thyroid stimulating hormone"]', JSON.stringify(r.unmatched));
+    r = selectRelevantLabRows([{ test_name: 'Hemoglobin', value: '9.9' }, { test_name: 'Hemoglobin', value: '15.0' }], ['Hemoglobin']);
+    check('only the most recent (first) row per test is kept', r.rows.length === 1 && r.rows[0].value === '9.9', JSON.stringify(r.rows));
+    r = selectRelevantLabRows(stored, []);
+    check('nothing suggested -> nothing returned', r.rows.length === 0 && r.unmatched.length === 0);
   }
 
   section('Deterministic: bare "no" (a one-word answer that needs a remembered question)');

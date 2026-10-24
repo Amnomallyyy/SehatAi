@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "chat": "node sehatai/testChat.js",
+    "chat:web": "node sehatai/startChat.js",
+    "check:keys": "node sehatai/checkKeys.js",
     "seed:data": "node sehatai/seedfakedata.js",
     "test:edge": "node sehatai/testEdgeCases.js",
     "dietbot": "node sehatai/startDietBot.js"

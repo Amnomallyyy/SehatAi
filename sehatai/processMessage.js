@@ -78,6 +78,9 @@ import {
   setAwaitingEmergencyAcknowledgment,
   getPendingEmergencyMessage,
   setPendingEmergencyMessage,
+  getProfileGateShown,
+  getPendingProfileMessage,
+  setProfileGate,
   setPendingEmergencyReply,
   getPendingEmergencyQuestionType,
   getPendingEmergencyReply,
@@ -100,6 +103,8 @@ import {
   addReopenedTerms,
   getAwaitingEmotionalFollowUp,
   setAwaitingEmotionalFollowUp,
+  getHadEmotionalExchange,
+  setHadEmotionalExchange,
   getLastEmotionalQuestion,
   setLastEmotionalQuestion,
   getDietSessionId,
@@ -292,6 +297,77 @@ function markEmergencyAcknowledgeable(fields, sessionId, message, pendingQuestio
 // Matches the "Continue" button's own sent text AND any equivalent
 // typed phrase, so this works identically from a client with no
 // buttons (CLI, curl, a future integration) — not just the browser demo.
+/**
+ * "fixed", "done", "I updated it", "its fixed now", "ok done", "try again",
+ * "ho gaya" ... -- the patient saying they have dealt with the profile
+ * problem. Anchored to the WHOLE message (so "I have fixed that I am cold
+ * and have fever" is NOT one: it carries real symptoms) and only ever
+ * consulted right after the profile gate was shown (so a bare "done" or
+ * "ok" answering some other question is never swallowed).
+ */
+export const PROFILE_FIXED_RE =
+  /^\s*(?:(?:ok(?:ay)?|yes|yeah|yep|alright|sure)[,.!\s]*)?(?:(?:i(?:'ve|\s+have)?|its|it's|it\s+is|it\s+has\s+been|that's|thats|that\s+is|all)\s+)*(?:fixed|done|updated|changed|corrected|saved|sorted|set|ready|completed|finished)(?:\s+(?:it|that|now|already|again|my\s+profile|my\s+dob|my\s+date\s+of\s+birth|the\s+(?:date|profile|dob)))*\s*[.!]*\s*$|^\s*(?:try\s+again|check\s+again|ho\s+gaya|kar\s+diya|theek\s+ho\s+gaya|fix\s+kar\s+diya|update\s+kar\s+diya)\s*[.!]*\s*$/i;
+
+const PROFILE_FIXED_NOTE = 'Thanks, your profile looks good now. ';
+
+/** sessionId -> true for the CURRENT turn only (set in the pipeline, consumed by runPatientMessageTurn). */
+const profileFixedNotes = new Map();
+
+/** Keeps the last ~600 characters of what was said while the profile was blocked. */
+function appendBounded(previous, message) {
+  const joined = previous ? `${previous} ${message}` : message;
+  return joined.length > 600 ? joined.slice(joined.length - 600) : joined;
+}
+
+/** 'missing' (no age / sex), 'implausible' (age outside 1-130) or null (fine). */
+function profileProblemOf(profile) {
+  if (profile?.age == null || !profile?.sex) return 'missing';
+  if (!(profile.age >= 1 && profile.age <= 130)) return 'implausible';
+  return null;
+}
+
+/** The conversational "please fix your profile" envelope (and stash what was said). */
+async function profileGateEnvelope({ sessionId, patientId, message, profile, problem, saysFixed, subjectInfo = null }) {
+  const gateWasShown = getProfileGateShown(sessionId);
+  const stashed = getPendingProfileMessage(sessionId);
+  // "fixed" is not content; anything else the patient says is kept.
+  const kept = saysFixed ? stashed : appendBounded(stashed, message);
+  setProfileGate(sessionId, true, kept);
+  const rechecked = gateWasShown && saysFixed;
+  const problemText =
+    problem === 'implausible'
+      ? `the date of birth on your profile still gives an age of ${profile.age}`
+      : "your profile still doesn't have both your date of birth and sex";
+  const reply = rechecked
+    ? `I've just checked again, and ${problemText}, which I can't use. Please open your Profile page, correct it, ` +
+      `press "Save changes", then tell me "done" and we'll carry on` +
+      (kept ? ' with what you told me.' : '.')
+    : problem === 'implausible'
+    ? `I'd like to help with that, but the date of birth on your profile gives an age of ${profile.age}, ` +
+      'which does not look right, and your age changes which conditions are likely. ' +
+      (kept ? "I've kept what you told me, so you won't need to repeat it. " : '') +
+      'Please check it on your Profile page and save it, then just tell me "done".'
+    : "I'd like to help with that, but I need your date of birth and sex on your profile first, because they change " +
+      'which conditions are likely. ' +
+      (kept ? "I've kept what you told me, so you won't need to repeat it. " : '') +
+      'Please complete your profile, then just tell me "done".';
+  await logChatMessage({ sessionId, patientId, message, response: { kind: 'profile_incomplete', reply } });
+  return envelope({
+    kind: 'profile_incomplete',
+    sessionId,
+    subject: subjectInfo,
+    reply: cleanReply(reply),
+    actionable: true,
+    actions: [{ id: 'complete_profile', label: problem === 'implausible' ? 'Check your profile' : 'Complete your profile' }],
+  });
+}
+
+export function applyProfileFixedNote(result, sessionId) {
+  if (!profileFixedNotes.delete(sessionId)) return result;
+  if (!result || result.kind === 'error') return result;
+  return { ...result, reply: `${PROFILE_FIXED_NOTE}${result.reply}` };
+}
+
 export const EMERGENCY_CONTINUE_RE = /^(?:ok(?:ay)?,?\s*|yes,?\s*|i\s+want\s+to\s+)?(continue|keep going|go ahead|carry on)(\s+with\s+(?:this|the)\s+chat)?(\s+please)?[.!]?$/i;
 
 // Said once, on the first conversational reply after the patient carries
@@ -1229,11 +1305,14 @@ async function runPatientMessageTurn({ message, patientId, sessionId, session })
     }
     const removal = pendingRemovalNotes.get(sessionId);
     pendingRemovalNotes.delete(sessionId);
-    const noted = applyEmergencyContinueNote(
-      withRemovalNote(
-        applyMixedDiagnosisDecline(applyMixedEmotionalAcknowledgment(result, message), message),
-        removal?.removed,
-        removal?.stillPresent
+    const noted = applyProfileFixedNote(
+      applyEmergencyContinueNote(
+        withRemovalNote(
+          applyMixedDiagnosisDecline(applyMixedEmotionalAcknowledgment(result, message), message),
+          removal?.removed,
+          removal?.stillPresent
+        ),
+        sessionId
       ),
       sessionId
     );
@@ -1263,6 +1342,7 @@ async function runPatientMessageTurn({ message, patientId, sessionId, session })
     // honest, specific reply instead of a generic server error.
     console.error('[processMessage] uncaught error during pipeline (likely an AI provider failure):', err.message);
     pendingRemovalNotes.delete(sessionId);
+    profileFixedNotes.delete(sessionId);
     restoreSession(sessionId, before);
     return envelope({
       kind: 'error',
@@ -1300,6 +1380,17 @@ async function runPatientMessageTurn({ message, patientId, sessionId, session })
 // emotional-support flow's own replies (kinds 'emotional_followup_question'
 // / 'emotional_support' / 'emotional_support_resolved' already carry
 // their own tailored acknowledgment — this would double up on it).
+// "no" / "no, nothing like that" / "nothing physical": said to an emotional check-in, it means "there is nothing
+// physical to look at", not "I have a symptom you missed".
+const NO_PHYSICAL_RE =
+  /^\s*(?:no+|nope|nah+|nothing)(?:[\s,]+(?:nothing|not really|nothing like that|physical(?:\s+symptoms)?|physically|just stress|just stressed|i'?m fine|im fine))*\s*[.!]*\s*$/i;
+const EMOTIONAL_CONTINUING_REPLY =
+  "I wish I could do more here. I'm a physical-health assistant, so I can't coach you through this, but a " +
+  'counselor or therapist can, and so can someone you trust. If it ever feels like too much, please contact a crisis ' +
+  "line or emergency services. And if anything physical comes up, I'm here for that.";
+const EMOTIONAL_NOTHING_PHYSICAL_REPLY =
+  "That's okay: then there's nothing physical for me to check. I'm still here if anything comes up, and please " +
+  'do talk to a counselor or someone you trust about how you have been feeling.';
 const MIXED_EMOTIONAL_ACK =
   "I'm sorry you're feeling that way — I'm a physical-health bot, so for that I'd really encourage " +
   'talking to a professional or someone close to you. ';
@@ -1409,7 +1500,17 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // other than an explicit Continue shows the same notice again. Only
     // physical emergencies treat a new message as carrying on.
     if (stashedReply?.emergencyCategory === 'mental_health' && !EMERGENCY_CONTINUE_RE.test(message.trim())) {
-      return envelope(markEmergencyAcknowledgeable({ ...stashedReply }, sessionId, stashed, stashedQuestionType, { repeat: true }));
+      const shown = markEmergencyAcknowledgeable({ ...stashedReply }, sessionId, stashed, stashedQuestionType, { repeat: true });
+      // Same notice, but say how to get past it: typing more never will (a patient who wrote "I'm okay now,
+      // just a headache" got the identical text six times with no hint of the Continue button). The hint is
+      // added to what is SENT only, never to the stored notice, so it can't pile up on every repeat.
+      return envelope({
+        ...shown,
+        reply: cleanReply(
+          `${shown.reply} If you'd like to carry on with the chat, for example about a physical symptom, press ` +
+          '"Continue with this chat" below, or press "Notify someone" to let a person you trust know.'
+        ),
+      });
     }
     setAwaitingEmergencyAcknowledgment(sessionId, false);
     setPendingEmergencyMessage(sessionId, null);
@@ -1523,6 +1624,39 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     : wasAnsweringClarification
     ? `The assistant just asked the patient a follow-up question (duration, severity, or a related symptom) about: ${priorPresentTermsForContext.join(', ') || 'their reported symptom(s)'}.`
     : null;
+
+  // ================================================================
+  // STAGE 0c: "FIXED" / "DONE" RIGHT AFTER THE PROFILE GATE. Must sit BEFORE
+  // the greeting pre-filter and domain classification: a bare "fixed" is otherwise
+  // read as small talk and answered with a greeting. Re-checks the profile now; if it is fine, the
+  // conversation continues from what the patient originally said.
+  // ================================================================
+  if (getProfileGateShown(sessionId) && PROFILE_FIXED_RE.test(message.trim())) {
+    const profileNow = await getPatientProfile(patientId);
+    const problemNow = profileProblemOf(profileNow);
+    if (problemNow) {
+      return profileGateEnvelope({ sessionId, patientId, message, profile: profileNow, problem: problemNow, saysFixed: true });
+    }
+    const stashedMessage = getPendingProfileMessage(sessionId);
+    setProfileGate(sessionId, false, null);
+    if (stashedMessage) {
+      // Replay what they originally said through every gate below (safety, topic, ...).
+      message = stashedMessage;
+      profileFixedNotes.set(sessionId, true);
+    } else {
+      return envelope({
+        kind: 'clarification',
+        sessionId,
+        needsClarification: true,
+        resolvedAge: profileNow.age,
+        resolvedSex: profileNow.sex.toLowerCase(),
+        reply: cleanReply(
+          'Thanks, your profile looks good now. What symptoms are you feeling right now: where does it hurt, ' +
+          'and how long has it been going on?'
+        ),
+      });
+    }
+  }
 
   // ------------------------------------------------------------------
   // 0b1: Greeting pre-filter (skipped for a pending-question answer —
@@ -2038,6 +2172,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
       // FollowUpAnswer fails toward this branch rather than dropping a
       // real concern) — the referral is warranted now, having asked
       // first instead of assuming.
+      setHadEmotionalExchange(sessionId, true);
       const reply =
         "Thanks for telling me more. It sounds like this has really been weighing on you, and " +
         "that's worth taking seriously. Please consider reaching out to a mental health " +
@@ -2073,7 +2208,14 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // instead of reciting the referral immediately (see the STAGE 3b
     // comment above). The referral itself only happens once the patient
     // has actually answered that follow-up.
+    // Already in an emotional conversation (e.g. "can you give me some tips to calm down?"): don't restart the
+    // first-time check-in, which read as the bot not having heard anything.
+    if (getHadEmotionalExchange(sessionId)) {
+      await logChatMessage({ sessionId, patientId, message, response: { kind: 'emotional_support', reply: EMOTIONAL_CONTINUING_REPLY } });
+      return envelope({ kind: 'emotional_support', sessionId, reply: cleanReply(EMOTIONAL_CONTINUING_REPLY) });
+    }
     const followUpQuestion = await composeEmotionalFollowUp(message, callAI);
+    setHadEmotionalExchange(sessionId, true);
     setAwaitingEmotionalFollowUp(sessionId, true);
     setLastEmotionalQuestion(sessionId, followUpQuestion);
 
@@ -2163,48 +2305,24 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // above, so a real emergency is never blocked by an incomplete
   // profile — only the ordinary symptom-gathering path is. No backfill
   // for existing/seeded accounts — the gate applies immediately.
-  if (patientProfile?.age == null || !patientProfile?.sex) {
-    const reply =
-      "Before I can give you a specialist recommendation, I need your age and sex on file — they affect " +
-      "which conditions are actually likely. Please complete your profile, then come back and we'll pick " +
-      "this up.";
-    await logChatMessage({
-      sessionId,
-      patientId,
-      message,
-      response: { kind: 'profile_incomplete', reply },
-    });
-    return envelope({
-      kind: 'profile_incomplete',
-      sessionId,
-      subject: subjectInfo,
-      reply: cleanReply(reply),
-      actionable: true,
-      actions: [{ id: 'complete_profile', label: 'Complete your profile' }],
+  // CONVERSATIONAL PROFILE CHECK (product decision): what the patient says while
+  // blocked is kept (RAM-only) and "fixed" / "done" (STAGE 0c above) re-checks the
+  // profile and continues the conversation, instead of making them start over.
+  const profileProblem = profileProblemOf(patientProfile);
+  if (profileProblem) {
+    return profileGateEnvelope({
+      sessionId, patientId, message, profile: patientProfile, problem: profileProblem, saysFixed: false, subjectInfo,
     });
   }
-  // Infermedica only accepts ages 1–130 (found live: a date of birth
-  // entered as this year gave age 0, and the patient only saw "trouble
-  // connecting to the clinical engine" at the very end). Catch it here,
-  // before any symptom gathering, with a message that says what to fix.
-  if (!(patientProfile.age >= 1 && patientProfile.age <= 130)) {
-    const reply =
-      "The date of birth on your profile doesn't look right (it gives an age of " +
-      `${patientProfile.age}). Please check it on your Profile page, then come back and we'll pick this up.`;
-    await logChatMessage({
-      sessionId,
-      patientId,
-      message,
-      response: { kind: 'profile_incomplete', reply },
-    });
-    return envelope({
-      kind: 'profile_incomplete',
-      sessionId,
-      subject: subjectInfo,
-      reply: cleanReply(reply),
-      actionable: true,
-      actions: [{ id: 'complete_profile', label: 'Check your profile' }],
-    });
+  // Profile is fine. If the patient was blocked earlier and has now fixed it WITHOUT
+  // saying so (just typed their next message), keep what they said earlier too.
+  const stashedWhileBlocked = getPendingProfileMessage(sessionId);
+  if (getProfileGateShown(sessionId) || stashedWhileBlocked) {
+    setProfileGate(sessionId, false, null);
+    if (stashedWhileBlocked) {
+      await absorbFlaggedMessageSymptoms(sessionId, stashedWhileBlocked);
+      profileFixedNotes.set(sessionId, true);
+    }
   }
   const age = patientProfile.age;
   const sex = patientProfile.sex.toLowerCase();
@@ -2248,6 +2366,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // confident, so STAGE 7 below can read the list back and ask again
   // instead of guessing.
   let classifiedSymptoms;
+  let askedQuestionForSharedAnswer = null; // the follow-up this turn answers (for the shared-answer rule below)
   let finalConfirmationResolution = null;
   // Set below when classifySymptoms can't tell whether a bare number the
   // patient replied with was answering the DURATION half or the
@@ -2334,6 +2453,7 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // an already-known "headache" when the question actually asked
     // about nausea/light sensitivity, neither of which is tracked).
     const questionAsked = wasAnsweringClarification ? getLastQuestionAsked(sessionId) : null;
+    askedQuestionForSharedAnswer = questionAsked;
     // UPDATED: classifySymptoms now returns {symptoms, ambiguous,
     // ambiguousValue} instead of a bare array — see its doc comment.
     // This is the fix for a real, demonstrated bug: this app's own
@@ -2488,7 +2608,54 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
   // per-symptom answer (rule 1) would naturally give each symptom its
   // OWN distinct value. Detect that shape directly and force the flags,
   // regardless of whatever the model itself reported.
-  if (classifiedSymptoms.length > 1) {
+  //
+  // EXCEPTION (found live, several chats): when the question itself covered SEVERAL symptoms ("how long have
+  // you been experiencing these symptoms?", "how severe are the headache and the joint pain?"), one bare answer
+  // ("about 3 days") really does answer all of them. It used to be recorded for the first symptom only and the
+  // rest were asked again. So: spread it to the covered symptoms that lack that value, and don't mark it guessed.
+  const askedLower = (askedQuestionForSharedAnswer || '').toLowerCase();
+  const presentNow = getAccumulatedSymptoms(sessionId).filter((s) => s.present);
+  const namedInQuestion = presentNow.filter((s) => askedLower.includes(s.term.toLowerCase().trim()));
+  // Decided separately for duration and severity, because a question often mixes a generic part with a named one
+  // ("how long have you been feeling this way, and how high has your fever been?").
+  const genericRef = /\b(these|both|all of (?:this|these)|them|this way|this been|this going|this happening|this started|this lasted|it been|it going|it started|had this(?=\s*[,?.])|severe is it)\b/i.test(askedLower);
+  const asksDuration = /\b(how long|since when|how many (?:days|weeks|hours)|when did|when has)\b/i.test(askedLower);
+  const asksSeverity = /\b(how (?:severe|bad|intense|painful|strong)|scale|1 to 10|rate)\b/i.test(askedLower);
+  const coversMany = Boolean(askedLower) && presentNow.length >= 2;
+  const namedSeveral = namedInQuestion.length >= 2 && !(asksDuration && asksSeverity);
+  const spreadDuration = coversMany && asksDuration && (namedSeveral || genericRef);
+  const spreadSeverity = coversMany && asksSeverity && (namedSeveral || (genericRef && namedInQuestion.length === 0));
+  const questionCoversSeveral = spreadDuration || spreadSeverity;
+  if (questionCoversSeveral) {
+    const covered = namedInQuestion.length >= 2 ? namedInQuestion : presentNow;
+    const newTermNamed = classifiedSymptoms.some(
+      (s) => s.present !== false && !presentNow.some((p) => p.term.toLowerCase().trim() === s.term.toLowerCase().trim())
+    );
+    const answered = classifiedSymptoms.filter((s) => s.present !== false);
+    const sharedDuration = spreadDuration && !newTermNamed ? answered.find((s) => s.duration)?.duration : null;
+    const sharedSeverity = spreadSeverity && !newTermNamed ? answered.find((s) => s.severity)?.severity : null;
+    if (sharedDuration || sharedSeverity) {
+      for (const sym of covered) {
+        const key = sym.term.toLowerCase().trim();
+        const entry = classifiedSymptoms.find((s) => s.term.toLowerCase().trim() === key);
+        const needsDuration = sharedDuration && !sym.duration && !(entry && entry.duration);
+        const needsSeverity = sharedSeverity && !sym.severity && !(entry && entry.severity);
+        if (!needsDuration && !needsSeverity) continue;
+        if (entry) {
+          if (needsDuration) entry.duration = sharedDuration;
+          if (needsSeverity) entry.severity = sharedSeverity;
+        } else {
+          classifiedSymptoms.push({
+            term: sym.term,
+            present: true,
+            duration: needsDuration ? sharedDuration : null,
+            severity: needsSeverity ? sharedSeverity : null,
+          });
+        }
+      }
+    }
+  }
+  if (classifiedSymptoms.length > 1 && !questionCoversSeveral) {
     const pairCounts = new Map();
     for (const s of classifiedSymptoms) {
       if (!s.duration && !s.severity) continue;
@@ -2866,6 +3033,10 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // in a row, stop repeating the same line and give a plainer,
     // example-based prompt instead — the kind of concrete nudge that
     // actually breaks a "the bot isn't understanding me" loop.
+    if (getHadEmotionalExchange(sessionId) && NO_PHYSICAL_RE.test(message.trim())) {
+      await logChatMessage({ sessionId, patientId, message, response: { kind: 'emotional_support', reply: EMOTIONAL_NOTHING_PHYSICAL_REPLY } });
+      return envelope({ kind: 'emotional_support', sessionId, reply: cleanReply(EMOTIONAL_NOTHING_PHYSICAL_REPLY) });
+    }
     incrementNoSymptomStreak(sessionId);
     const streak = getNoSymptomStreak(sessionId);
     // Same sibling fix as the round-cap fallback below: acknowledge a
@@ -2880,9 +3051,12 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // actually happened and ask them to restate.
     const isBareYesNo = BARE_AFFIRMATION_RE.test(message) || BARE_NEGATION_RE.test(message);
     const reply = isBareYesNo && !turnMentionedConditions.length
-      ? "I've lost track of our earlier conversation (the assistant may have restarted), so I don't have your " +
-        'symptoms on file anymore and that answer has nothing to attach to. Sorry about that — could you tell me ' +
-        "again what you're feeling physically, where it hurts, and how long it has been going on?"
+      // Worded to be true in BOTH cases the server cannot tell apart: a brand-new chat that opens with
+      // "yes" (found live: it was told "I've lost track of our earlier conversation" when there was none),
+      // and a chat whose earlier messages were lost (restart / expired session).
+      ? "I don't have any symptoms on file for this chat yet, so I'm not sure what that answer is replying to. " +
+        "If we were already talking, I may have lost our earlier messages, and I'm sorry. Could you tell me what " +
+        "you're feeling physically, where it hurts, and how long it has been going on?"
       : turnMentionedConditions.length
       ? `Thanks, I've noted that. What symptoms are you experiencing right now — where does it hurt, and how long has it been going on?`
       : streak > 2
@@ -2976,6 +3150,24 @@ async function runPatientMessagePipeline({ message, patientId, sessionId, sessio
     // the fully generic question otherwise reads as though the patient
     // wasn't heard at all, even though the condition WAS recorded (see
     // turnMentionedConditions/appendMentionedConditions above).
+    // A plain "no" / "nothing" here means "nothing more to add" -- the patient has already been given
+    // their recommendation (found live: it was answered "I didn't catch the new symptoms" three times
+    // in a row). Close the conversation kindly instead of demanding symptoms.
+    if (!turnMentionedConditions.length && BARE_NEGATION_RE.test(message.trim())) {
+      const closing =
+        "No problem. If anything changes, or you notice a new symptom, just tell me and I'll take another look. " +
+        'Take care.';
+      setAwaitingClarificationAnswer(sessionId, false);
+      await logChatMessage({ sessionId, patientId, message, response: { kind: 'clarification', reply: closing } });
+      return envelope({
+        kind: 'clarification',
+        sessionId,
+        needsClarification: false,
+        resolvedAge: age,
+        resolvedSex: sex,
+        reply: cleanReply(closing),
+      });
+    }
     const reply = turnMentionedConditions.length
       ? `Thanks, I've noted that. What symptoms are you experiencing right now?`
       : "I couldn't tell what new symptoms you're experiencing — could you describe what's happening physically right now?";
@@ -3244,6 +3436,43 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
     droppedMentions = dropped;
   } catch (err) {
     console.error('[processMessage] Infermedica /parse failed at finalize:', err.message);
+    // PLAN LIMIT (found live: "pediatrics not enabled in your plan"): for a patient under 18 Infermedica refuses
+    // every call, so "try again in a moment" can never work and the patient was stuck. Say what is actually
+    // happening and still give a safe recommendation, instead of a generic connection error.
+    if (/not enabled in your plan/i.test(String(err.message)) && typeof age === 'number' && age < 18) {
+      markAllSymptomsFinalized(sessionId);
+      resetClarificationCount(sessionId);
+      const symptomList = accumulated.filter((s) => s.present).map((s) => s.term).join(', ');
+      const minorReply = cleanReply(
+        `Your profile says you're ${age}, and I can't run my full clinical check for anyone under 18 right now. ` +
+        `So my suggestion is to see a Pediatrician${symptomList ? ` about ${symptomList}` : ''}. ` +
+        'If the date of birth on your profile is wrong, please correct it on your Profile page, then press "New session" ' +
+        "and tell me your symptoms again so I can look at it properly. If you feel much worse or very unwell, don't wait: call your local emergency number " +
+        'or go to the nearest emergency room.' +
+        (getEmergencyHistory(sessionId).length ? EARLIER_EMERGENCY_REMINDER : '') +
+        (isDiagnosisRequest ? DECLINE_DIAGNOSIS_NOTE : '')
+      );
+      return envelope({
+        kind: 'recommendation',
+        sessionId,
+        isDiagnosisRequest,
+        urgency: 'routine',
+        matchedSymptoms: [],
+        matchSource: 'fallback',
+        source: 'fallback',
+        subject: subjectInfo,
+        recommendation: {
+          specialist_recommended: 'Pediatrician',
+          rationale: 'The patient is under 18 and the clinical engine is not available for under-18s on this plan.',
+          next_steps: 'See a Pediatrician.',
+          urgency: 'routine',
+        },
+        verification: null,
+        resolvedAge: age,
+        resolvedSex: sex,
+        reply: minorReply,
+      });
+    }
     return envelope({
       kind: 'error',
       sessionId,
@@ -3344,6 +3573,9 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
       const fallbackReply = cleanReply(
         `I wasn't able to match what you've described to specific entries in the clinical database, but based on what ` +
         `you've told me, I'd recommend seeing a General Physician, who can evaluate your symptoms directly.` +
+        // This path used to drop the warning: a chat that began with an emergency notice ended with a
+        // calm "see a General Physician" and no mention of it (seen live in the kidney-disease test).
+        (getEmergencyHistory(sessionId).length ? EARLIER_EMERGENCY_REMINDER : '') +
         (isDiagnosisRequest ? DECLINE_DIAGNOSIS_NOTE : '')
       );
       return envelope({
@@ -3686,7 +3918,11 @@ async function finalizeAndRecommend({ sessionId, patientId, message, age, sex, i
   if (getEmergencyHistory(sessionId).length) reply += EARLIER_EMERGENCY_REMINDER;
 
   const triageLevelNote = TRIAGE_LEVEL_NOTES[triageResult.triageLevel];
-  if (triageLevelNote) reply += ` ${triageLevelNote}`;
+  // The reassuring self-care note is dropped when an emergency was flagged earlier in this chat: the
+  // earlier-emergency reminder above already says what to do, and "doesn't sound urgent" next to it
+  // contradicts it (seen live in the asthma test).
+  const reassuringNoteClashes = triageResult.triageLevel === 'self_care' && getEmergencyHistory(sessionId).length > 0;
+  if (triageLevelNote && !reassuringNoteClashes) reply += ` ${triageLevelNote}`;
   reply += channelSentence(triageResult.recommendedChannel);
 
   // PREGNANCY SAFETY NET (MVP scope — explicit product decision): the

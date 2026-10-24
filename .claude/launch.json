@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "sehatai-full-stack",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": ["scripts/run_local.py"],
+      "port": 3002
+    },
+    {
       "name": "sehatai-webserver",
       "runtimeExecutable": "node",
       "runtimeArgs": ["sehatai/webserver.js"],

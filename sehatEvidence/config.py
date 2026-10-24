@@ -139,7 +139,7 @@ class Settings:
     llm_base_url: str = "https://integrate.api.nvidia.com/v1"
     # meta/llama-3.3-70b-instruct (the old default) was retired on NIM --
     # it now answers 410 Gone, so an unset LLM_MODEL failed every call.
-    llm_model: str = "nvidia/nemotron-3-super-120b-a12b"
+    llm_model: str = "nvidia/nemotron-3.5-lightning-30b-a3b"
     llm_sensitive_model: Optional[str] = None  # heavier model for entailment/NLI
     llm_api_keys: list[str] = field(default_factory=list)
     ncbi_tool_name: Optional[str] = None
@@ -185,7 +185,7 @@ class Settings:
         """Build a Settings snapshot from the current environment."""
         return cls(
             llm_base_url=_env_str("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-            llm_model=_env_str("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b"),
+            llm_model=_env_str("LLM_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
             llm_sensitive_model=_env_opt("LLM_SENSITIVE_MODEL"),
             llm_api_keys=_parse_api_keys(
                 os.getenv("LLM_API_KEYS"), os.getenv("LLM_API_KEY")

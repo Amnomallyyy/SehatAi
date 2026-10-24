@@ -31,6 +31,7 @@ the shared `patients` table, which other services (SehatAI's Node
 service, DietBot) also read.
 """
 import html
+import logging
 import mimetypes
 import os
 import re
@@ -40,6 +41,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -47,9 +49,10 @@ from ..database import get_db
 from ..dependencies import list_granted_patients_for_doctor, resolve_structured_patient
 from ..marker_names import normalize_marker
 from ..security import get_current_user
-from ..storage import download_file
+from ..storage import delete_file, download_file
 
 router = APIRouter(prefix="/structured", tags=["structured-reports"])
+logger = logging.getLogger("carelink.structured_reports")
 
 _ABNORMAL_FLAGS = {"high", "low", "abnormal", "critical"}
 
@@ -447,6 +450,59 @@ def download_structured_document_file(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_structured_document(
+    document_id: str,
+    patient_id: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """The patient deletes one of THEIR OWN lab reports: the document row, its extracted values, the doctors' notes
+    and verification results attached to it, its search vector, and the stored source file.
+
+    Patient only (a connected doctor can read a report but never delete it), and only the patient's own: another
+    patient's id answers 404 exactly like a missing document, same as the other routes here.
+
+    Deliberately kept: medicines that were found in the report stay in the patient's Medicines list (they may still
+    be taking them) and clinical advice rows stay too; both just lose the link to the deleted document. That is what
+    the foreign keys in supabase/schema.sql already say (ON DELETE SET NULL), made explicit here so it also holds
+    on a database built another way."""
+    if current_user.role != models.UserRole.patient:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the patient who owns a report can delete it")
+    patient_uuid = resolve_structured_patient(patient_id, current_user, db)
+    doc = _document_or_404(db, document_id)
+    _ensure_document_owned_by(doc, patient_uuid)
+
+    doc_id = doc.id
+    file_url = doc.file_url
+    try:
+        run_ids = [r[0] for r in db.query(models.ExtractionVerification.id).filter(models.ExtractionVerification.document_id == doc_id).all()]
+        if run_ids:
+            db.query(models.ExtractionVerificationFinding).filter(
+                models.ExtractionVerificationFinding.verification_id.in_(run_ids)
+            ).delete(synchronize_session=False)
+        db.query(models.ExtractionVerification).filter(models.ExtractionVerification.document_id == doc_id).delete(synchronize_session=False)
+        db.query(models.DocumentNote).filter(models.DocumentNote.document_id == doc_id).delete(synchronize_session=False)
+        db.query(models.ExtractedData).filter(models.ExtractedData.document_id == doc_id).delete(synchronize_session=False)
+        db.query(models.Medicine).filter(models.Medicine.document_id == doc_id).update({"document_id": None}, synchronize_session=False)
+        db.execute(text("update clinical_advice set document_id = null where document_id = :id"), {"id": doc_id})
+        db.execute(text("update documents set superseded_by = null where superseded_by = :id"), {"id": doc_id})
+        db.execute(text("delete from summaries_vectors where source_id = :id"), {"id": doc_id})
+        db.query(models.Document).filter(models.Document.id == doc_id).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Could not delete lab report %s", doc_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not delete the report. Nothing was removed.")
+
+    if file_url:
+        try:
+            delete_file(file_url)
+        except Exception as exc:  # the database rows are already gone; only an orphaned file is left
+            logger.warning("Lab report %s deleted but its stored file was not removed: %s", doc_id, exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/notifications", response_model=List[schemas.DoctorNotificationOut])

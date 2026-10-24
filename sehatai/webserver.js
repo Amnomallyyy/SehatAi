@@ -225,7 +225,17 @@ const server = http.createServer({
       return;
     }
 
-    if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+    // The chat page (public/chat.html) — see startChat.js for running it
+    // locally.
+    if (req.method === 'GET' && (req.url === '/' || req.url === '/chat')) {
+      const html = await readFile(path.join(__dirname, 'public', 'chat.html'), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    // Developer console (token field, raw reply view).
+    if (req.method === 'GET' && (req.url === '/console' || req.url === '/index.html')) {
       const html = await readFile(path.join(__dirname, 'public', 'index.html'), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html.replace('__DEFAULT_PATIENT_ID__', DEFAULT_PATIENT_ID));
